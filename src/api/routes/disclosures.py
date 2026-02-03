@@ -1,0 +1,310 @@
+"""Disclosure API endpoints."""
+from typing import List, Optional
+from decimal import Decimal
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+from datetime import datetime
+
+from src.db import get_db_session, Disclosure, Asset, Transaction, Liability, Member
+
+router = APIRouter()
+
+
+def _normalized_document_url(disclosure: Disclosure) -> Optional[str]:
+    url = disclosure.document_url
+
+    if not disclosure.document_id or disclosure.document_id.startswith("QANT_"):
+        return url
+
+    base = "https://disclosures-clerk.house.gov/public_disc"
+
+    if disclosure.is_ptr:
+        if url and "/ptr-pdfs/" in url:
+            return url
+        if url and "/financial-pdfs/" in url:
+            return url.replace("/financial-pdfs/", "/ptr-pdfs/")
+        if url and "disclosures-clerk.house.gov" in url and url.endswith(".pdf"):
+            return url
+        return f"{base}/ptr-pdfs/{disclosure.filing_year}/{disclosure.document_id}.pdf"
+
+    if url and "/financial-pdfs/" in url:
+        return url
+    if url and "/ptr-pdfs/" in url:
+        return url.replace("/ptr-pdfs/", "/financial-pdfs/")
+    if url and "disclosures-clerk.house.gov" in url and url.endswith(".pdf"):
+        return url
+    return f"{base}/financial-pdfs/{disclosure.filing_year}/{disclosure.document_id}.pdf"
+
+
+class AssetResponse(BaseModel):
+    """Asset response schema."""
+    id: int
+    asset_type: str
+    description: str
+    ticker: Optional[str]
+    value_min: Optional[float]
+    value_max: Optional[float]
+    income_min: Optional[float]
+    income_max: Optional[float]
+
+    class Config:
+        from_attributes = True
+
+
+class TransactionResponse(BaseModel):
+    """Transaction response schema."""
+    id: int
+    transaction_type: str
+    description: str
+    ticker: Optional[str]
+    transaction_date: Optional[datetime]
+    amount_min: Optional[float]
+    amount_max: Optional[float]
+    owner: Optional[str]
+
+    class Config:
+        from_attributes = True
+
+
+class LiabilityResponse(BaseModel):
+    """Liability response schema."""
+    id: int
+    creditor: str
+    description: Optional[str]
+    amount_min: Optional[float]
+    amount_max: Optional[float]
+
+    class Config:
+        from_attributes = True
+
+
+class DisclosureResponse(BaseModel):
+    """Disclosure response schema."""
+    id: int
+    member_id: int
+    member_name: str
+    filing_year: int
+    filing_type: str
+    filing_date: Optional[datetime]
+    document_id: str
+    document_url: Optional[str]
+    parsed: bool
+    is_ptr: bool = False
+
+    class Config:
+        from_attributes = True
+
+
+class DisclosureDetailResponse(DisclosureResponse):
+    """Detailed disclosure response with assets, transactions, liabilities."""
+    total_assets_min: Optional[float] = None
+    total_assets_max: Optional[float] = None
+    assets: List[AssetResponse] = []
+    transactions: List[TransactionResponse] = []
+    liabilities: List[LiabilityResponse] = []
+
+
+class DisclosureListResponse(BaseModel):
+    """Paginated list of disclosures."""
+    total: int
+    page: int
+    page_size: int
+    disclosures: List[DisclosureResponse]
+
+
+@router.get("", response_model=DisclosureListResponse)
+async def list_disclosures(
+    member_id: Optional[int] = Query(None, description="Filter by member ID"),
+    filing_year: Optional[int] = Query(None, description="Filter by filing year"),
+    filing_type: Optional[str] = Query(None, description="Filter by filing type"),
+    parsed: Optional[bool] = Query(None, description="Filter by parsed status"),
+    is_ptr: Optional[bool] = Query(None, description="Filter by PTR (stock trade) status"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db_session),
+):
+    """
+    List financial disclosures with optional filtering.
+    """
+    query = db.query(Disclosure).join(Member)
+
+    # Apply filters
+    if member_id:
+        query = query.filter(Disclosure.member_id == member_id)
+
+    if filing_year:
+        query = query.filter(Disclosure.filing_year == filing_year)
+
+    if filing_type:
+        query = query.filter(Disclosure.filing_type.ilike(f"%{filing_type}%"))
+
+    if parsed is not None:
+        query = query.filter(Disclosure.parsed == parsed)
+
+    if is_ptr is not None:
+        query = query.filter(Disclosure.is_ptr == is_ptr)
+
+    # Get total count
+    total = query.count()
+
+    # Apply pagination and ordering
+    disclosures = query.order_by(
+        Disclosure.filing_date.desc()
+    ).offset((page - 1) * page_size).limit(page_size).all()
+
+    return DisclosureListResponse(
+        total=total,
+        page=page,
+        page_size=page_size,
+        disclosures=[
+            DisclosureResponse(
+                id=d.id,
+                member_id=d.member_id,
+                member_name=f"{d.member.first_name} {d.member.last_name}",
+                filing_year=d.filing_year,
+                filing_type=d.filing_type,
+                filing_date=d.filing_date,
+                document_id=d.document_id,
+                document_url=_normalized_document_url(d),
+                parsed=d.parsed,
+                is_ptr=d.is_ptr,
+            )
+            for d in disclosures
+        ],
+    )
+
+
+@router.get("/{disclosure_id}", response_model=DisclosureDetailResponse)
+async def get_disclosure(
+    disclosure_id: int,
+    db: Session = Depends(get_db_session),
+):
+    """
+    Get detailed information for a specific disclosure.
+    """
+    disclosure = db.query(Disclosure).filter(Disclosure.id == disclosure_id).first()
+
+    if not disclosure:
+        raise HTTPException(status_code=404, detail="Disclosure not found")
+
+    # Get assets
+    assets = db.query(Asset).filter(Asset.disclosure_id == disclosure_id).all()
+
+    # Get transactions
+    transactions = db.query(Transaction).filter(
+        Transaction.disclosure_id == disclosure_id
+    ).all()
+
+    # Get liabilities
+    liabilities = db.query(Liability).filter(
+        Liability.disclosure_id == disclosure_id
+    ).all()
+
+    # Calculate totals
+    total_min = sum(
+        float(a.value_min) for a in assets if a.value_min
+    ) if assets else None
+    total_max = sum(
+        float(a.value_max) for a in assets if a.value_max
+    ) if assets else None
+
+    return DisclosureDetailResponse(
+        id=disclosure.id,
+        member_id=disclosure.member_id,
+        member_name=f"{disclosure.member.first_name} {disclosure.member.last_name}",
+        filing_year=disclosure.filing_year,
+        filing_type=disclosure.filing_type,
+        filing_date=disclosure.filing_date,
+        document_id=disclosure.document_id,
+        document_url=_normalized_document_url(disclosure),
+        parsed=disclosure.parsed,
+        total_assets_min=total_min,
+        total_assets_max=total_max,
+        assets=[
+            AssetResponse(
+                id=a.id,
+                asset_type=a.asset_type.value,
+                description=a.description,
+                ticker=a.ticker,
+                value_min=float(a.value_min) if a.value_min else None,
+                value_max=float(a.value_max) if a.value_max else None,
+                income_min=float(a.income_min) if a.income_min else None,
+                income_max=float(a.income_max) if a.income_max else None,
+            )
+            for a in assets
+        ],
+        transactions=[
+            TransactionResponse(
+                id=t.id,
+                transaction_type=t.transaction_type.value,
+                description=t.description,
+                ticker=t.ticker,
+                transaction_date=t.transaction_date,
+                amount_min=float(t.amount_min) if t.amount_min else None,
+                amount_max=float(t.amount_max) if t.amount_max else None,
+                owner=t.owner,
+            )
+            for t in transactions
+        ],
+        liabilities=[
+            LiabilityResponse(
+                id=l.id,
+                creditor=l.creditor,
+                description=l.description,
+                amount_min=float(l.amount_min) if l.amount_min else None,
+                amount_max=float(l.amount_max) if l.amount_max else None,
+            )
+            for l in liabilities
+        ],
+    )
+
+
+@router.get("/member/{member_id}/summary")
+async def get_member_disclosure_summary(
+    member_id: int,
+    db: Session = Depends(get_db_session),
+):
+    """
+    Get summary of all disclosures for a member with net worth over time.
+    """
+    member = db.query(Member).filter(Member.id == member_id).first()
+
+    if not member:
+        raise HTTPException(status_code=404, detail="Member not found")
+
+    disclosures = db.query(Disclosure).filter(
+        Disclosure.member_id == member_id,
+        Disclosure.parsed == True
+    ).order_by(Disclosure.filing_year).all()
+
+    net_worth_history = []
+
+    for disclosure in disclosures:
+        assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).all()
+        liabilities = db.query(Liability).filter(
+            Liability.disclosure_id == disclosure.id
+        ).all()
+
+        total_assets_min = sum(float(a.value_min or 0) for a in assets)
+        total_assets_max = sum(float(a.value_max or 0) for a in assets)
+        total_liabilities_min = sum(float(l.amount_min or 0) for l in liabilities)
+        total_liabilities_max = sum(float(l.amount_max or 0) for l in liabilities)
+
+        net_worth_history.append({
+            "year": disclosure.filing_year,
+            "disclosure_id": disclosure.id,
+            "assets_min": total_assets_min,
+            "assets_max": total_assets_max,
+            "liabilities_min": total_liabilities_min,
+            "liabilities_max": total_liabilities_max,
+            "net_worth_min": total_assets_min - total_liabilities_max,
+            "net_worth_max": total_assets_max - total_liabilities_min,
+        })
+
+    return {
+        "member_id": member_id,
+        "member_name": f"{member.first_name} {member.last_name}",
+        "total_disclosures": len(disclosures),
+        "net_worth_history": net_worth_history,
+    }

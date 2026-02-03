@@ -1,0 +1,73 @@
+name: Daily Disclosure Update
+
+on:
+  schedule:
+    # Run daily at 6 AM UTC (1 AM EST)
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allow manual trigger
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  update-disclosures:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: honest_congress
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create .env file
+        run: |
+          cat << EOF > .env
+          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/honest_congress
+          CONGRESS_GOV_API_KEY=${{ secrets.CONGRESS_GOV_API_KEY }}
+          LOG_LEVEL=INFO
+          EOF
+
+      - name: Initialize database
+        run: python -m src.cli init
+
+      - name: Ingest member data
+        run: python -m src.cli ingest
+
+      - name: Run anomaly analysis
+        run: python -m src.cli analyze
+
+      - name: Generate summary report
+        run: |
+          echo "## Disclosure Update Summary - $(date -u +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Ingestion and analysis completed successfully." >> $GITHUB_STEP_SUMMARY
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Daily disclosure update failed. Check logs for details."
+

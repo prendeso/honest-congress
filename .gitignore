@@ -3,6 +3,30 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Environment
+.env
+.env.local
+
+# Data files
+data/
+*.db
+
+# Test & debug output
+*.txt
+*.json
+*.log
+debug_*.py
+check_*.py
+test_*.py
+*_output.txt
+*_result.txt
+*_check.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
 # C extensions
 *.so
 

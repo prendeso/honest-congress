@@ -72,7 +72,7 @@ class TradeAnalyzer:
         )
         return {"title": title, "description": description}
 
-    def _sync_large_trade_anomalies(self, db: Session, member_id: Optional[int] = None) -> Dict[str, int]:
+    def _sync_large_trade_anomalies(self, db: Session, member_id: Optional[int] = None) -> None:
         """Backfill transaction_id and sync title/description for large trades."""
         large_trade_threshold = Decimal("1000000")
         query = db.query(Transaction).join(Disclosure).filter(
@@ -81,39 +81,17 @@ class TradeAnalyzer:
         if member_id:
             query = query.filter(Disclosure.member_id == member_id)
 
-        created = 0
-        updated = 0
-        deleted = 0
-
-        txns = query.all()
-        txn_ids = {t.id for t in txns}
-
-        anomaly_query = db.query(Anomaly).filter(
-            Anomaly.anomaly_type == "large_trade"
-        )
-        if member_id:
-            anomaly_query = anomaly_query.filter(Anomaly.member_id == member_id)
-
-        existing_by_txn = {
-            a.transaction_id: a
-            for a in anomaly_query.filter(Anomaly.transaction_id.isnot(None)).all()
-            if a.transaction_id is not None
-        }
-
-        # Remove legacy anomalies without transaction_id or pointing at missing transactions.
-        for stale in anomaly_query.filter(
-            (Anomaly.transaction_id.is_(None)) | (~Anomaly.transaction_id.in_(txn_ids))
-        ).all():
-            db.delete(stale)
-            deleted += 1
-
-        for txn in txns:
+        for txn in query.all():
             disclosure = db.query(Disclosure).filter(Disclosure.id == txn.disclosure_id).first()
             if not disclosure:
                 continue
 
             text = self._build_large_trade_text(txn)
-            existing = existing_by_txn.get(txn.id)
+
+            existing = db.query(Anomaly).filter(
+                Anomaly.anomaly_type == "large_trade",
+                Anomaly.transaction_id == txn.id
+            ).first()
 
             if existing:
                 if (
@@ -124,25 +102,19 @@ class TradeAnalyzer:
                     existing.title = text["title"]
                     existing.description = text["description"]
                     existing.disclosure_id = disclosure.id
-                    updated += 1
                 continue
 
-            new_anomaly = Anomaly(
-                member_id=disclosure.member_id,
-                disclosure_id=disclosure.id,
-                transaction_id=txn.id,
-                anomaly_type="large_trade",
-                severity=min(10, 5 + int(txn.amount_min / Decimal("5000000"))),
-                title=text["title"],
-                description=text["description"],
-                computed_value=txn.amount_min,
-                threshold_value=large_trade_threshold,
-            )
-            db.add(new_anomaly)
-            created += 1
+            existing_no_txn = db.query(Anomaly).filter(
+                Anomaly.anomaly_type == "large_trade",
+                Anomaly.member_id == disclosure.member_id,
+                Anomaly.disclosure_id == disclosure.id,
+                Anomaly.title == text["title"]
+            ).first()
 
-        db.commit()
-        return {"created": created, "updated": updated, "deleted": deleted}
+            if existing_no_txn:
+                existing_no_txn.transaction_id = txn.id
+                if existing_no_txn.description != text["description"]:
+                    existing_no_txn.description = text["description"]
 
     def analyze_member(self, db: Session, member_id: int) -> List[Dict[str, Any]]:
         """
@@ -421,7 +393,7 @@ class TradeAnalyzer:
         Returns:
             Summary with all detected anomalies
         """
-        members = db.query(Member).filter(Member.in_office == True).all()
+        members = db.query(Member).all()  # Include all members (active + retired)
 
         all_anomalies = []
         members_analyzed = 0

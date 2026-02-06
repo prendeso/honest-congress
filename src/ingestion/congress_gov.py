@@ -81,6 +81,99 @@ class CongressGovClient:
         logger.info(f"Returning {len(members)} members (chamber={chamber})")
         return members
 
+    def get_all_members(self, chamber: str = "both") -> List[Dict[str, Any]]:
+        """
+        Get ALL members of Congress (current + historical, active + retired).
+
+        Args:
+            chamber: "house", "senate", or "both"
+
+        Returns:
+            List of member metadata dicts (includes retired members)
+        """
+        logger.info("Fetching all members (current + historical)...")
+
+        # Fetch current members
+        current_members = self._fetch_from_unitedstates()
+
+        # Fetch historical members
+        historical_members = self._fetch_historical_from_unitedstates()
+
+        # Merge by bioguide_id, current takes precedence
+        members_by_id = {}
+
+        # Add historical first (will be overwritten by current if exists)
+        for m in historical_members:
+            if m.get("bioguide_id"):
+                members_by_id[m["bioguide_id"]] = m
+
+        # Add current (overwrites historical for same bioguide_id)
+        for m in current_members:
+            if m.get("bioguide_id"):
+                members_by_id[m["bioguide_id"]] = m
+
+        members = list(members_by_id.values())
+
+        # Filter by chamber if specified
+        if chamber != "both":
+            chamber_filter = chamber.lower()
+            members = [m for m in members if m["chamber"] == chamber_filter]
+
+        logger.info(f"Returning {len(members)} total members (current + historical, chamber={chamber})")
+        return members
+
+    def _fetch_historical_from_unitedstates(self) -> List[Dict[str, Any]]:
+        """
+        Fetch historical (retired) legislators from unitedstates.io GitHub project.
+        """
+        try:
+            logger.info("Fetching historical legislators from unitedstates.io...")
+            response = self.session.get(UNITEDSTATES_HISTORICAL_URL, timeout=60)
+            response.raise_for_status()
+
+            data = response.json()
+            members = []
+
+            for legislator in data:
+                terms = legislator.get("terms", [])
+                if not terms:
+                    continue
+
+                # Use most recent term for info
+                latest_term = terms[-1]
+
+                # Extract member info
+                name = legislator.get("name", {})
+                ids = legislator.get("id", {})
+
+                # Determine chamber from latest term type
+                term_type = latest_term.get("type", "")
+                chamber = "senate" if term_type == "sen" else "house"
+
+                members.append({
+                    "bioguide_id": ids.get("bioguide", ""),
+                    "first_name": name.get("first", ""),
+                    "last_name": name.get("last", ""),
+                    "full_name": f"{name.get('first', '')} {name.get('last', '')}".strip(),
+                    "chamber": chamber,
+                    "party": self._normalize_party(latest_term.get("party", "")),
+                    "state": latest_term.get("state", ""),
+                    "district": str(latest_term.get("district", "")) if latest_term.get("district") else None,
+                    "in_office": False,  # Historical = retired
+                    "start_date": latest_term.get("start"),
+                    "end_date": latest_term.get("end"),
+                })
+
+            logger.info(f"Fetched {len(members)} historical members from unitedstates.io")
+            return members
+
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch historical members: {e}")
+            return []
+        except (KeyError, ValueError) as e:
+            logger.error(f"Failed to parse historical members data: {e}")
+            return []
+
     def _is_cache_valid(self) -> bool:
         """Check if the member cache is still valid."""
         if self._members_cache is None or self._cache_time is None:

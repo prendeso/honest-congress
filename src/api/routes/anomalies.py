@@ -1,11 +1,13 @@
 """Anomaly API endpoints."""
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List, Optional, Dict, Any
+from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from pydantic import BaseModel
 from datetime import datetime
 from decimal import Decimal
+import threading
+import time
 
 from src.db import get_db_session, Anomaly, Member, Disclosure, Transaction
 from src.analysis import analyze_wealth
@@ -17,6 +19,19 @@ router = APIRouter()
 
 # One-time per-process sync to keep large-trade anomalies consistent.
 _large_trade_synced = False
+
+# Global sync status for progress tracking
+_sync_status: Dict[str, Any] = {
+    "running": False,
+    "operation": None,
+    "progress": 0,
+    "total": 0,
+    "message": "",
+    "started_at": None,
+    "completed_at": None,
+    "result": None,
+}
+_sync_lock = threading.Lock()
 
 
 def _large_trade_sync_needed(db: Session) -> bool:
@@ -51,6 +66,8 @@ class AnomalyResponse(BaseModel):
     member_name: str
     member_party: str
     member_state: str
+    member_chamber: str
+    member_in_office: bool
     anomaly_type: str
     severity: str
     title: str
@@ -140,6 +157,8 @@ async def list_anomalies(
                 member_name=f"{a.member.first_name} {a.member.last_name}",
                 member_party=a.member.party.value,
                 member_state=a.member.state,
+                member_chamber=a.member.chamber.value if a.member.chamber else None,
+                member_in_office=a.member.in_office if a.member.in_office is not None else False,
                 anomaly_type=a.anomaly_type,
                 severity=a.severity,
                 title=a.title,
@@ -308,6 +327,266 @@ async def regenerate_anomalies(
         "wealth_anomalies": wealth_result.get("total_anomalies", 0),
     }
 
+
+@router.get("/sync-status")
+async def get_sync_status():
+    """
+    Get current sync operation status for progress indicator.
+    """
+    with _sync_lock:
+        return {**_sync_status}
+
+
+@router.post("/sync-all-members")
+async def sync_all_members(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db_session),
+    _: str = Depends(require_admin),
+):
+    """
+    Sync ALL members (current + historical, active + retired) from unitedstates.io.
+    Runs in background with progress tracking.
+    """
+    global _sync_status
+
+    with _sync_lock:
+        if _sync_status["running"]:
+            raise HTTPException(status_code=409, detail="Another sync operation is already running")
+
+        _sync_status = {
+            "running": True,
+            "operation": "sync-all-members",
+            "progress": 0,
+            "total": 100,
+            "message": "Starting member sync...",
+            "started_at": datetime.now().isoformat(),
+            "completed_at": None,
+            "result": None,
+        }
+
+    def run_sync():
+        global _sync_status
+        try:
+            from src.ingestion.orchestrator import IngestionOrchestrator
+            from src.db.database import SessionLocal
+
+            with _sync_lock:
+                _sync_status["message"] = "Fetching members from unitedstates.io..."
+                _sync_status["progress"] = 10
+
+            sync_db = SessionLocal()
+            try:
+                orchestrator = IngestionOrchestrator()
+
+                with _sync_lock:
+                    _sync_status["message"] = "Processing members..."
+                    _sync_status["progress"] = 30
+
+                result = orchestrator.sync_all_members(sync_db)
+
+                with _sync_lock:
+                    _sync_status["progress"] = 100
+                    _sync_status["message"] = f"Synced {result['total']} members"
+                    _sync_status["result"] = result
+                    _sync_status["running"] = False
+                    _sync_status["completed_at"] = datetime.now().isoformat()
+            finally:
+                sync_db.close()
+
+        except Exception as e:
+            with _sync_lock:
+                _sync_status["running"] = False
+                _sync_status["message"] = f"Error: {str(e)}"
+                _sync_status["completed_at"] = datetime.now().isoformat()
+
+    background_tasks.add_task(run_sync)
+
+    return {
+        "status": "started",
+        "message": "Member sync started in background. Check /sync-status for progress.",
+    }
+
+
+@router.post("/sync-trades")
+async def sync_trades(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db_session),
+    _: str = Depends(require_admin),
+):
+    """
+    Sync all trades from QuiverQuant API.
+    Runs in background with progress tracking.
+    """
+    global _sync_status
+
+    with _sync_lock:
+        if _sync_status["running"]:
+            raise HTTPException(status_code=409, detail="Another sync operation is already running")
+
+        _sync_status = {
+            "running": True,
+            "operation": "sync-trades",
+            "progress": 0,
+            "total": 100,
+            "message": "Starting trade sync...",
+            "started_at": datetime.now().isoformat(),
+            "completed_at": None,
+            "result": None,
+        }
+
+    def run_sync():
+        global _sync_status
+        try:
+            from src.ingestion.quiverquant import ingest_quiverquant_trades
+            from src.db.database import SessionLocal
+
+            with _sync_lock:
+                _sync_status["message"] = "Fetching trades from QuiverQuant..."
+                _sync_status["progress"] = 20
+
+            sync_db = SessionLocal()
+            try:
+                result = ingest_quiverquant_trades(sync_db, chamber="both")
+
+                with _sync_lock:
+                    _sync_status["progress"] = 100
+                    _sync_status["message"] = f"Imported {result.get('imported', 0)} trades"
+                    _sync_status["result"] = result
+                    _sync_status["running"] = False
+                    _sync_status["completed_at"] = datetime.now().isoformat()
+            finally:
+                sync_db.close()
+
+        except Exception as e:
+            with _sync_lock:
+                _sync_status["running"] = False
+                _sync_status["message"] = f"Error: {str(e)}"
+                _sync_status["completed_at"] = datetime.now().isoformat()
+
+    background_tasks.add_task(run_sync)
+
+    return {
+        "status": "started",
+        "message": "Trade sync started in background. Check /sync-status for progress.",
+    }
+
+
+@router.post("/full-refresh")
+async def full_data_refresh(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db_session),
+    _: str = Depends(require_admin),
+):
+    """
+    Full data refresh: sync all members → sync all trades → regenerate anomalies.
+    Runs in background with progress tracking.
+    """
+    global _sync_status
+
+    with _sync_lock:
+        if _sync_status["running"]:
+            raise HTTPException(status_code=409, detail="Another sync operation is already running")
+
+        _sync_status = {
+            "running": True,
+            "operation": "full-refresh",
+            "progress": 0,
+            "total": 100,
+            "message": "Starting full data refresh...",
+            "started_at": datetime.now().isoformat(),
+            "completed_at": None,
+            "result": None,
+        }
+
+    def run_full_refresh():
+        global _sync_status
+        try:
+            from src.ingestion.orchestrator import IngestionOrchestrator
+            from src.ingestion.quiverquant import ingest_quiverquant_trades
+            from src.analysis.trade_analyzer import TradeAnalyzer
+            from src.analysis.wealth_analyzer import WealthAnalyzer
+            from src.db.database import SessionLocal
+
+            sync_db = SessionLocal()
+            results = {"members": {}, "trades": {}, "anomalies": {}}
+
+            try:
+                # Step 1: Sync all members (0-30%)
+                with _sync_lock:
+                    _sync_status["message"] = "Step 1/3: Syncing all members..."
+                    _sync_status["progress"] = 5
+
+                orchestrator = IngestionOrchestrator()
+                results["members"] = orchestrator.sync_all_members(sync_db)
+
+                with _sync_lock:
+                    _sync_status["message"] = f"Step 1/3: Synced {results['members']['total']} members"
+                    _sync_status["progress"] = 30
+
+                # Step 2: Sync trades (30-60%)
+                with _sync_lock:
+                    _sync_status["message"] = "Step 2/3: Syncing trades from QuiverQuant..."
+                    _sync_status["progress"] = 35
+
+                results["trades"] = ingest_quiverquant_trades(sync_db, chamber="both")
+
+                with _sync_lock:
+                    _sync_status["message"] = f"Step 2/3: Imported {results['trades'].get('imported', 0)} trades"
+                    _sync_status["progress"] = 60
+
+                # Step 3: Regenerate anomalies (60-100%)
+                with _sync_lock:
+                    _sync_status["message"] = "Step 3/3: Regenerating anomalies..."
+                    _sync_status["progress"] = 65
+
+                # Clear existing anomalies
+                deleted_count = sync_db.query(Anomaly).delete()
+                sync_db.commit()
+
+                with _sync_lock:
+                    _sync_status["message"] = "Step 3/3: Running trade analysis..."
+                    _sync_status["progress"] = 75
+
+                trade_analyzer = TradeAnalyzer()
+                trade_result = trade_analyzer.analyze_all_members(sync_db)
+
+                with _sync_lock:
+                    _sync_status["message"] = "Step 3/3: Running wealth analysis..."
+                    _sync_status["progress"] = 90
+
+                wealth_analyzer = WealthAnalyzer()
+                wealth_result = wealth_analyzer.analyze_all_members(sync_db)
+
+                results["anomalies"] = {
+                    "deleted": deleted_count,
+                    "trade_anomalies": trade_result.get("total_anomalies", 0),
+                    "wealth_anomalies": wealth_result.get("total_anomalies", 0),
+                }
+
+                with _sync_lock:
+                    _sync_status["progress"] = 100
+                    _sync_status["message"] = "Full refresh complete!"
+                    _sync_status["result"] = results
+                    _sync_status["running"] = False
+                    _sync_status["completed_at"] = datetime.now().isoformat()
+
+            finally:
+                sync_db.close()
+
+        except Exception as e:
+            with _sync_lock:
+                _sync_status["running"] = False
+                _sync_status["message"] = f"Error: {str(e)}"
+                _sync_status["completed_at"] = datetime.now().isoformat()
+
+    background_tasks.add_task(run_full_refresh)
+
+    return {
+        "status": "started",
+        "message": "Full data refresh started in background. Check /sync-status for progress.",
+    }
+
+
 # -----------------------------------------------------------------
 # Dynamic path routes AFTER static ones
 # -----------------------------------------------------------------
@@ -333,6 +612,8 @@ async def get_anomaly(
         member_name=f"{anomaly.member.first_name} {anomaly.member.last_name}",
         member_party=anomaly.member.party.value,
         member_state=anomaly.member.state,
+        member_chamber=anomaly.member.chamber.value if anomaly.member.chamber else None,
+        member_in_office=anomaly.member.in_office if anomaly.member.in_office is not None else False,
         anomaly_type=anomaly.anomaly_type,
         severity=anomaly.severity,
         title=anomaly.title,
@@ -364,4 +645,3 @@ async def mark_anomaly_reviewed(
     db.commit()
 
     return {"status": "success", "message": "Anomaly marked as reviewed"}
-

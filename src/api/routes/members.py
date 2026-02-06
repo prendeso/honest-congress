@@ -2,7 +2,7 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, exists
 from pydantic import BaseModel
 from datetime import datetime
 
@@ -48,14 +48,20 @@ async def list_members(
     chamber: Optional[str] = Query(None, description="Filter by chamber: house, senate"),
     party: Optional[str] = Query(None, description="Filter by party: D, R, I"),
     state: Optional[str] = Query(None, description="Filter by state code"),
+    district: Optional[str] = Query(None, description="Filter by district number"),
     search: Optional[str] = Query(None, description="Search by name"),
     has_anomalies: Optional[bool] = Query(None, description="Filter to members with anomalies"),
+    in_office: Optional[bool] = Query(None, description="Filter by active (true) or retired (false)"),
+    min_disclosures: Optional[int] = Query(None, description="Minimum number of disclosures", ge=0),
+    min_anomalies: Optional[int] = Query(None, description="Minimum number of anomalies", ge=0),
+    sort_by: Optional[str] = Query("name", description="Sort field: name, party, state, chamber, district, status, disclosures, anomalies"),
+    sort_order: Optional[str] = Query("asc", description="Sort order: asc or desc"),
     page: int = Query(1, ge=1),
-    page_size: int = Query(50, ge=1, le=100),
+    page_size: int = Query(50, ge=1, le=50000),
     db: Session = Depends(get_db_session),
 ):
     """
-    List congressional members with optional filtering.
+    List congressional members with optional filtering and server-side sorting.
     """
     query = db.query(Member)
 
@@ -69,6 +75,12 @@ async def list_members(
     if state:
         query = query.filter(Member.state == state.upper())
 
+    if district:
+        query = query.filter(Member.district == district)
+
+    if in_office is not None:
+        query = query.filter(Member.in_office == in_office)
+
     if search:
         search_term = f"%{search}%"
         query = query.filter(
@@ -77,12 +89,92 @@ async def list_members(
         )
 
     if has_anomalies:
-        # Subquery for members with anomalies
-        anomaly_members = db.query(Anomaly.member_id).distinct()
-        query = query.filter(Member.id.in_(anomaly_members))
+        # Filter to only members who have at least one anomaly
+        query = query.filter(
+            exists().where(Anomaly.member_id == Member.id)
+        )
+
+    # Apply min_disclosures filter using subquery
+    if min_disclosures is not None:
+        from sqlalchemy import select
+        disclosure_count_filter = (
+            select(func.count(Disclosure.id))
+            .where(Disclosure.member_id == Member.id)
+            .correlate(Member)
+            .scalar_subquery()
+        )
+        query = query.filter(disclosure_count_filter >= min_disclosures)
+
+    # Apply min_anomalies filter using subquery
+    if min_anomalies is not None:
+        from sqlalchemy import select
+        anomaly_count_filter = (
+            select(func.count(Anomaly.id))
+            .where(Anomaly.member_id == Member.id)
+            .correlate(Member)
+            .scalar_subquery()
+        )
+        query = query.filter(anomaly_count_filter >= min_anomalies)
 
     # Get total count
     total = query.count()
+
+    # Apply server-side sorting
+    from sqlalchemy import asc, desc, select
+
+    # Create subqueries for computed fields
+    anomaly_count_subq = (
+        select(func.count(Anomaly.id))
+        .where(Anomaly.member_id == Member.id)
+        .correlate(Member)
+        .scalar_subquery()
+    )
+
+    disclosure_count_subq = (
+        select(func.count(Disclosure.id))
+        .where(Disclosure.member_id == Member.id)
+        .correlate(Member)
+        .scalar_subquery()
+    )
+
+    if sort_order == "desc":
+        if sort_by == "name":
+            query = query.order_by(desc(Member.first_name), desc(Member.last_name))
+        elif sort_by == "party":
+            query = query.order_by(desc(Member.party), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "state":
+            query = query.order_by(desc(Member.state), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "chamber":
+            query = query.order_by(desc(Member.chamber), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "district":
+            query = query.order_by(desc(Member.district), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "status":
+            query = query.order_by(desc(Member.in_office), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "anomalies":
+            query = query.order_by(desc(anomaly_count_subq), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "disclosures":
+            query = query.order_by(desc(disclosure_count_subq), asc(Member.first_name), asc(Member.last_name))
+        else:
+            query = query.order_by(desc(Member.first_name), desc(Member.last_name))
+    else:  # asc
+        if sort_by == "name":
+            query = query.order_by(asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "party":
+            query = query.order_by(asc(Member.party), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "state":
+            query = query.order_by(asc(Member.state), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "chamber":
+            query = query.order_by(asc(Member.chamber), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "district":
+            query = query.order_by(asc(Member.district), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "status":
+            query = query.order_by(asc(Member.in_office), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "anomalies":
+            query = query.order_by(asc(anomaly_count_subq), asc(Member.first_name), asc(Member.last_name))
+        elif sort_by == "disclosures":
+            query = query.order_by(asc(disclosure_count_subq), asc(Member.first_name), asc(Member.last_name))
+        else:
+            query = query.order_by(asc(Member.first_name), asc(Member.last_name))
 
     # Apply pagination
     members = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -106,7 +198,7 @@ async def list_members(
             chamber=member.chamber.value,
             party=member.party.value,
             state=member.state,
-            district=member.district,
+            district=None if member.district == '-1' or member.district is None else member.district,
             in_office=member.in_office,
             disclosure_count=disclosure_count,
             anomaly_count=anomaly_count,
@@ -161,7 +253,7 @@ async def get_member(
         chamber=member.chamber.value,
         party=member.party.value,
         state=member.state,
-        district=member.district,
+        district=None if member.district == '-1' or member.district is None else member.district,
         in_office=member.in_office,
         disclosure_count=disclosure_count,
         anomaly_count=anomaly_count,

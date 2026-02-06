@@ -123,7 +123,7 @@ class WealthAnalyzer:
                             "disclosure_id": curr["disclosure_id"],
                             "anomaly_type": "excessive_wealth_growth",
                             "severity": self._calculate_severity(growth_percent, salary_growth_percent),
-                            "title": f"Wealth growth {growth_range} exceeds salary-based expectation",
+                            "title": f"Wealth growth {growth_range} exceeds salary-based expectation ({prev['year']}-{curr['year']})",
                             "description": (
                                 f"Between {prev['year']} and {curr['year']}, "
                                 f"net worth grew by approximately {growth_amount}. "
@@ -147,7 +147,7 @@ class WealthAnalyzer:
         Returns:
             Summary of analysis with all detected anomalies
         """
-        members = db.query(Member).filter(Member.in_office == True).all()
+        members = db.query(Member).all()  # Include all members (active + retired)
 
         all_anomalies = []
         members_analyzed = 0

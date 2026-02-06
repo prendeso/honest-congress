@@ -101,6 +101,68 @@ class IngestionOrchestrator:
         logger.info(f"Synced {synced} members")
         return synced
 
+    def sync_all_members(self, db: Session) -> Dict[str, int]:
+        """
+        Sync ALL member data (current + historical) from unitedstates.io to database.
+
+        Args:
+            db: Database session
+
+        Returns:
+            Dict with synced counts: {"total": x, "current": y, "historical": z, "updated": w}
+        """
+        logger.info("Syncing ALL members (current + historical)...")
+
+        members = self.member_client.get_all_members()
+
+        results = {"total": 0, "current": 0, "historical": 0, "updated": 0, "created": 0}
+
+        for m in members:
+            try:
+                # Check if member exists
+                existing = db.query(Member).filter(
+                    Member.bioguide_id == m["bioguide_id"]
+                ).first()
+
+                is_current = m.get("in_office", False)
+
+                if existing:
+                    # Update existing member
+                    existing.first_name = m["first_name"]
+                    existing.last_name = m["last_name"]
+                    existing.party = Party(m["party"])
+                    existing.state = m["state"]
+                    existing.district = m.get("district")
+                    existing.in_office = is_current
+                    results["updated"] += 1
+                else:
+                    # Create new member
+                    new_member = Member(
+                        bioguide_id=m["bioguide_id"],
+                        first_name=m["first_name"],
+                        last_name=m["last_name"],
+                        chamber=Chamber(m["chamber"]),
+                        party=Party(m["party"]),
+                        state=m["state"],
+                        district=m.get("district"),
+                        in_office=is_current,
+                    )
+                    db.add(new_member)
+                    results["created"] += 1
+
+                results["total"] += 1
+                if is_current:
+                    results["current"] += 1
+                else:
+                    results["historical"] += 1
+
+            except Exception as e:
+                logger.error(f"Error syncing member {m.get('bioguide_id')}: {e}")
+
+        db.commit()
+        logger.info(f"Synced {results['total']} members (current: {results['current']}, historical: {results['historical']})")
+        return results
+
     def sync_house_disclosures(
         self,
         db: Session,

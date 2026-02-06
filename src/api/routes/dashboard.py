@@ -108,7 +108,7 @@ DASHBOARD_HTML = """
                                         </td>
                                         <td class="px-4 py-3" x-text="member.state"></td>
                                         <td class="px-4 py-3 capitalize" x-text="member.chamber"></td>
-                                        <td class="px-4 py-3" x-text="member.district || '-'"></td>
+                                        <td class="px-4 py-3" x-text="(member.district && member.district !== '-1') ? member.district : '-'"></td>
                                     </tr>
                                 </template>
                             </tbody>

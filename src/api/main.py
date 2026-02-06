@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from src.db import init_db, SessionLocal
 from src.api.routes import members, disclosures, anomalies, health, assets
-from src.api.routes import dashboard_v2, performance
+from src.api.routes import dashboard_v2, performance, admin
 from src.config import get_settings
 from src.analysis.trade_analyzer import TradeAnalyzer
 from src.ingestion.orchestrator import IngestionOrchestrator
@@ -134,6 +134,7 @@ async def get_document(year: int, doc_id: str):
 
 # Include routers
 app.include_router(dashboard_v2.router, tags=["Dashboard"])  # Enhanced dashboard
+app.include_router(admin.router, tags=["Admin"])  # Admin panel
 app.include_router(health.router, tags=["Health"])
 app.include_router(members.router, prefix="/api/members", tags=["Members"])
 app.include_router(disclosures.router, prefix="/api/disclosures", tags=["Disclosures"])

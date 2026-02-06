@@ -557,6 +557,91 @@ async def members_page():
                     </div>
                 </div>
             </div>
+            
+            <!-- PDF Fallback Modal -->
+            <div x-show="showPdfFallback" class="fixed inset-0 z-50 overflow-y-auto" x-cloak>
+                <div class="flex items-center justify-center min-h-screen px-4">
+                    <div class="fixed inset-0 bg-black/50" @click="showPdfFallback = false"></div>
+                    <div class="relative bg-white rounded-xl shadow-2xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+                        <div class="flex items-start justify-between mb-4">
+                            <div>
+                                <h3 class="text-xl font-bold text-gray-800">📄 Document Not Available</h3>
+                                <p class="text-sm text-gray-500 mt-1">Unable to open this PDF file</p>
+                            </div>
+                            <button @click="showPdfFallback = false" class="text-gray-400 hover:text-gray-600 text-2xl flex-shrink-0">✕</button>
+                        </div>
+                        
+                        <div class="space-y-4 text-sm text-gray-700">
+                            <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
+                                <p class="font-medium text-red-900 mb-2">❌ What Went Wrong</p>
+                                <p class="text-red-800 mb-2">The PDF file could not be accessed. This can happen for several reasons:</p>
+                                <ul class="list-disc list-inside space-y-1 text-red-800">
+                                    <li><strong>File Deleted:</strong> The PDF may have been removed from the source server</li>
+                                    <li><strong>URL Changed:</strong> The source website may have reorganized or updated their file locations</li>
+                                    <li><strong>Server Issues:</strong> The hosting server may be temporarily unavailable</li>
+                                    <li><strong>Access Restricted:</strong> Some documents may require special permissions or authentication</li>
+                                    <li><strong>Network Error:</strong> There may be a connectivity issue between our server and the source</li>
+                                    <li><strong>CORS Restriction:</strong> Cross-origin restrictions may prevent direct access</li>
+                                </ul>
+                            </div>
+                            
+                            <div class="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                <p class="font-medium text-blue-900 mb-2">📋 What We Know About This Disclosure</p>
+                                <div class="space-y-2 text-blue-800">
+                                    <div class="flex justify-between">
+                                        <span class="font-medium">Member:</span>
+                                        <span x-text="selectedPdf?.member_name || 'Unknown'"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="font-medium">Filing Year:</span>
+                                        <span x-text="selectedPdf?.filing_year || 'Unknown'"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="font-medium">Filing Type:</span>
+                                        <span x-text="selectedPdf?.filing_type || 'Unknown'"></span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="font-medium">Parse Status:</span>
+                                        <span x-text="selectedPdf?.parsed ? 'Parsed ✓' : 'Pending'"></span>
+                                    </div>
+                                    <div class="border-t border-blue-200 pt-2 mt-2">
+                                        <span class="font-medium">Document ID:</span>
+                                        <p class="font-mono text-xs text-blue-600 break-all bg-blue-100 p-2 rounded mt-1" x-text="selectedPdf?.document_id || 'Unknown'"></p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="p-4 bg-gray-50 border border-gray-200 rounded-lg">
+                                <p class="font-medium text-gray-900 mb-2">🔗 Document Source URL</p>
+                                <p class="text-xs text-gray-600">The original URL we attempted to access:</p>
+                                <p class="font-mono text-xs text-gray-700 break-all bg-gray-100 p-2 rounded mt-2" x-text="selectedPdf?.document_url || 'No URL available'"></p>
+                            </div>
+                            
+                            <div class="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                                <p class="font-medium text-amber-900 mb-2">💡 What You Can Do</p>
+                                <ul class="list-disc list-inside space-y-1 text-amber-800">
+                                    <li>Try again later - the source server may be temporarily down</li>
+                                    <li>Check if the data shown above is sufficient for your needs</li>
+                                    <li>Visit the original source website directly using the URL below</li>
+                                    <li>Contact the source provider if you believe this is an error</li>
+                                </ul>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-6 flex flex-col sm:flex-row gap-3 justify-end">
+                            <button @click="showPdfFallback = false" class="px-4 py-2 text-gray-700 border border-gray-300 hover:bg-gray-50 rounded-lg order-2 sm:order-1">
+                                Close
+                            </button>
+                            <a :href="selectedPdf?.document_url" 
+                               target="_blank"
+                               rel="noopener noreferrer"
+                               class="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg text-center order-1 sm:order-2">
+                                🔗 Try Original Link
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
         
         <script>
@@ -775,9 +860,15 @@ async def disclosures_page():
                         
                         <select x-model="typeFilter" @change="loadDisclosures()" class="border rounded-lg px-4 py-2">
                             <option value="">All Types</option>
-                            <option value="Annual">Annual</option>
-                            <option value="New Filer">New Filer</option>
-                            <option value="Amendment">Amendment</option>
+                            <option value="A">A - Annual Report</option>
+                            <option value="C">C - Candidate Report</option>
+                            <option value="FD">FD - Financial Disclosure</option>
+                            <option value="G">G - Gingles Report</option>
+                            <option value="H">H - House Member Report</option>
+                            <option value="O">O - Original Report</option>
+                            <option value="P">P - Periodic Report</option>
+                            <option value="T">T - Termination Report</option>
+                            <option value="X">X - Amended/Corrected</option>
                         </select>
                         
                         <select x-model="parsedFilter" @change="loadDisclosures()" class="border rounded-lg px-4 py-2">
@@ -785,6 +876,57 @@ async def disclosures_page():
                             <option value="true">Parsed</option>
                             <option value="false">Not Parsed</option>
                         </select>
+                    </div>
+                    <!-- Filing Type Legend -->
+                    <div class="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                        <h3 class="font-semibold text-blue-900 mb-3">📋 Filing Type Legend</h3>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 text-sm">
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">A</span>
+                                <p class="text-xs text-blue-800 mt-1">Annual Report</p>
+                                <p class="text-xs text-gray-500">(24)</p>
+                            </div>
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">C</span>
+                                <p class="text-xs text-blue-800 mt-1">Candidate Report</p>
+                                <p class="text-xs text-gray-500">(48)</p>
+                            </div>
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">FD</span>
+                                <p class="text-xs text-blue-800 mt-1">Financial Disclosure</p>
+                                <p class="text-xs text-gray-500">(4,742)</p>
+                            </div>
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">G</span>
+                                <p class="text-xs text-blue-800 mt-1">Gingles Report</p>
+                                <p class="text-xs text-gray-500">(1)</p>
+                            </div>
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">H</span>
+                                <p class="text-xs text-blue-800 mt-1">House Member Report</p>
+                                <p class="text-xs text-gray-500">(43)</p>
+                            </div>
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">O</span>
+                                <p class="text-xs text-blue-800 mt-1">Original Report</p>
+                                <p class="text-xs text-gray-500">(212)</p>
+                            </div>
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">P</span>
+                                <p class="text-xs text-blue-800 mt-1">Periodic Report</p>
+                                <p class="text-xs text-gray-500">(188)</p>
+                            </div>
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">T</span>
+                                <p class="text-xs text-blue-800 mt-1">Termination Report</p>
+                                <p class="text-xs text-gray-500">(1,256)</p>
+                            </div>
+                            <div class="bg-white p-3 rounded border border-blue-100">
+                                <span class="font-medium text-blue-900">X</span>
+                                <p class="text-xs text-blue-800 mt-1">Amended/Corrected</p>
+                                <p class="text-xs text-gray-500">(191)</p>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- Loading -->
@@ -798,21 +940,22 @@ async def disclosures_page():
                     <!-- Disclosures Table -->
                     <template x-if="!loading">
                         <div class="overflow-x-auto">
-                            <table class="w-full">
+                            <table class="w-full" style="table-layout: fixed;">
                                 <thead class="bg-gray-50">
                                     <tr>
-                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('member')">
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100 w-1/4" @click="sortBy('member')">
                                             Member <span x-show="sortField === 'member'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                         </th>
-                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('year')">
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100 w-16" @click="sortBy('year')">
                                             Year <span x-show="sortField === 'year'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                         </th>
-                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500">Type</th>
-                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('filing_date')">
-                                            Filing Date <span x-show="sortField === 'filing_date'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100 w-24" @click="sortBy('type')">
+                                            Type <span x-show="sortField === 'type'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                         </th>
-                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500">Status</th>
-                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500">Actions</th>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100 w-24" @click="sortBy('status')">
+                                            Status <span x-show="sortField === 'status'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                        </th>
+                                        <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 w-20">Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody class="divide-y">
@@ -823,7 +966,6 @@ async def disclosures_page():
                                             <td class="px-4 py-3">
                                                 <span class="px-2 py-1 bg-green-100 text-green-800 rounded text-sm" x-text="disc.filing_type"></span>
                                             </td>
-                                            <td class="px-4 py-3" x-text="disc.filing_date ? new Date(disc.filing_date).toLocaleDateString() : '-'"></td>
                                             <td class="px-4 py-3">
                                                 <span :class="disc.parsed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'"
                                                       class="px-2 py-1 rounded text-sm font-medium"
@@ -831,13 +973,12 @@ async def disclosures_page():
                                             </td>
                                             <td class="px-4 py-3">
                                                 <template x-if="disc.document_url">
-                                                    <a :href="disc.document_url" 
-                                                       target="_blank"
-                                                       class="text-blue-600 hover:text-blue-800 text-sm">
+                                                    <button @click="openPdfOrFallback(disc)" 
+                                                            class="text-blue-600 hover:text-blue-800 text-sm font-medium">
                                                         View PDF
-                                                    </a>
+                                                    </button>
                                                 </template>
-                                            </td>
+                            </td>
                                         </tr>
                                     </template>
                                 </tbody>
@@ -892,6 +1033,8 @@ async def disclosures_page():
                     loading: false,
                     sortField: 'filing_date',
                     sortOrder: 'desc',
+                    showPdfFallback: false,
+                    selectedPdf: null,
                     
                     async init() {{
                         console.log('[Disclosures] Initializing...');
@@ -902,19 +1045,19 @@ async def disclosures_page():
                         this.loading = true;
                         
                         try {{
+                            // Use server-side sorting for accurate results across all entries
                             let url = `/api/disclosures?page=${{this.page}}&page_size=${{this.pageSize}}&is_ptr=false`;
+                            url += `&sort_by=${{this.sortField}}&sort_order=${{this.sortOrder}}`;
+                            
                             if (this.yearFilter) url += `&filing_year=${{this.yearFilter}}`;
                             if (this.typeFilter) url += `&filing_type=${{encodeURIComponent(this.typeFilter)}}`;
                             if (this.parsedFilter !== '') url += `&parsed=${{this.parsedFilter}}`;
                             
-                            console.log('[Disclosures] Fetching:', url);
+                            console.log('[Disclosures] Fetching (server-side sort):', url);
                             const data = await fetch(url).then(r => r.json());
                             
-                            this.disclosures = data.disclosures || [];
                             this.total = data.total || 0;
-                            
-                            // Apply client-side sorting
-                            this.applySorting();
+                            this.disclosures = data.disclosures || [];
                             
                             console.log('[Disclosures] Loaded:', this.disclosures.length, 'total:', this.total);
                         }} catch (e) {{
@@ -926,29 +1069,110 @@ async def disclosures_page():
                     }},
                     
                     sortBy(field) {{
-                        if (this.sortField === field) {{
+                        // Map field names for server-side sorting
+                        const fieldMap = {{
+                            'member': 'member_name',
+                            'year': 'year',
+                            'type': 'type',
+                            'status': 'status'
+                        }};
+                        
+                        const sortField = fieldMap[field] || field;
+                        
+                        if (this.sortField === sortField) {{
                             this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
                         }} else {{
-                            this.sortField = field;
+                            this.sortField = sortField;
                             this.sortOrder = 'asc';
                         }}
-                        this.applySorting();
+                        
+                        this.page = 1;  // Reset to page 1 when changing sort
+                        this.loadDisclosures();
                     }},
                     
-                    applySorting() {{
-                        const sortMultiplier = this.sortOrder === 'asc' ? 1 : -1;
+                    openPdfOrFallback(disclosure) {{
+                        this.selectedPdf = disclosure;
+                        console.log('[Disclosures] Attempting to access PDF:', disclosure.document_url);
                         
-                        if (this.sortField === 'member') {{
-                            this.disclosures.sort((a, b) => (a.member_name || '').localeCompare(b.member_name || '') * sortMultiplier);
-                        }} else if (this.sortField === 'year') {{
-                            this.disclosures.sort((a, b) => ((a.filing_year || 0) - (b.filing_year || 0)) * sortMultiplier);
-                        }} else if (this.sortField === 'filing_date') {{
-                            this.disclosures.sort((a, b) => {{
-                                const dateA = new Date(a.filing_date || 0);
-                                const dateB = new Date(b.filing_date || 0);
-                                return (dateA - dateB) * sortMultiplier;
-                            }});
-                        }}
+                        // Strategy: Open in hidden iframe first to detect 404s
+                        // If browser shows error page, we'll detect it and show fallback
+                        // If PDF loads, we open it properly in new tab
+                        
+                        const testFrame = document.createElement('iframe');
+                        testFrame.style.display = 'none';
+                        let hasErrored = false;
+                        let checkTimeout;
+                        
+                        // If the iframe receives an error or fails to load, show fallback
+                        testFrame.onerror = () => {{
+                            hasErrored = true;
+                            console.error('[Disclosures] iframe onerror triggered - PDF likely 404');
+                            cleanup();
+                            this.showPdfFallback = true;
+                        }};
+                        
+                        // Monitor iframe content for error page indicators
+                        const monitorFrame = () => {{
+                            try {{
+                                const frameDoc = testFrame.contentDocument || testFrame.contentWindow.document;
+                                if (frameDoc) {{
+                                    const text = frameDoc.body.innerText || '';
+                                    const title = frameDoc.title || '';
+                                    
+                                    // Check for common 404 indicators
+                                    if (text.includes('404') || 
+                                        text.includes('not found') || 
+                                        text.includes('File or directory not found') ||
+                                        title.includes('404')) {{
+                                        hasErrored = true;
+                                        console.error('[Disclosures] Detected 404 error page in iframe');
+                                        cleanup();
+                                        this.showPdfFallback = true;
+                                        return;
+                                    }}
+                                    
+                                    // If we got here and it's still loading, wait a bit more
+                                    if (!frameDoc.body || frameDoc.readyState !== 'complete') {{
+                                        checkTimeout = setTimeout(monitorFrame, 100);
+                                        return;
+                                    }}
+                                    
+                                    // Content loaded successfully - open in new tab
+                                    console.log('[Disclosures] PDF appears valid, opening in new tab');
+                                    cleanup();
+                                    window.open(disclosure.document_url, '_blank');
+                                }}
+                            }} catch (e) {{
+                                // CORS or other issue - try opening anyway
+                                // Real PDFs will work, fake ones will show error page in browser
+                                console.log('[Disclosures] iframe access blocked by CORS, opening directly');
+                                cleanup();
+                                window.open(disclosure.document_url, '_blank');
+                            }}
+                        }};
+                        
+                        const cleanup = () => {{
+                            clearTimeout(checkTimeout);
+                            testFrame.onerror = null;
+                            if (testFrame.parentNode) {{
+                                testFrame.parentNode.removeChild(testFrame);
+                            }}
+                        }};
+                        
+                        // Set overall timeout
+                        const overallTimeout = setTimeout(() => {{
+                            if (!hasErrored) {{
+                                console.log('[Disclosures] Check timeout, opening PDF');
+                                cleanup();
+                                window.open(disclosure.document_url, '_blank');
+                            }}
+                        }}, 2000);
+                        
+                        checkTimeout = overallTimeout;
+                        
+                        // Append iframe and load URL
+                        document.body.appendChild(testFrame);
+                        testFrame.src = disclosure.document_url;
                     }},
                     
                     previousPage() {{

@@ -120,12 +120,14 @@ async def list_disclosures(
     filing_type: Optional[str] = Query(None, description="Filter by filing type"),
     parsed: Optional[bool] = Query(None, description="Filter by parsed status"),
     is_ptr: Optional[bool] = Query(None, description="Filter by PTR (stock trade) status"),
+    sort_by: Optional[str] = Query("filing_date", description="Field to sort by: member_name, year, filing_date, status"),
+    sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db_session),
 ):
     """
-    List financial disclosures with optional filtering.
+    List financial disclosures with optional filtering and sorting.
     """
     query = db.query(Disclosure).join(Member)
 
@@ -148,10 +150,22 @@ async def list_disclosures(
     # Get total count
     total = query.count()
 
-    # Apply pagination and ordering
-    disclosures = query.order_by(
-        Disclosure.filing_date.desc()
-    ).offset((page - 1) * page_size).limit(page_size).all()
+    # Apply server-side sorting
+    is_desc = sort_order.lower() == 'desc'
+    if sort_by == 'member_name':
+        query = query.order_by(Member.first_name.desc() if is_desc else Member.first_name.asc(),
+                              Member.last_name.desc() if is_desc else Member.last_name.asc())
+    elif sort_by == 'year':
+        query = query.order_by(Disclosure.filing_year.desc() if is_desc else Disclosure.filing_year.asc())
+    elif sort_by == 'type':
+        query = query.order_by(Disclosure.filing_type.desc() if is_desc else Disclosure.filing_type.asc())
+    elif sort_by == 'status':
+        query = query.order_by(Disclosure.parsed.desc() if is_desc else Disclosure.parsed.asc())
+    else:  # Default to filing_date
+        query = query.order_by(Disclosure.filing_date.desc() if is_desc else Disclosure.filing_date.asc())
+
+    # Apply pagination
+    disclosures = query.offset((page - 1) * page_size).limit(page_size).all()
 
     return DisclosureListResponse(
         total=total,

@@ -352,9 +352,8 @@ async def members_page():
                         <input type="text" 
                                x-model="districtFilter" 
                                @input.debounce.300ms="loadMembers()"
-                               placeholder="District (e.g., 1, 10)..." 
-                               class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                               pattern="[0-9]*">
+                               placeholder="District (1-53, or - for Senate)..." 
+                               class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
                         
                         <select x-model="chamberFilter" @change="loadMembers()" class="border rounded-lg px-4 py-2">
                             <option value="">All Chambers</option>

@@ -63,6 +63,10 @@ class Member(Base):
     in_office: Mapped[bool] = mapped_column(default=True)
     start_date: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     
+    # Materialized counts for fast sorting/filtering
+    anomaly_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+    disclosure_count: Mapped[int] = mapped_column(Integer, default=0, index=True)
+
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

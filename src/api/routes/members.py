@@ -76,7 +76,13 @@ async def list_members(
         query = query.filter(Member.state == state.upper())
 
     if district:
-        query = query.filter(Member.district == district)
+        # Handle special case: '-' means no district (senators)
+        if district == '-':
+            query = query.filter(
+                (Member.district == None) | (Member.district == '-1')
+            )
+        else:
+            query = query.filter(Member.district == district)
 
     if in_office is not None:
         query = query.filter(Member.in_office == in_office)
@@ -94,48 +100,19 @@ async def list_members(
             exists().where(Anomaly.member_id == Member.id)
         )
 
-    # Apply min_disclosures filter using subquery
+    # Apply min_disclosures filter using materialized column
     if min_disclosures is not None:
-        from sqlalchemy import select
-        disclosure_count_filter = (
-            select(func.count(Disclosure.id))
-            .where(Disclosure.member_id == Member.id)
-            .correlate(Member)
-            .scalar_subquery()
-        )
-        query = query.filter(disclosure_count_filter >= min_disclosures)
+        query = query.filter(Member.disclosure_count >= min_disclosures)
 
-    # Apply min_anomalies filter using subquery
+    # Apply min_anomalies filter using materialized column
     if min_anomalies is not None:
-        from sqlalchemy import select
-        anomaly_count_filter = (
-            select(func.count(Anomaly.id))
-            .where(Anomaly.member_id == Member.id)
-            .correlate(Member)
-            .scalar_subquery()
-        )
-        query = query.filter(anomaly_count_filter >= min_anomalies)
+        query = query.filter(Member.anomaly_count >= min_anomalies)
 
     # Get total count
     total = query.count()
 
-    # Apply server-side sorting
-    from sqlalchemy import asc, desc, select
-
-    # Create subqueries for computed fields
-    anomaly_count_subq = (
-        select(func.count(Anomaly.id))
-        .where(Anomaly.member_id == Member.id)
-        .correlate(Member)
-        .scalar_subquery()
-    )
-
-    disclosure_count_subq = (
-        select(func.count(Disclosure.id))
-        .where(Disclosure.member_id == Member.id)
-        .correlate(Member)
-        .scalar_subquery()
-    )
+    # Apply server-side sorting using materialized columns
+    from sqlalchemy import asc, desc
 
     if sort_order == "desc":
         if sort_by == "name":
@@ -151,9 +128,9 @@ async def list_members(
         elif sort_by == "status":
             query = query.order_by(desc(Member.in_office), asc(Member.first_name), asc(Member.last_name))
         elif sort_by == "anomalies":
-            query = query.order_by(desc(anomaly_count_subq), asc(Member.first_name), asc(Member.last_name))
+            query = query.order_by(desc(Member.anomaly_count), asc(Member.first_name), asc(Member.last_name))
         elif sort_by == "disclosures":
-            query = query.order_by(desc(disclosure_count_subq), asc(Member.first_name), asc(Member.last_name))
+            query = query.order_by(desc(Member.disclosure_count), asc(Member.first_name), asc(Member.last_name))
         else:
             query = query.order_by(desc(Member.first_name), desc(Member.last_name))
     else:  # asc
@@ -170,26 +147,18 @@ async def list_members(
         elif sort_by == "status":
             query = query.order_by(asc(Member.in_office), asc(Member.first_name), asc(Member.last_name))
         elif sort_by == "anomalies":
-            query = query.order_by(asc(anomaly_count_subq), asc(Member.first_name), asc(Member.last_name))
+            query = query.order_by(asc(Member.anomaly_count), asc(Member.first_name), asc(Member.last_name))
         elif sort_by == "disclosures":
-            query = query.order_by(asc(disclosure_count_subq), asc(Member.first_name), asc(Member.last_name))
+            query = query.order_by(asc(Member.disclosure_count), asc(Member.first_name), asc(Member.last_name))
         else:
             query = query.order_by(asc(Member.first_name), asc(Member.last_name))
 
     # Apply pagination
     members = query.offset((page - 1) * page_size).limit(page_size).all()
 
-    # Build response with counts
+    # Build response using materialized counts
     member_responses = []
     for member in members:
-        disclosure_count = db.query(Disclosure).filter(
-            Disclosure.member_id == member.id
-        ).count()
-
-        anomaly_count = db.query(Anomaly).filter(
-            Anomaly.member_id == member.id
-        ).count()
-
         member_responses.append(MemberResponse(
             id=member.id,
             bioguide_id=member.bioguide_id,
@@ -200,8 +169,8 @@ async def list_members(
             state=member.state,
             district=None if member.district == '-1' or member.district is None else member.district,
             in_office=member.in_office,
-            disclosure_count=disclosure_count,
-            anomaly_count=anomaly_count,
+            disclosure_count=member.disclosure_count,
+            anomaly_count=member.anomaly_count,
         ))
 
     return MemberListResponse(
@@ -225,16 +194,6 @@ async def get_member(
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
-    # Get disclosure count
-    disclosure_count = db.query(Disclosure).filter(
-        Disclosure.member_id == member.id
-    ).count()
-
-    # Get anomaly count
-    anomaly_count = db.query(Anomaly).filter(
-        Anomaly.member_id == member.id
-    ).count()
-
     # Get recent disclosures
     recent_disclosures = db.query(Disclosure).filter(
         Disclosure.member_id == member.id
@@ -255,8 +214,8 @@ async def get_member(
         state=member.state,
         district=None if member.district == '-1' or member.district is None else member.district,
         in_office=member.in_office,
-        disclosure_count=disclosure_count,
-        anomaly_count=anomaly_count,
+        disclosure_count=member.disclosure_count,
+        anomaly_count=member.anomaly_count,
         recent_disclosures=[
             {
                 "id": d.id,

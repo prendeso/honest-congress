@@ -5,20 +5,10 @@ They don't assert on visible content — that would be brittle against
 markup changes — they only catch outright template breakage.
 """
 
-import os
-
 import pytest
 from fastapi.testclient import TestClient
 
-# The app refuses to start in production mode without ADMIN_PASSWORD —
-# unset both so the test client boots in dev mode.
-os.environ.pop("ENV", None)
-os.environ.pop("ADMIN_PASSWORD", None)
-
-from src.api.main import app  # noqa: E402
-from src.config import get_settings  # noqa: E402
-
-get_settings.cache_clear()
+from src.api.main import app
 
 
 @pytest.fixture(scope="module")

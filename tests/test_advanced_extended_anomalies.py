@@ -392,3 +392,141 @@ class TestPersistence:
         run_advanced_anomaly_detection(db_session)
         after = db_session.query(Anomaly).count()
         assert after > before
+
+
+# ---------------- edge cases ----------------
+
+
+class TestEdgeCases:
+    """Defensive coverage: detectors must not crash on missing/empty data."""
+
+    def test_detectors_return_empty_with_no_members(self, db_session):
+        """No members → no anomalies, no errors."""
+        adv = AdvancedAnomalyDetector()
+        ext = ExtendedAnomalyDetector()
+        assert adv.detect_wealth_vs_salary_anomalies(db_session) == []
+        assert adv.detect_asset_appreciation_anomalies(db_session) == []
+        assert adv.detect_stock_outperformance_anomalies(db_session) == []
+        assert ext.detect_trade_timing_anomalies(db_session) == []
+        assert ext.detect_committee_conflicts(db_session) == []
+        assert ext.detect_loss_avoidance(db_session) == []
+
+    def test_member_with_no_trades_skipped(self, db_session):
+        """A member without any transactions shouldn't produce trade anomalies."""
+        _make_member(db_session, bioguide="E000001", last="Empty")
+        adv = AdvancedAnomalyDetector()
+        ext = ExtendedAnomalyDetector()
+        assert adv.detect_stock_outperformance_anomalies(db_session) == []
+        assert ext.detect_trade_timing_anomalies(db_session) == []
+
+    def test_transactions_with_none_amounts_dont_crash(self, db_session):
+        """The previous bug was AttributeError on .amount; ensure None ranges are tolerated."""
+        member = _make_member(db_session, bioguide="A000099")
+        d = _make_disclosure(db_session, member, 2024, "NA1", is_ptr=True)
+        # Create a few PURCHASE+SALE pairs but with None amounts
+        for txn_type in (TransactionType.PURCHASE, TransactionType.SALE):
+            t = Transaction(
+                disclosure_id=d.id,
+                transaction_date=datetime(2024, 5, 1),
+                transaction_type=txn_type,
+                description="No amount",
+                ticker="AAPL",
+            )
+            db_session.add(t)
+        db_session.commit()
+
+        adv = AdvancedAnomalyDetector()
+        ext = ExtendedAnomalyDetector()
+        # No exceptions raised; some may flag depending on logic, but the
+        # important thing is the calls complete.
+        adv.detect_stock_outperformance_anomalies(db_session)
+        ext.detect_trade_timing_anomalies(db_session)
+
+    def test_single_disclosure_skipped_for_year_over_year_growth(self, db_session):
+        """The wealth/salary and asset-appreciation detectors require 2+ disclosures."""
+        member = _make_member(db_session, bioguide="S000001", last="Singleton")
+        d = _make_disclosure(db_session, member, 2024, "S1")
+        _make_asset(db_session, d, "Portfolio", 1_000_000, 1_000_000)
+
+        adv = AdvancedAnomalyDetector()
+        # < 2 disclosures means skip — should yield nothing.
+        assert adv.detect_wealth_vs_salary_anomalies(db_session) == []
+        assert adv.detect_asset_appreciation_anomalies(db_session) == []
+
+    def test_persist_skips_anomalies_without_anomaly_type(self, db_session):
+        """Defensive: a malformed anomaly dict missing `anomaly_type` is ignored."""
+        member = _make_member(db_session, bioguide="M000001")
+        before = db_session.query(Anomaly).count()
+        inserted = persist_anomalies(
+            db_session,
+            [{"member_id": member.id, "title": "no type", "description": "x"}],
+        )
+        after = db_session.query(Anomaly).count()
+        assert inserted == 0
+        assert after == before
+
+    def test_persist_normalizes_uppercase_severity(self, db_session):
+        member = _make_member(db_session, bioguide="N000099")
+        persist_anomalies(
+            db_session,
+            [
+                {
+                    "member_id": member.id,
+                    "anomaly_type": "wealth_vs_salary",
+                    "severity": "CRITICAL",
+                    "title": "T1",
+                    "description": "d",
+                },
+                {
+                    "member_id": member.id,
+                    "anomaly_type": "wealth_vs_salary",
+                    "severity": "MEDIUM",
+                    "title": "T2",
+                    "description": "d",
+                },
+            ],
+        )
+        rows = (
+            db_session.query(Anomaly)
+            .filter(Anomaly.member_id == member.id)
+            .order_by(Anomaly.title)
+            .all()
+        )
+        # CRITICAL → high (API doesn't know about a "critical" severity).
+        assert rows[0].severity == "high"
+        assert rows[1].severity == "medium"
+
+    def test_persist_handles_int_severity(self, db_session):
+        """trade_analyzer historically passed integer severities (1-10)."""
+        member = _make_member(db_session, bioguide="I000001")
+        persist_anomalies(
+            db_session,
+            [
+                {
+                    "member_id": member.id,
+                    "anomaly_type": "high_trading_frequency",
+                    "severity": 9,  # integer — must be normalized
+                    "title": "Int severity",
+                    "description": "d",
+                },
+            ],
+        )
+        row = db_session.query(Anomaly).filter(Anomaly.title == "Int severity").one()
+        assert row.severity == "high"
+
+    def test_transaction_amount_handles_only_min(self, db_session):
+        """Only amount_min set (amount_max None) — return that side."""
+        member = _make_member(db_session, bioguide="X000001")
+        d = _make_disclosure(db_session, member, 2024, "X1", is_ptr=True)
+        t = Transaction(
+            disclosure_id=d.id,
+            transaction_date=datetime(2024, 1, 1),
+            transaction_type=TransactionType.PURCHASE,
+            description="min only",
+            ticker="MIN",
+            amount_min=Decimal("500"),
+            amount_max=None,
+        )
+        db_session.add(t)
+        db_session.commit()
+        assert transaction_amount(t) == 500.0

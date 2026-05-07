@@ -1,10 +1,10 @@
 """PDF parsing for financial disclosures."""
-import re
+
 import logging
-from typing import List, Dict, Any, Optional, Tuple
-from decimal import Decimal
-from pathlib import Path
+import re
 from datetime import datetime
+from decimal import Decimal
+from typing import Any, Dict, List, Tuple
 
 import pdfplumber
 
@@ -26,7 +26,7 @@ VALUE_RANGES = {
 }
 
 # Common ticker patterns
-TICKER_PATTERN = re.compile(r'\b([A-Z]{1,5})\b')
+TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
 STOCK_KEYWORDS = ["common stock", "stock", "shares", "equity"]
 
 
@@ -84,9 +84,7 @@ class DisclosureParser:
         return result
 
     def _parse_assets_section(
-        self,
-        text: str,
-        tables: List[List[List[str]]]
+        self, text: str, tables: List[List[List[str]]]
     ) -> List[Dict[str, Any]]:
         """Parse the assets/Schedule A section."""
         assets = []
@@ -113,7 +111,7 @@ class DisclosureParser:
 
         return assets
 
-    def _parse_asset_row(self, row: List[Any]) -> Optional[Dict[str, Any]]:
+    def _parse_asset_row(self, row: List[Any]) -> Dict[str, Any] | None:
         """Parse a single asset row from a table."""
         if not row or len(row) < 2:
             return None
@@ -157,9 +155,7 @@ class DisclosureParser:
         }
 
     def _parse_transactions_section(
-        self,
-        text: str,
-        tables: List[List[List[str]]]
+        self, text: str, tables: List[List[List[str]]]
     ) -> List[Dict[str, Any]]:
         """Parse the transactions/Schedule B section (PTR)."""
         transactions = []
@@ -179,7 +175,7 @@ class DisclosureParser:
 
         return transactions
 
-    def _parse_transaction_row(self, row: List[Any]) -> Optional[Dict[str, Any]]:
+    def _parse_transaction_row(self, row: List[Any]) -> Dict[str, Any] | None:
         """Parse a single transaction row."""
         if not row or len(row) < 3:
             return None
@@ -218,9 +214,7 @@ class DisclosureParser:
         }
 
     def _parse_liabilities_section(
-        self,
-        text: str,
-        tables: List[List[List[str]]]
+        self, text: str, tables: List[List[List[str]]]
     ) -> List[Dict[str, Any]]:
         """Parse the liabilities section."""
         liabilities = []
@@ -240,7 +234,7 @@ class DisclosureParser:
 
         return liabilities
 
-    def _parse_liability_row(self, row: List[Any]) -> Optional[Dict[str, Any]]:
+    def _parse_liability_row(self, row: List[Any]) -> Dict[str, Any] | None:
         """Parse a single liability row."""
         if not row or len(row) < 2:
             return None
@@ -270,9 +264,7 @@ class DisclosureParser:
         }
 
     def _parse_income_section(
-        self,
-        text: str,
-        tables: List[List[List[str]]]
+        self, text: str, tables: List[List[List[str]]]
     ) -> List[Dict[str, Any]]:
         """Parse earned income section."""
         income = []
@@ -291,10 +283,12 @@ class DisclosureParser:
                         amount = str(row[1]).strip() if len(row) > 1 and row[1] else ""
 
                         if source:
-                            income.append({
-                                "source": source,
-                                "amount": amount,
-                            })
+                            income.append(
+                                {
+                                    "source": source,
+                                    "amount": amount,
+                                }
+                            )
 
         return income
 
@@ -303,27 +297,29 @@ class DisclosureParser:
         assets = []
 
         # Pattern: Stock description followed by value range
-        pattern = r'([A-Z][A-Za-z\s\.\,\&]+(?:stock|fund|bond|account))\s*[\-\:]\s*(\$[\d\,]+\s*-\s*\$[\d\,]+)'
+        pattern = r"([A-Z][A-Za-z\s\.\,\&]+(?:stock|fund|bond|account))\s*[\-\:]\s*(\$[\d\,]+\s*-\s*\$[\d\,]+)"
 
         matches = re.findall(pattern, text, re.IGNORECASE)
         for desc, value in matches:
             value_min, value_max = self._parse_value_range(value)
             ticker = self._extract_ticker(desc)
 
-            assets.append({
-                "description": desc.strip(),
-                "ticker": ticker,
-                "asset_type": self._determine_asset_type(desc),
-                "value_min": value_min,
-                "value_max": value_max,
-            })
+            assets.append(
+                {
+                    "description": desc.strip(),
+                    "ticker": ticker,
+                    "asset_type": self._determine_asset_type(desc),
+                    "value_min": value_min,
+                    "value_max": value_max,
+                }
+            )
 
         return assets
 
-    def _extract_ticker(self, text: str) -> Optional[str]:
+    def _extract_ticker(self, text: str) -> str | None:
         """Extract stock ticker from text."""
         # Look for explicit ticker notation like (AAPL) or [MSFT]
-        explicit = re.search(r'[\(\[]([A-Z]{1,5})[\)\]]', text)
+        explicit = re.search(r"[\(\[]([A-Z]{1,5})[\)\]]", text)
         if explicit:
             return explicit.group(1)
 
@@ -363,9 +359,9 @@ class DisclosureParser:
         """Check if text looks like a value range."""
         if not text:
             return False
-        return bool(re.search(r'\$[\d,]+', text))
+        return bool(re.search(r"\$[\d,]+", text))
 
-    def _parse_value_range(self, text: str) -> Tuple[Optional[Decimal], Optional[Decimal]]:
+    def _parse_value_range(self, text: str) -> Tuple[Decimal | None, Decimal | None]:
         """Parse a value range string into min/max decimals."""
         if not text:
             return None, None
@@ -375,11 +371,11 @@ class DisclosureParser:
             if range_text.lower() in text.lower():
                 return (
                     Decimal(min_val) if min_val else None,
-                    Decimal(max_val) if max_val else None
+                    Decimal(max_val) if max_val else None,
                 )
 
         # Try to parse custom range
-        amounts = re.findall(r'\$?([\d,]+)', text)
+        amounts = re.findall(r"\$?([\d,]+)", text)
         amounts = [int(a.replace(",", "")) for a in amounts if a]
 
         if len(amounts) >= 2:
@@ -389,7 +385,7 @@ class DisclosureParser:
 
         return None, None
 
-    def _normalize_transaction_type(self, text: str) -> Optional[str]:
+    def _normalize_transaction_type(self, text: str) -> str | None:
         """Normalize transaction type text."""
         if not text:
             return None
@@ -405,7 +401,7 @@ class DisclosureParser:
 
         return None
 
-    def _parse_date(self, text: str) -> Optional[datetime]:
+    def _parse_date(self, text: str) -> datetime | None:
         """Parse date from various formats."""
         if not text:
             return None
@@ -440,4 +436,3 @@ def parse_disclosure(pdf_path: str) -> Dict[str, Any]:
     """
     parser = DisclosureParser()
     return parser.parse_pdf(pdf_path)
-

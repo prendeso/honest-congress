@@ -1,10 +1,12 @@
 """Tests for wealth analyzer."""
-import pytest
+
 from datetime import datetime
 from decimal import Decimal
 
-from src.db.models import Member, Disclosure, Asset, Chamber, Party, AssetType
+import pytest
+
 from src.analysis.wealth_analyzer import WealthAnalyzer
+from src.db.models import Asset, AssetType, Chamber, Disclosure, Member, Party
 
 
 class TestWealthAnalyzer:
@@ -12,10 +14,7 @@ class TestWealthAnalyzer:
 
     @pytest.fixture
     def analyzer(self):
-        return WealthAnalyzer(
-            threshold_percent=200,
-            congressional_salary=174000
-        )
+        return WealthAnalyzer(threshold_percent=200, congressional_salary=174000)
 
     def test_analyze_member_no_disclosures(self, analyzer, db_session):
         """Test analyzing member with no disclosures."""
@@ -189,4 +188,3 @@ class TestWealthAnalyzer:
         assert analyzer._calculate_severity(600, 35) == "high"  # 565% deviation
         assert analyzer._calculate_severity(300, 35) == "medium"  # 265% deviation
         assert analyzer._calculate_severity(100, 35) == "low"  # 65% deviation
-

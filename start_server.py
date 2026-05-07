@@ -6,6 +6,7 @@ PaaS hosts that inject the port (Railway, Heroku, Fly, etc.). Binds to
 `0.0.0.0` so the platform's ingress can reach the container; reload mode
 is only enabled when `ENV=dev`.
 """
+
 import os
 
 import uvicorn

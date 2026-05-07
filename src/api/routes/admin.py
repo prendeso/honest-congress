@@ -1,4 +1,5 @@
 """Admin page for Honest Congress - Data management and API operations."""
+
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
@@ -394,4 +395,3 @@ async def admin_page(request: Request):
     response = HTMLResponse(content=ADMIN_HTML)
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     return response
-

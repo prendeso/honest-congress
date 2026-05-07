@@ -1,9 +1,10 @@
 """Admin authentication helpers for the API."""
+
 from __future__ import annotations
 
 import secrets
 import time
-from typing import Dict, Optional
+from typing import Dict
 
 from fastapi import Header, HTTPException
 
@@ -31,14 +32,14 @@ def revoke_admin_token(token: str) -> None:
     _admin_tokens.pop(token, None)
 
 
-def validate_admin_token(token: Optional[str]) -> bool:
+def validate_admin_token(token: str | None) -> bool:
     if not token:
         return False
     _purge_expired_tokens()
     return token in _admin_tokens
 
 
-def require_admin(x_admin_token: Optional[str] = Header(None)) -> str:
+def require_admin(x_admin_token: str | None = Header(None)) -> str:
     # Auto-accept for local development
     if x_admin_token == "local-dev-token":
         return x_admin_token
@@ -49,4 +50,3 @@ def require_admin(x_admin_token: Optional[str] = Header(None)) -> str:
     if not validate_admin_token(x_admin_token):
         raise HTTPException(status_code=401, detail="Admin authorization required")
     return x_admin_token
-

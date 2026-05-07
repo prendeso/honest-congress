@@ -2,10 +2,11 @@
 Parse income sources from Financial Disclosure documents.
 Extracts income types, amounts, and sources from FD filings.
 """
+
 import logging
-from typing import List, Dict, Optional
 import xml.etree.ElementTree as ET
 from decimal import Decimal
+from typing import Dict, List
 
 from src.db.database import SessionLocal
 from src.db.models import Disclosure
@@ -40,7 +41,7 @@ class FDIncomeParser:
 
         return "other"
 
-    def parse_income_amount(self, amount_str: str) -> Optional[Decimal]:
+    def parse_income_amount(self, amount_str: str) -> Decimal | None:
         """Parse income amount from string."""
         try:
             if not amount_str or amount_str.strip() == "":
@@ -57,7 +58,7 @@ class FDIncomeParser:
                 return (min_val + max_val) / 2
             else:
                 return Decimal(amount_str)
-        except:
+        except (ValueError, ArithmeticError):
             return None
 
     def parse_fd_xml(self, xml_content: bytes) -> Dict[str, List[Dict]]:
@@ -155,20 +156,10 @@ class FDIncomeParser:
 
         try:
             # Get FD disclosures
-            disclosures = db.query(Disclosure).filter(
-                Disclosure.filing_type == "FD"
-            ).all()
+            disclosures = db.query(Disclosure).filter(Disclosure.filing_type == "FD").all()
 
             logger.info(f"\nAnalyzing income from {len(disclosures)} FD disclosures...")
-            logger.info(f"{'='*70}\n")
-
-            income_summary = {
-                "salary": 0,
-                "investment": 0,
-                "real_estate": 0,
-                "business": 0,
-                "other": 0,
-            }
+            logger.info(f"{'=' * 70}\n")
 
             anomalies_found = 0
 
@@ -182,11 +173,11 @@ class FDIncomeParser:
                     logger.error(f"Error analyzing disclosure: {str(e)[:50]}")
                     self.errors += 1
 
-            logger.info(f"\n{'='*70}")
-            logger.info(f"Income Analysis Complete")
+            logger.info(f"\n{'=' * 70}")
+            logger.info("Income Analysis Complete")
             logger.info(f"Disclosures analyzed: {len(disclosures)}")
             logger.info(f"Anomalies found: {anomalies_found}")
-            logger.info(f"{'='*70}\n")
+            logger.info(f"{'=' * 70}\n")
 
         finally:
             db.close()
@@ -195,8 +186,7 @@ class FDIncomeParser:
 def main():
     """Run income parsing."""
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     parser = FDIncomeParser()
@@ -205,4 +195,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

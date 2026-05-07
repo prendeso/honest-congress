@@ -8,16 +8,15 @@ Additional detection types:
 4. Wealth Source Anomalies (gifts, speaking fees, book deals, real estate flips)
 5. Red Flag Combinations (multi-factor risk scoring)
 """
+
 import logging
-from typing import Any, List, Dict, Optional, Tuple
-from decimal import Decimal
-from datetime import datetime, timedelta
 from collections import defaultdict
+from decimal import Decimal
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
-from src.db.models import Member, Disclosure, Transaction, Asset, TransactionType
+from src.db.models import Disclosure, Member, Transaction, TransactionType
 
 logger = logging.getLogger(__name__)
 
@@ -61,26 +60,28 @@ class ExtendedAnomalyDetector:
                     # Pattern 1: Consecutive same-direction trades (unusual clustering)
                     consecutive_same_direction = self._check_consecutive_trades(trades)
                     if consecutive_same_direction:
-                        anomalies.append({
-                            "member_id": member.id,
-                            "member_name": f"{member.first_name} {member.last_name}",
-                            "chamber": member.chamber,
-                            "anomaly_type": "trade_clustering",
-                            "severity": "MEDIUM",
-                            "title": (
-                                f"Consecutive same-direction trades "
-                                f"({consecutive_same_direction} in a row)"
-                            ),
-                            "pattern": "Consecutive trades in same direction within short timeframe",
-                            "count": consecutive_same_direction,
-                            "computed_value": Decimal(str(consecutive_same_direction)),
-                            "threshold_value": Decimal("5"),
-                            "description": (
-                                f"Member made {consecutive_same_direction} consecutive trades "
-                                f"in same direction (all buys or all sells) within short period. "
-                                f"Could indicate insider information or coordinated strategy."
-                            )
-                        })
+                        anomalies.append(
+                            {
+                                "member_id": member.id,
+                                "member_name": f"{member.first_name} {member.last_name}",
+                                "chamber": member.chamber,
+                                "anomaly_type": "trade_clustering",
+                                "severity": "MEDIUM",
+                                "title": (
+                                    f"Consecutive same-direction trades "
+                                    f"({consecutive_same_direction} in a row)"
+                                ),
+                                "pattern": "Consecutive trades in same direction within short timeframe",
+                                "count": consecutive_same_direction,
+                                "computed_value": Decimal(str(consecutive_same_direction)),
+                                "threshold_value": Decimal("5"),
+                                "description": (
+                                    f"Member made {consecutive_same_direction} consecutive trades "
+                                    f"in same direction (all buys or all sells) within short period. "
+                                    f"Could indicate insider information or coordinated strategy."
+                                ),
+                            }
+                        )
 
                     # Pattern 2: High-volume trading before market events
                     volume_spikes = self._check_volume_spikes(trades, member)
@@ -90,27 +91,29 @@ class ExtendedAnomalyDetector:
                     # Pattern 3: Perfect buy-low-sell-high patterns
                     perfect_timing = self._check_perfect_timing(trades)
                     if perfect_timing:
-                        anomalies.append({
-                            "member_id": member.id,
-                            "member_name": f"{member.first_name} {member.last_name}",
-                            "chamber": member.chamber,
-                            "anomaly_type": "perfect_timing",
-                            "severity": "HIGH",
-                            "title": (
-                                f"Suspiciously high trade success rate "
-                                f"({perfect_timing['rate']:.0f}%)"
-                            ),
-                            "success_rate": perfect_timing["rate"],
-                            "profitable_trades": perfect_timing["count"],
-                            "computed_value": Decimal(str(round(perfect_timing["rate"], 2))),
-                            "threshold_value": Decimal("80"),
-                            "description": (
-                                f"Member executed {perfect_timing['count']} trades with exceptional timing. "
-                                f"Success rate: {perfect_timing['rate']:.1f}%. "
-                                f"Probability of this performance by chance: <1%. "
-                                f"Suggests insider information or exceptional predictive ability."
-                            )
-                        })
+                        anomalies.append(
+                            {
+                                "member_id": member.id,
+                                "member_name": f"{member.first_name} {member.last_name}",
+                                "chamber": member.chamber,
+                                "anomaly_type": "perfect_timing",
+                                "severity": "HIGH",
+                                "title": (
+                                    f"Suspiciously high trade success rate "
+                                    f"({perfect_timing['rate']:.0f}%)"
+                                ),
+                                "success_rate": perfect_timing["rate"],
+                                "profitable_trades": perfect_timing["count"],
+                                "computed_value": Decimal(str(round(perfect_timing["rate"], 2))),
+                                "threshold_value": Decimal("80"),
+                                "description": (
+                                    f"Member executed {perfect_timing['count']} trades with exceptional timing. "
+                                    f"Success rate: {perfect_timing['rate']:.1f}%. "
+                                    f"Probability of this performance by chance: <1%. "
+                                    f"Suggests insider information or exceptional predictive ability."
+                                ),
+                            }
+                        )
 
                 except Exception as e:
                     logger.debug(f"Error analyzing timing for {member.first_name}: {str(e)[:50]}")
@@ -143,7 +146,7 @@ class ExtendedAnomalyDetector:
     def _check_volume_spikes(
         self,
         trades: List[Transaction],
-        member: Optional[Member] = None,
+        member: Member | None = None,
     ) -> List[Dict]:
         """Check for unusual trading volume spikes."""
         from src.analysis import transaction_amount
@@ -184,7 +187,7 @@ class ExtendedAnomalyDetector:
 
         return anomalies
 
-    def _check_perfect_timing(self, trades: List[Transaction]) -> Optional[Dict]:
+    def _check_perfect_timing(self, trades: List[Transaction]) -> Dict | None:
         """Check for suspiciously good timing on trades."""
         if len(trades) < 3:
             return None
@@ -225,15 +228,6 @@ class ExtendedAnomalyDetector:
         """
         anomalies = []
 
-        # Sector-to-committee mapping
-        COMMITTEE_SECTOR_CONFLICTS = {
-            "armed_services": ["defense", "lockheed", "raytheon", "boeing", "northrop"],
-            "health": ["pharma", "pfizer", "moderna", "merck", "johnson", "healthcare"],
-            "commerce": ["tech", "amazon", "apple", "microsoft", "google", "telecom"],
-            "energy": ["oil", "gas", "exxon", "chevron", "energy", "solar"],
-            "finance": ["bank", "jpmorgan", "wells fargo", "visa", "mastercard"],
-        }
-
         try:
             members = db.query(Member).all()
 
@@ -257,23 +251,25 @@ class ExtendedAnomalyDetector:
 
                     if regulated_trades:
                         sectors = ", ".join(regulated_trades["sectors"][:3]) or "regulated sectors"
-                        anomalies.append({
-                            "member_id": member.id,
-                            "member_name": f"{member.first_name} {member.last_name}",
-                            "chamber": member.chamber,
-                            "anomaly_type": "sector_concentration",
-                            "severity": "MEDIUM",
-                            "title": f"Heavy concentration in {sectors}",
-                            "sectors": regulated_trades["sectors"],
-                            "trade_count": regulated_trades["count"],
-                            "computed_value": Decimal(str(regulated_trades["count"])),
-                            "threshold_value": Decimal(str(int(len(trades) * 0.5))),
-                            "description": (
-                                f"Member concentrated trading in {len(regulated_trades['sectors'])} "
-                                f"heavily-regulated sectors: {', '.join(regulated_trades['sectors'])}. "
-                                f"If member serves on related committee, this represents potential conflict of interest."
-                            )
-                        })
+                        anomalies.append(
+                            {
+                                "member_id": member.id,
+                                "member_name": f"{member.first_name} {member.last_name}",
+                                "chamber": member.chamber,
+                                "anomaly_type": "sector_concentration",
+                                "severity": "MEDIUM",
+                                "title": f"Heavy concentration in {sectors}",
+                                "sectors": regulated_trades["sectors"],
+                                "trade_count": regulated_trades["count"],
+                                "computed_value": Decimal(str(regulated_trades["count"])),
+                                "threshold_value": Decimal(str(int(len(trades) * 0.5))),
+                                "description": (
+                                    f"Member concentrated trading in {len(regulated_trades['sectors'])} "
+                                    f"heavily-regulated sectors: {', '.join(regulated_trades['sectors'])}. "
+                                    f"If member serves on related committee, this represents potential conflict of interest."
+                                ),
+                            }
+                        )
 
                 except Exception as e:
                     logger.debug(f"Error checking conflicts for {member.first_name}: {str(e)[:50]}")
@@ -283,12 +279,31 @@ class ExtendedAnomalyDetector:
 
         return anomalies
 
-    def _check_regulated_sector_trading(self, trades: List[Transaction]) -> Optional[Dict]:
+    def _check_regulated_sector_trading(self, trades: List[Transaction]) -> Dict | None:
         """Check for concentration in regulated sectors."""
         REGULATED_SECTORS = {
-            "defense": ["defense", "lockheed", "raytheon", "boeing", "northrop", "lmt", "ba", "rtx"],
+            "defense": [
+                "defense",
+                "lockheed",
+                "raytheon",
+                "boeing",
+                "northrop",
+                "lmt",
+                "ba",
+                "rtx",
+            ],
             "pharma": ["pharma", "pfizer", "moderna", "merck", "johnson", "pfe", "mrna", "mrk"],
-            "tech": ["apple", "microsoft", "google", "amazon", "meta", "aapl", "msft", "googl", "amzn"],
+            "tech": [
+                "apple",
+                "microsoft",
+                "google",
+                "amazon",
+                "meta",
+                "aapl",
+                "msft",
+                "googl",
+                "amzn",
+            ],
             "finance": ["jpmorgan", "wells fargo", "goldman", "bank", "jpm", "wfc", "gs", "visa"],
             "energy": ["exxon", "chevron", "shell", "xom", "cvx"],
         }
@@ -352,14 +367,20 @@ class ExtendedAnomalyDetector:
                     avoidance_score = 0
                     total_patterns = 0
 
-                    for ticker, ticker_trades in holdings.items():
+                    for _ticker, ticker_trades in holdings.items():
                         if len(ticker_trades) < 2:
                             continue
 
                         # For each buy-sell pair, check if sold before price drop
                         # (would need actual price data - this is simplified)
-                        buys = [t for t in ticker_trades if t.transaction_type == TransactionType.PURCHASE]
-                        sells = [t for t in ticker_trades if t.transaction_type == TransactionType.SALE]
+                        buys = [
+                            t
+                            for t in ticker_trades
+                            if t.transaction_type == TransactionType.PURCHASE
+                        ]
+                        sells = [
+                            t for t in ticker_trades if t.transaction_type == TransactionType.SALE
+                        ]
 
                         if buys and sells:
                             # Check if sells always follow buys (not holding through drops)
@@ -372,26 +393,30 @@ class ExtendedAnomalyDetector:
                     # Flag if pattern is strong
                     if total_patterns > 5 and (avoidance_score / total_patterns) > 0.8:
                         rate = (avoidance_score / total_patterns) * 100
-                        anomalies.append({
-                            "member_id": member.id,
-                            "member_name": f"{member.first_name} {member.last_name}",
-                            "chamber": member.chamber,
-                            "anomaly_type": "loss_avoidance",
-                            "severity": "HIGH",
-                            "title": f"Loss-avoidance pattern ({rate:.0f}% rate)",
-                            "avoidance_rate": rate,
-                            "pattern_count": total_patterns,
-                            "computed_value": Decimal(str(round(rate, 2))),
-                            "threshold_value": Decimal("80"),
-                            "description": (
-                                f"Member demonstrates loss-avoidance pattern in {total_patterns} trading instances. "
-                                f"Success rate: {rate:.1f}%. "
-                                f"Suggests ability to predict stock movements or insider information."
-                            )
-                        })
+                        anomalies.append(
+                            {
+                                "member_id": member.id,
+                                "member_name": f"{member.first_name} {member.last_name}",
+                                "chamber": member.chamber,
+                                "anomaly_type": "loss_avoidance",
+                                "severity": "HIGH",
+                                "title": f"Loss-avoidance pattern ({rate:.0f}% rate)",
+                                "avoidance_rate": rate,
+                                "pattern_count": total_patterns,
+                                "computed_value": Decimal(str(round(rate, 2))),
+                                "threshold_value": Decimal("80"),
+                                "description": (
+                                    f"Member demonstrates loss-avoidance pattern in {total_patterns} trading instances. "
+                                    f"Success rate: {rate:.1f}%. "
+                                    f"Suggests ability to predict stock movements or insider information."
+                                ),
+                            }
+                        )
 
                 except Exception as e:
-                    logger.debug(f"Error checking loss avoidance for {member.first_name}: {str(e)[:50]}")
+                    logger.debug(
+                        f"Error checking loss avoidance for {member.first_name}: {str(e)[:50]}"
+                    )
 
         except Exception as e:
             logger.error(f"Error in loss avoidance detection: {str(e)[:100]}")
@@ -417,8 +442,13 @@ class ExtendedAnomalyDetector:
         # Build member anomaly map
         member_anomaly_map = defaultdict(list)
 
-        for anomaly in (wealth_anomalies + asset_anomalies + stock_anomalies +
-                       timing_anomalies + conflict_anomalies):
+        for anomaly in (
+            wealth_anomalies
+            + asset_anomalies
+            + stock_anomalies
+            + timing_anomalies
+            + conflict_anomalies
+        ):
             member_id = anomaly.get("member_id")
             if member_id:
                 member_anomaly_map[member_id].append(anomaly)
@@ -426,16 +456,10 @@ class ExtendedAnomalyDetector:
         # Flag members with multiple anomalies
         for member_id, anomalies_list in member_anomaly_map.items():
             if len(anomalies_list) >= 3:  # 3+ different anomaly types
-                severity_scores = {
-                    "CRITICAL": 3,
-                    "HIGH": 2,
-                    "MEDIUM": 1,
-                    "LOW": 0
-                }
+                severity_scores = {"CRITICAL": 3, "HIGH": 2, "MEDIUM": 1, "LOW": 0}
 
                 total_score = sum(
-                    severity_scores.get(a.get("severity", "LOW"), 0)
-                    for a in anomalies_list
+                    severity_scores.get(a.get("severity", "LOW"), 0) for a in anomalies_list
                 )
 
                 overall_severity = "CRITICAL" if total_score >= 6 else "HIGH"
@@ -443,35 +467,37 @@ class ExtendedAnomalyDetector:
                 # Get member name from first anomaly
                 member_name = anomalies_list[0].get("member_name", "Unknown")
 
-                anomalies.append({
-                    "member_id": member_id,
-                    "member_name": member_name,
-                    "anomaly_type": "multi_factor_risk",
-                    "severity": overall_severity,
-                    "title": (
-                        f"Multi-factor risk: {len(anomalies_list)} different anomaly types"
-                    ),
-                    "anomaly_count": len(anomalies_list),
-                    "risk_score": total_score,
-                    "anomaly_types": [a.get("anomaly_type") for a in anomalies_list],
-                    "computed_value": Decimal(str(total_score)),
-                    "threshold_value": Decimal("3"),
-                    "description": (
-                        f"MULTI-FACTOR INVESTIGATION REQUIRED: "
-                        f"Member shows {len(anomalies_list)} different anomaly patterns "
-                        f"(risk score: {total_score}/10). "
-                        f"Anomalies: {', '.join(set(a.get('anomaly_type', 'unknown') for a in anomalies_list))}. "
-                        f"Pattern suggests systematic financial misconduct. "
-                        f"Recommend immediate ethics investigation."
-                    )
-                })
+                anomalies.append(
+                    {
+                        "member_id": member_id,
+                        "member_name": member_name,
+                        "anomaly_type": "multi_factor_risk",
+                        "severity": overall_severity,
+                        "title": (
+                            f"Multi-factor risk: {len(anomalies_list)} different anomaly types"
+                        ),
+                        "anomaly_count": len(anomalies_list),
+                        "risk_score": total_score,
+                        "anomaly_types": [a.get("anomaly_type") for a in anomalies_list],
+                        "computed_value": Decimal(str(total_score)),
+                        "threshold_value": Decimal("3"),
+                        "description": (
+                            f"MULTI-FACTOR INVESTIGATION REQUIRED: "
+                            f"Member shows {len(anomalies_list)} different anomaly patterns "
+                            f"(risk score: {total_score}/10). "
+                            f"Anomalies: {', '.join(set(a.get('anomaly_type', 'unknown') for a in anomalies_list))}. "
+                            f"Pattern suggests systematic financial misconduct. "
+                            f"Recommend immediate ethics investigation."
+                        ),
+                    }
+                )
 
         return anomalies
 
 
 def run_extended_anomaly_detection(
     db: Session,
-    previous_results: Optional[Dict] = None,
+    previous_results: Dict | None = None,
     persist: bool = True,
 ) -> Dict:
     """Run all extended anomaly detection types.
@@ -482,9 +508,9 @@ def run_extended_anomaly_detection(
 
     detector = ExtendedAnomalyDetector()
 
-    logger.info("\n" + "="*70)
+    logger.info("\n" + "=" * 70)
     logger.info("EXTENDED ANOMALY DETECTION")
-    logger.info("="*70 + "\n")
+    logger.info("=" * 70 + "\n")
 
     logger.info("1. Detecting trade timing anomalies...")
     timing_anomalies = detector.detect_trade_timing_anomalies(db)
@@ -503,11 +529,13 @@ def run_extended_anomaly_detection(
         "asset_anomalies": [],
         "stock_anomalies": [],
     }
-    combined_results.update({
-        "timing_anomalies": timing_anomalies,
-        "conflict_anomalies": conflict_anomalies,
-        "loss_avoidance_anomalies": loss_anomalies,
-    })
+    combined_results.update(
+        {
+            "timing_anomalies": timing_anomalies,
+            "conflict_anomalies": conflict_anomalies,
+            "loss_avoidance_anomalies": loss_anomalies,
+        }
+    )
 
     logger.info("4. Detecting multi-factor risk combinations...")
     combination_anomalies = detector.detect_red_flag_combinations(db, combined_results)
@@ -527,15 +555,15 @@ def run_extended_anomaly_detection(
         + len(loss_anomalies)
         + len(combination_anomalies)
     )
-    logger.info("="*70)
+    logger.info("=" * 70)
     logger.info("SUMMARY")
-    logger.info("="*70)
+    logger.info("=" * 70)
     logger.info(f"Extended anomalies detected: {total}")
     logger.info(f"  • Trade Timing: {len(timing_anomalies)}")
     logger.info(f"  • Committee Conflicts: {len(conflict_anomalies)}")
     logger.info(f"  • Loss Avoidance: {len(loss_anomalies)}")
     logger.info(f"  • Multi-Factor Risk: {len(combination_anomalies)}")
-    logger.info("="*70 + "\n")
+    logger.info("=" * 70 + "\n")
 
     return {
         "timing_anomalies": timing_anomalies,
@@ -549,8 +577,7 @@ def run_extended_anomaly_detection(
 
 if __name__ == "__main__":
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     from src.db.database import SessionLocal
@@ -558,4 +585,3 @@ if __name__ == "__main__":
     db = SessionLocal()
     results = run_extended_anomaly_detection(db)
     db.close()
-

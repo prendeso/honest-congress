@@ -1,11 +1,18 @@
 """Tests for database models."""
-import pytest
+
 from datetime import datetime
 from decimal import Decimal
 
 from src.db.models import (
-    Member, Disclosure, Asset, Transaction, Liability, Anomaly,
-    Chamber, Party, TransactionType, AssetType
+    Anomaly,
+    Asset,
+    AssetType,
+    Chamber,
+    Disclosure,
+    Member,
+    Party,
+    Transaction,
+    TransactionType,
 )
 
 
@@ -197,4 +204,3 @@ class TestAnomaly:
         assert anomaly.id is not None
         assert anomaly.severity == "high"
         assert anomaly.anomaly_type == "excessive_wealth_growth"
-

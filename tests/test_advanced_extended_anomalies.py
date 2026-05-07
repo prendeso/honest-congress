@@ -7,11 +7,17 @@ t.amount (doesn't exist; the real attributes are amount_min/amount_max).
 The detectors were also never invoked anywhere and never persisted their
 results to the database.
 """
+
 from datetime import datetime
 from decimal import Decimal
 
-import pytest
-
+from src.analysis import (
+    AdvancedAnomalyDetector,
+    ExtendedAnomalyDetector,
+    persist_anomalies,
+    run_advanced_anomaly_detection,
+    transaction_amount,
+)
 from src.db.models import (
     Anomaly,
     Asset,
@@ -23,17 +29,9 @@ from src.db.models import (
     Transaction,
     TransactionType,
 )
-from src.analysis import (
-    AdvancedAnomalyDetector,
-    ExtendedAnomalyDetector,
-    persist_anomalies,
-    run_advanced_anomaly_detection,
-    run_extended_anomaly_detection,
-    transaction_amount,
-)
-
 
 # ---------------- helpers ----------------
+
 
 def _make_member(db, bioguide="A000001", first="Test", last="Member") -> Member:
     member = Member(
@@ -106,6 +104,7 @@ def _make_asset(db, disclosure, description, value_min, value_max) -> Asset:
 
 # ---------------- transaction_amount helper ----------------
 
+
 class TestTransactionAmountHelper:
     def test_midpoint_when_both_set(self, db_session):
         member = _make_member(db_session)
@@ -130,6 +129,7 @@ class TestTransactionAmountHelper:
 
 # ---------------- advanced detector ----------------
 
+
 class TestStockOutperformanceDetector:
     """Was completely broken: filtered on Transaction.member_id (doesn't
     exist) and accessed t.type / t.amount (don't exist)."""
@@ -139,10 +139,12 @@ class TestStockOutperformanceDetector:
         d = _make_disclosure(db_session, member, 2024, "OUT1", is_ptr=True)
 
         # Buy 10k, later sell for 100k (10x return = far above 10% benchmark)
-        _make_txn(db_session, d, TransactionType.PURCHASE, "AAPL",
-                  9000, 11000, when=datetime(2024, 1, 5))
-        _make_txn(db_session, d, TransactionType.SALE, "AAPL",
-                  90000, 110000, when=datetime(2024, 11, 5))
+        _make_txn(
+            db_session, d, TransactionType.PURCHASE, "AAPL", 9000, 11000, when=datetime(2024, 1, 5)
+        )
+        _make_txn(
+            db_session, d, TransactionType.SALE, "AAPL", 90000, 110000, when=datetime(2024, 11, 5)
+        )
 
         detector = AdvancedAnomalyDetector()
         anomalies = detector.detect_stock_outperformance_anomalies(db_session)
@@ -196,6 +198,7 @@ class TestWealthVsSalary:
 
 # ---------------- extended detector ----------------
 
+
 class TestTradeTiming:
     def test_consecutive_same_direction_trades_flagged(self, db_session):
         member = _make_member(db_session, bioguide="C000001", last="Cluster")
@@ -203,8 +206,13 @@ class TestTradeTiming:
         # 6 buys in a row (>= 5 threshold)
         for i in range(6):
             _make_txn(
-                db_session, d, TransactionType.PURCHASE, f"TKR{i}",
-                1000, 5000, when=datetime(2024, 3, i + 1),
+                db_session,
+                d,
+                TransactionType.PURCHASE,
+                f"TKR{i}",
+                1000,
+                5000,
+                when=datetime(2024, 3, i + 1),
             )
 
         detector = ExtendedAnomalyDetector()
@@ -218,13 +226,23 @@ class TestTradeTiming:
         # 5 buys early in the year, 5 sells later — every buy precedes every sell
         for i in range(5):
             _make_txn(
-                db_session, d, TransactionType.PURCHASE, f"BUY{i}",
-                1000, 5000, when=datetime(2024, 1, i + 1),
+                db_session,
+                d,
+                TransactionType.PURCHASE,
+                f"BUY{i}",
+                1000,
+                5000,
+                when=datetime(2024, 1, i + 1),
             )
         for i in range(5):
             _make_txn(
-                db_session, d, TransactionType.SALE, f"SELL{i}",
-                10000, 50000, when=datetime(2024, 11, i + 1),
+                db_session,
+                d,
+                TransactionType.SALE,
+                f"SELL{i}",
+                10000,
+                50000,
+                when=datetime(2024, 11, i + 1),
             )
 
         detector = ExtendedAnomalyDetector()
@@ -240,13 +258,32 @@ class TestTradeTiming:
         # Many small trades and two giant outliers
         for i in range(10):
             _make_txn(
-                db_session, d, TransactionType.PURCHASE, f"SM{i}",
-                1000, 2000, when=datetime(2024, 2, i + 1),
+                db_session,
+                d,
+                TransactionType.PURCHASE,
+                f"SM{i}",
+                1000,
+                2000,
+                when=datetime(2024, 2, i + 1),
             )
-        _make_txn(db_session, d, TransactionType.PURCHASE, "BIG1",
-                  500000, 1000000, when=datetime(2024, 5, 1))
-        _make_txn(db_session, d, TransactionType.PURCHASE, "BIG2",
-                  500000, 1000000, when=datetime(2024, 6, 1))
+        _make_txn(
+            db_session,
+            d,
+            TransactionType.PURCHASE,
+            "BIG1",
+            500000,
+            1000000,
+            when=datetime(2024, 5, 1),
+        )
+        _make_txn(
+            db_session,
+            d,
+            TransactionType.PURCHASE,
+            "BIG2",
+            500000,
+            1000000,
+            when=datetime(2024, 6, 1),
+        )
 
         detector = ExtendedAnomalyDetector()
         anomalies = detector.detect_trade_timing_anomalies(db_session)
@@ -278,13 +315,23 @@ class TestLossAvoidance:
         # 5 buys then 5 sells of same ticker — every sell follows every buy
         for i in range(5):
             _make_txn(
-                db_session, d, TransactionType.PURCHASE, "AAPL",
-                1000, 5000, when=datetime(2024, 1, i + 1),
+                db_session,
+                d,
+                TransactionType.PURCHASE,
+                "AAPL",
+                1000,
+                5000,
+                when=datetime(2024, 1, i + 1),
             )
         for i in range(5):
             _make_txn(
-                db_session, d, TransactionType.SALE, "AAPL",
-                1000, 5000, when=datetime(2024, 11, i + 1),
+                db_session,
+                d,
+                TransactionType.SALE,
+                "AAPL",
+                1000,
+                5000,
+                when=datetime(2024, 11, i + 1),
             )
 
         detector = ExtendedAnomalyDetector()
@@ -293,6 +340,7 @@ class TestLossAvoidance:
 
 
 # ---------------- persistence ----------------
+
 
 class TestPersistence:
     def test_persist_writes_anomaly_rows(self, db_session):

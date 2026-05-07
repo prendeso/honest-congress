@@ -4,10 +4,12 @@ Replaces the deprecated ProPublica Congress API with:
 1. unitedstates.io GitHub - Community-maintained GitHub project (primary, no API key needed)
 2. Congress.gov API - Official API (backup, requires free API key)
 """
-import requests
+
 import logging
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Dict, List
+
+import requests
 
 from src.config import get_settings
 
@@ -32,19 +34,21 @@ class CongressGovClient:
     Get a free Congress.gov API key at: https://api.congress.gov/sign-up/
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         settings = get_settings()
         self.api_key = api_key or settings.congress_gov_api_key
 
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "HonestCongress/1.0 (Congressional Disclosure Analyzer)",
-            "Accept": "application/json",
-        })
+        self.session.headers.update(
+            {
+                "User-Agent": "HonestCongress/1.0 (Congressional Disclosure Analyzer)",
+                "Accept": "application/json",
+            }
+        )
 
         # Cache for member data
-        self._members_cache: Optional[List[Dict[str, Any]]] = None
-        self._cache_time: Optional[datetime] = None
+        self._members_cache: List[Dict[str, Any]] | None = None
+        self._cache_time: datetime | None = None
         self._cache_ttl = 3600  # 1 hour cache
 
     def get_current_members(self, chamber: str = "both") -> List[Dict[str, Any]]:
@@ -119,7 +123,9 @@ class CongressGovClient:
             chamber_filter = chamber.lower()
             members = [m for m in members if m["chamber"] == chamber_filter]
 
-        logger.info(f"Returning {len(members)} total members (current + historical, chamber={chamber})")
+        logger.info(
+            f"Returning {len(members)} total members (current + historical, chamber={chamber})"
+        )
         return members
 
     def _fetch_historical_from_unitedstates(self) -> List[Dict[str, Any]]:
@@ -150,19 +156,23 @@ class CongressGovClient:
                 term_type = latest_term.get("type", "")
                 chamber = "senate" if term_type == "sen" else "house"
 
-                members.append({
-                    "bioguide_id": ids.get("bioguide", ""),
-                    "first_name": name.get("first", ""),
-                    "last_name": name.get("last", ""),
-                    "full_name": f"{name.get('first', '')} {name.get('last', '')}".strip(),
-                    "chamber": chamber,
-                    "party": self._normalize_party(latest_term.get("party", "")),
-                    "state": latest_term.get("state", ""),
-                    "district": str(latest_term.get("district", "")) if latest_term.get("district") else None,
-                    "in_office": False,  # Historical = retired
-                    "start_date": latest_term.get("start"),
-                    "end_date": latest_term.get("end"),
-                })
+                members.append(
+                    {
+                        "bioguide_id": ids.get("bioguide", ""),
+                        "first_name": name.get("first", ""),
+                        "last_name": name.get("last", ""),
+                        "full_name": f"{name.get('first', '')} {name.get('last', '')}".strip(),
+                        "chamber": chamber,
+                        "party": self._normalize_party(latest_term.get("party", "")),
+                        "state": latest_term.get("state", ""),
+                        "district": str(latest_term.get("district", ""))
+                        if latest_term.get("district")
+                        else None,
+                        "in_office": False,  # Historical = retired
+                        "start_date": latest_term.get("start"),
+                        "end_date": latest_term.get("end"),
+                    }
+                )
 
             logger.info(f"Fetched {len(members)} historical members from unitedstates.io")
             return members
@@ -221,22 +231,26 @@ class CongressGovClient:
                 term_type = current_term.get("type", "")
                 chamber = "senate" if term_type == "sen" else "house"
 
-                members.append({
-                    "bioguide_id": ids.get("bioguide", ""),
-                    "first_name": name.get("first", ""),
-                    "last_name": name.get("last", ""),
-                    "full_name": f"{name.get('first', '')} {name.get('last', '')}".strip(),
-                    "chamber": chamber,
-                    "party": self._normalize_party(current_term.get("party", "")),
-                    "state": current_term.get("state", ""),
-                    "district": str(current_term.get("district", "")) if current_term.get("district") else None,
-                    "in_office": True,
-                    "start_date": current_term.get("start"),
-                    "end_date": current_term.get("end"),
-                    "url": current_term.get("url"),
-                    "office": current_term.get("office"),
-                    "phone": current_term.get("phone"),
-                })
+                members.append(
+                    {
+                        "bioguide_id": ids.get("bioguide", ""),
+                        "first_name": name.get("first", ""),
+                        "last_name": name.get("last", ""),
+                        "full_name": f"{name.get('first', '')} {name.get('last', '')}".strip(),
+                        "chamber": chamber,
+                        "party": self._normalize_party(current_term.get("party", "")),
+                        "state": current_term.get("state", ""),
+                        "district": str(current_term.get("district", ""))
+                        if current_term.get("district")
+                        else None,
+                        "in_office": True,
+                        "start_date": current_term.get("start"),
+                        "end_date": current_term.get("end"),
+                        "url": current_term.get("url"),
+                        "office": current_term.get("office"),
+                        "phone": current_term.get("phone"),
+                    }
+                )
 
             logger.info(f"Fetched {len(members)} members from unitedstates.io GitHub")
             return members
@@ -297,19 +311,21 @@ class CongressGovClient:
                             current_chamber = "house"
                             break
 
-                    members.append({
-                        "bioguide_id": member.get("bioguideId", ""),
-                        "first_name": member.get("firstName", ""),
-                        "last_name": member.get("lastName", ""),
-                        "full_name": member.get("name", ""),
-                        "chamber": current_chamber,
-                        "party": self._normalize_party(member.get("partyName", "")),
-                        "state": member.get("state", ""),
-                        "district": member.get("district"),
-                        "in_office": True,
-                        "start_date": None,
-                        "url": member.get("url"),
-                    })
+                    members.append(
+                        {
+                            "bioguide_id": member.get("bioguideId", ""),
+                            "first_name": member.get("firstName", ""),
+                            "last_name": member.get("lastName", ""),
+                            "full_name": member.get("name", ""),
+                            "chamber": current_chamber,
+                            "party": self._normalize_party(member.get("partyName", "")),
+                            "state": member.get("state", ""),
+                            "district": member.get("district"),
+                            "in_office": True,
+                            "start_date": None,
+                            "url": member.get("url"),
+                        }
+                    )
 
                 # Check if there are more results
                 pagination = data.get("pagination", {})
@@ -326,7 +342,7 @@ class CongressGovClient:
             logger.error(f"Failed to fetch from Congress.gov: {e}")
             return []
 
-    def get_member_by_id(self, bioguide_id: str) -> Optional[Dict[str, Any]]:
+    def get_member_by_id(self, bioguide_id: str) -> Dict[str, Any] | None:
         """
         Get detailed information for a specific member.
 
@@ -365,7 +381,9 @@ class CongressGovClient:
                         "last_name": member.get("lastName", ""),
                         "full_name": member.get("directOrderName", ""),
                         "chamber": "senate" if "senate" in chamber else "house",
-                        "party": self._normalize_party(member.get("partyHistory", [{}])[-1].get("partyName", "")),
+                        "party": self._normalize_party(
+                            member.get("partyHistory", [{}])[-1].get("partyName", "")
+                        ),
                         "state": member.get("state", ""),
                         "district": current_term.get("district"),
                         "in_office": member.get("currentMember", False),
@@ -392,7 +410,8 @@ class CongressGovClient:
 
         query_lower = query.lower()
         matches = [
-            m for m in all_members
+            m
+            for m in all_members
             if query_lower in m.get("first_name", "").lower()
             or query_lower in m.get("last_name", "").lower()
             or query_lower in m.get("full_name", "").lower()
@@ -426,4 +445,3 @@ class CongressGovClient:
 
 # Backwards compatibility alias for code that imports ProPublicaClient
 ProPublicaClient = CongressGovClient
-

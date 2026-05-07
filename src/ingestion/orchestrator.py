@@ -1,23 +1,24 @@
 """Unified ingestion orchestrator."""
+
 import csv
 import logging
 import time
-from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List
 
 import requests
-from sqlalchemy.orm import Session
 from sqlalchemy import or_
+from sqlalchemy.orm import Session
 
+from src.db import Chamber, Disclosure, Member, Party, get_db
+from src.db.models import Asset, AssetType, Liability, Transaction, TransactionType
+from src.ingestion.congress_gov import CongressGovClient
+from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 from src.ingestion.house import HouseIngester
 from src.ingestion.senate import SenateIngester, SenatePTRIngester
-from src.ingestion.congress_gov import CongressGovClient
-from src.db import get_db, Member, Disclosure, Chamber, Party
-from src.db.models import Asset, Transaction, Liability, AssetType, TransactionType
 from src.parsing.pdf_parser import DisclosureParser
 from src.parsing.ptr_parser import PTRParser
-from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ class IngestionOrchestrator:
     and Senate eFD (Senate disclosures) into a unified ingestion pipeline.
     """
 
-    def __init__(self, data_dir: Optional[Path] = None):
+    def __init__(self, data_dir: Path | None = None):
         self.house = HouseIngester()
         self.senate = SenateIngester()
         self.senate_ptr = SenatePTRIngester()
@@ -66,9 +67,7 @@ class IngestionOrchestrator:
         for m in members:
             try:
                 # Check if member exists
-                existing = db.query(Member).filter(
-                    Member.bioguide_id == m["bioguide_id"]
-                ).first()
+                existing = db.query(Member).filter(Member.bioguide_id == m["bioguide_id"]).first()
 
                 if existing:
                     # Update existing member
@@ -120,9 +119,7 @@ class IngestionOrchestrator:
         for m in members:
             try:
                 # Check if member exists
-                existing = db.query(Member).filter(
-                    Member.bioguide_id == m["bioguide_id"]
-                ).first()
+                existing = db.query(Member).filter(Member.bioguide_id == m["bioguide_id"]).first()
 
                 is_current = m.get("in_office", False)
 
@@ -160,14 +157,13 @@ class IngestionOrchestrator:
                 logger.error(f"Error syncing member {m.get('bioguide_id')}: {e}")
 
         db.commit()
-        logger.info(f"Synced {results['total']} members (current: {results['current']}, historical: {results['historical']})")
+        logger.info(
+            f"Synced {results['total']} members (current: {results['current']}, historical: {results['historical']})"
+        )
         return results
 
     def sync_house_disclosures(
-        self,
-        db: Session,
-        year: Optional[int] = None,
-        download_pdfs: bool = False
+        self, db: Session, year: int | None = None, download_pdfs: bool = False
     ) -> int:
         """
         Sync House disclosures from XML index.
@@ -189,12 +185,16 @@ class IngestionOrchestrator:
         for d in disclosures:
             try:
                 # Find matching member
-                member = db.query(Member).filter(
-                    Member.last_name.ilike(d["last_name"]),
-                    Member.first_name.ilike(f"{d['first_name']}%"),
-                    Member.chamber == Chamber.HOUSE,
-                    Member.state == d["state"],
-                ).first()
+                member = (
+                    db.query(Member)
+                    .filter(
+                        Member.last_name.ilike(d["last_name"]),
+                        Member.first_name.ilike(f"{d['first_name']}%"),
+                        Member.chamber == Chamber.HOUSE,
+                        Member.state == d["state"],
+                    )
+                    .first()
+                )
 
                 if not member:
                     logger.debug(
@@ -204,9 +204,9 @@ class IngestionOrchestrator:
                     continue
 
                 # Check if disclosure exists
-                existing = db.query(Disclosure).filter(
-                    Disclosure.document_id == d["document_id"]
-                ).first()
+                existing = (
+                    db.query(Disclosure).filter(Disclosure.document_id == d["document_id"]).first()
+                )
 
                 if existing:
                     continue  # Already have this disclosure
@@ -225,7 +225,9 @@ class IngestionOrchestrator:
 
                 # Optionally download PDF
                 if download_pdfs and d["document_url"]:
-                    pdf_path = self.disclosures_dir / "house" / str(year) / f"{d['document_id']}.pdf"
+                    pdf_path = (
+                        self.disclosures_dir / "house" / str(year) / f"{d['document_id']}.pdf"
+                    )
                     self.house.download_disclosure(d["document_url"], str(pdf_path))
 
                 synced += 1
@@ -238,10 +240,7 @@ class IngestionOrchestrator:
         return synced
 
     def sync_house_ptrs(
-        self,
-        db: Session,
-        year: Optional[int] = None,
-        download_pdfs: bool = False
+        self, db: Session, year: int | None = None, download_pdfs: bool = False
     ) -> int:
         """
         Sync House Periodic Transaction Reports (PTRs) from XML index.
@@ -264,12 +263,16 @@ class IngestionOrchestrator:
         for d in ptrs:
             try:
                 # Find matching member
-                member = db.query(Member).filter(
-                    Member.last_name.ilike(d["last_name"]),
-                    Member.first_name.ilike(f"{d['first_name']}%"),
-                    Member.chamber == Chamber.HOUSE,
-                    Member.state == d["state"],
-                ).first()
+                member = (
+                    db.query(Member)
+                    .filter(
+                        Member.last_name.ilike(d["last_name"]),
+                        Member.first_name.ilike(f"{d['first_name']}%"),
+                        Member.chamber == Chamber.HOUSE,
+                        Member.state == d["state"],
+                    )
+                    .first()
+                )
 
                 if not member:
                     logger.debug(
@@ -279,9 +282,9 @@ class IngestionOrchestrator:
                     continue
 
                 # Check if disclosure exists
-                existing = db.query(Disclosure).filter(
-                    Disclosure.document_id == d["document_id"]
-                ).first()
+                existing = (
+                    db.query(Disclosure).filter(Disclosure.document_id == d["document_id"]).first()
+                )
 
                 if existing:
                     continue  # Already have this PTR
@@ -301,7 +304,13 @@ class IngestionOrchestrator:
 
                 # Optionally download PDF
                 if download_pdfs and d["document_url"]:
-                    pdf_path = self.disclosures_dir / "house" / "ptr" / str(year) / f"{d['document_id']}.pdf"
+                    pdf_path = (
+                        self.disclosures_dir
+                        / "house"
+                        / "ptr"
+                        / str(year)
+                        / f"{d['document_id']}.pdf"
+                    )
                     self.house.download_disclosure(d["document_url"], str(pdf_path))
 
                 synced += 1
@@ -314,10 +323,7 @@ class IngestionOrchestrator:
         return synced
 
     def sync_senate_disclosures(
-        self,
-        db: Session,
-        year: Optional[int] = None,
-        download_files: bool = False
+        self, db: Session, year: int | None = None, download_files: bool = False
     ) -> int:
         """
         Sync Senate disclosures.
@@ -339,9 +345,9 @@ class IngestionOrchestrator:
         for d in disclosures:
             try:
                 # Check if disclosure exists
-                existing = db.query(Disclosure).filter(
-                    Disclosure.document_id == d["document_id"]
-                ).first()
+                existing = (
+                    db.query(Disclosure).filter(Disclosure.document_id == d["document_id"]).first()
+                )
 
                 if existing:
                     continue
@@ -352,8 +358,9 @@ class IngestionOrchestrator:
                 # the disclosure page to get member name
 
                 # Create disclosure without member link for now
-                # Will be linked during parsing
-                disclosure = Disclosure(
+                # Will be linked during parsing.
+                # NOTE: not currently persisted (db.add commented out below).
+                _disclosure = Disclosure(
                     member_id=None,  # Will be linked later
                     filing_year=d["filing_year"],
                     filing_type=d.get("filing_type", "Unknown"),
@@ -376,11 +383,7 @@ class IngestionOrchestrator:
         logger.info(f"Synced {synced} Senate disclosures for {year}")
         return synced
 
-    def download_disclosure_pdf(
-        self,
-        disclosure: Disclosure,
-        force: bool = False
-    ) -> Optional[Path]:
+    def download_disclosure_pdf(self, disclosure: Disclosure, force: bool = False) -> Path | None:
         """
         Download a disclosure PDF file.
 
@@ -458,13 +461,16 @@ class IngestionOrchestrator:
         self._record_failed_download(disclosure, reason)
         return None
 
-    def _build_alt_pdf_url(self, disclosure: Disclosure) -> Optional[str]:
+    def _build_alt_pdf_url(self, disclosure: Disclosure) -> str | None:
         """Try alternative PDF URL patterns if the primary URL 404s."""
         if not disclosure.document_url:
             return None
 
         # Example: /financial-pdfs/2024/123.pdf -> /financial-pdfs/123.pdf
-        if "/financial-pdfs/" in disclosure.document_url and "/ptr-pdfs/" not in disclosure.document_url:
+        if (
+            "/financial-pdfs/" in disclosure.document_url
+            and "/ptr-pdfs/" not in disclosure.document_url
+        ):
             parts = disclosure.document_url.split("/financial-pdfs/")
             if len(parts) == 2:
                 tail = parts[1]
@@ -482,26 +488,25 @@ class IngestionOrchestrator:
         with open(failed_path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             if is_new:
-                writer.writerow([
-                    "timestamp", "document_id", "filing_year", "is_ptr", "document_url", "reason"
-                ])
-            writer.writerow([
-                datetime.utcnow().isoformat(),
-                disclosure.document_id,
-                disclosure.filing_year,
-                disclosure.is_ptr,
-                disclosure.document_url,
-                reason,
-            ])
+                writer.writerow(
+                    ["timestamp", "document_id", "filing_year", "is_ptr", "document_url", "reason"]
+                )
+            writer.writerow(
+                [
+                    datetime.utcnow().isoformat(),
+                    disclosure.document_id,
+                    disclosure.filing_year,
+                    disclosure.is_ptr,
+                    disclosure.document_url,
+                    reason,
+                ]
+            )
 
         logger.error(f"Failed to download {disclosure.document_url}: {reason}")
         return reason
 
     def parse_disclosure(
-        self,
-        db: Session,
-        disclosure: Disclosure,
-        pdf_path: Optional[Path] = None
+        self, db: Session, disclosure: Disclosure, pdf_path: Path | None = None
     ) -> bool:
         """
         Parse a disclosure PDF and store extracted data.
@@ -549,12 +554,7 @@ class IngestionOrchestrator:
             db.commit()
             return False
 
-    def _store_ptr_data(
-        self,
-        db: Session,
-        disclosure: Disclosure,
-        parsed: Dict[str, Any]
-    ) -> None:
+    def _store_ptr_data(self, db: Session, disclosure: Disclosure, parsed: Dict[str, Any]) -> None:
         """Store parsed PTR data as Transaction records."""
         for txn_data in parsed.get("transactions", []):
             # Map transaction type
@@ -583,12 +583,7 @@ class IngestionOrchestrator:
             )
             db.add(transaction)
 
-    def _store_fd_data(
-        self,
-        db: Session,
-        disclosure: Disclosure,
-        parsed: Dict[str, Any]
-    ) -> None:
+    def _store_fd_data(self, db: Session, disclosure: Disclosure, parsed: Dict[str, Any]) -> None:
         """Store parsed annual disclosure data."""
         # Store assets
         for asset_data in parsed.get("assets", []):
@@ -658,13 +653,13 @@ class IngestionOrchestrator:
     def parse_disclosures(
         self,
         db: Session,
-        limit: Optional[int] = None,
-        member_id: Optional[int] = None,
-        year: Optional[int] = None,
+        limit: int | None = None,
+        member_id: int | None = None,
+        year: int | None = None,
         ptr_only: bool = False,
         reparse: bool = False,
         failed_only: bool = False,
-        delay: float = 1.0
+        delay: float = 1.0,
     ) -> Dict[str, int]:
         """
         Parse multiple unparsed disclosures.
@@ -688,7 +683,7 @@ class IngestionOrchestrator:
             query = query.filter(
                 or_(
                     Disclosure.parse_error.ilike("%Failed to download%"),
-                    Disclosure.parse_error.ilike("%404%")
+                    Disclosure.parse_error.ilike("%404%"),
                 )
             )
         elif not reparse:
@@ -732,9 +727,9 @@ class IngestionOrchestrator:
 
     def run_full_sync(
         self,
-        years: Optional[List[int]] = None,
+        years: List[int] | None = None,
         download_files: bool = False,
-        include_ptrs: bool = True
+        include_ptrs: bool = True,
     ) -> Dict[str, int]:
         """
         Run a full synchronization of all data sources.
@@ -768,9 +763,7 @@ class IngestionOrchestrator:
 
                 # Sync PTRs (stock trades)
                 if include_ptrs:
-                    summary["house_ptrs"] += self.sync_house_ptrs(
-                        db, year, download_files
-                    )
+                    summary["house_ptrs"] += self.sync_house_ptrs(db, year, download_files)
 
                 summary["senate_disclosures"] += self.sync_senate_disclosures(
                     db, year, download_files
@@ -787,9 +780,7 @@ class IngestionOrchestrator:
             Number of records fixed
         """
         now = datetime.now()
-        future_disclosures = db.query(Disclosure).filter(
-            Disclosure.filing_date > now
-        ).all()
+        future_disclosures = db.query(Disclosure).filter(Disclosure.filing_date > now).all()
 
         fixed = 0
         for disclosure in future_disclosures:
@@ -805,11 +796,7 @@ class IngestionOrchestrator:
         return fixed
 
     def download_all_pdfs(
-        self,
-        db: Session,
-        limit: Optional[int] = None,
-        force: bool = False,
-        delay: float = 0.5
+        self, db: Session, limit: int | None = None, force: bool = False, delay: float = 0.5
     ) -> Dict[str, int]:
         """
         Download PDFs for all disclosures that have URLs.
@@ -878,9 +865,7 @@ class IngestionOrchestrator:
 
 
 def run_ingestion(
-    years: Optional[List[int]] = None,
-    download_files: bool = False,
-    include_ptrs: bool = True
+    years: List[int] | None = None, download_files: bool = False, include_ptrs: bool = True
 ) -> Dict[str, int]:
     """
     Convenience function to run ingestion.

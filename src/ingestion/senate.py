@@ -1,11 +1,13 @@
 """Senate financial disclosure ingestion."""
-import requests
+
 import logging
+import re
 import time
-from typing import List, Dict, Any, Optional
 from datetime import datetime
 from pathlib import Path
-import re
+from typing import Any, Dict, List
+
+import requests
 
 from src.ingestion.base import BaseIngester
 
@@ -23,13 +25,15 @@ class SenateIngester(BaseIngester):
 
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "application/json, text/javascript, */*; q=0.01",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-        })
-        self._csrf_token: Optional[str] = None
+        self.session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Accept": "application/json, text/javascript, */*; q=0.01",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+            }
+        )
+        self._csrf_token: str | None = None
         self._session_initialized = False
 
     def _init_session(self) -> bool:
@@ -40,18 +44,13 @@ class SenateIngester(BaseIngester):
         try:
             # Visit the landing page to get session cookie
             logger.info("Initializing Senate eFD session...")
-            response = self.session.get(
-                f"{SENATE_EFD_BASE_URL}/search/home/",
-                timeout=30
-            )
+            response = self.session.get(f"{SENATE_EFD_BASE_URL}/search/home/", timeout=30)
             response.raise_for_status()
             time.sleep(1)  # Rate limiting
 
             # Accept the agreement (required)
             agree_response = self.session.get(
-                f"{SENATE_EFD_BASE_URL}/search/home/",
-                params={"accept": "true"},
-                timeout=30
+                f"{SENATE_EFD_BASE_URL}/search/home/", params={"accept": "true"}, timeout=30
             )
             agree_response.raise_for_status()
             time.sleep(1)
@@ -71,7 +70,7 @@ class SenateIngester(BaseIngester):
             logger.error(f"Failed to initialize Senate session: {e}")
             return False
 
-    def _get_csrf_token(self) -> Optional[str]:
+    def _get_csrf_token(self) -> str | None:
         """Get CSRF token required for Senate eFD searches."""
         if not self._session_initialized:
             self._init_session()
@@ -89,7 +88,7 @@ class SenateIngester(BaseIngester):
         self,
         filing_year: int,
         filer_type: str = "1",  # 1=Senator, 2=Candidate
-        report_type: str = "",   # Empty for all, specific codes for types
+        report_type: str = "",  # Empty for all, specific codes for types
         start: int = 0,
         length: int = 100,
     ) -> List[Dict[str, Any]]:
@@ -133,10 +132,7 @@ class SenateIngester(BaseIngester):
             for attempt in range(3):
                 try:
                     response = self.session.post(
-                        SENATE_DATA_URL,
-                        data=data,
-                        headers=headers,
-                        timeout=60
+                        SENATE_DATA_URL, data=data, headers=headers, timeout=60
                     )
 
                     if response.status_code == 200:
@@ -144,7 +140,7 @@ class SenateIngester(BaseIngester):
                             json_data = response.json()
                             return self._parse_ajax_results(json_data, filing_year)
                         except ValueError:
-                            logger.warning(f"Non-JSON response from Senate AJAX")
+                            logger.warning("Non-JSON response from Senate AJAX")
                             return []
                     elif response.status_code == 503:
                         logger.warning(f"Senate eFD returned 503 (attempt {attempt + 1}/3)")
@@ -167,9 +163,7 @@ class SenateIngester(BaseIngester):
             return []
 
     def _parse_ajax_results(
-        self,
-        json_data: Dict[str, Any],
-        filing_year: int
+        self, json_data: Dict[str, Any], filing_year: int
     ) -> List[Dict[str, Any]]:
         """Parse the AJAX JSON response from Senate eFD."""
         disclosures = []
@@ -188,31 +182,33 @@ class SenateIngester(BaseIngester):
             try:
                 # Extract document ID from the link (last element usually contains HTML link)
                 link_html = str(row[-1]) if row else ""
-                doc_id_match = re.search(r'/search/view/paper/(\d+)/', link_html)
+                doc_id_match = re.search(r"/search/view/paper/(\d+)/", link_html)
 
                 if not doc_id_match:
                     continue
 
                 doc_id = doc_id_match.group(1)
 
-                disclosures.append({
-                    "document_id": doc_id,
-                    "document_url": f"{SENATE_REPORT_URL}/{doc_id}/",
-                    "filing_year": filing_year,
-                    "chamber": "senate",
-                    "first_name": str(row[0]).strip() if len(row) > 0 else "",
-                    "last_name": str(row[1]).strip() if len(row) > 1 else "",
-                    "filer_type": str(row[2]).strip() if len(row) > 2 else "",
-                    "filing_type": str(row[3]).strip() if len(row) > 3 else "",
-                    "filing_date": self._parse_date(str(row[4])) if len(row) > 4 else None,
-                })
+                disclosures.append(
+                    {
+                        "document_id": doc_id,
+                        "document_url": f"{SENATE_REPORT_URL}/{doc_id}/",
+                        "filing_year": filing_year,
+                        "chamber": "senate",
+                        "first_name": str(row[0]).strip() if len(row) > 0 else "",
+                        "last_name": str(row[1]).strip() if len(row) > 1 else "",
+                        "filer_type": str(row[2]).strip() if len(row) > 2 else "",
+                        "filing_type": str(row[3]).strip() if len(row) > 3 else "",
+                        "filing_date": self._parse_date(str(row[4])) if len(row) > 4 else None,
+                    }
+                )
             except Exception as e:
                 logger.debug(f"Error parsing row: {e}")
                 continue
 
         return disclosures
 
-    def _parse_date(self, date_str: str) -> Optional[datetime]:
+    def _parse_date(self, date_str: str) -> datetime | None:
         """Parse date string from Senate eFD."""
         if not date_str:
             return None
@@ -229,7 +225,7 @@ class SenateIngester(BaseIngester):
         self,
         first_name: str = "",
         last_name: str = "",
-        filing_year: Optional[int] = None,
+        filing_year: int | None = None,
         report_type: str = "",
     ) -> List[Dict[str, Any]]:
         """
@@ -257,9 +253,7 @@ class SenateIngester(BaseIngester):
         return self.search_disclosures(filing_year=filing_year)
 
     def _parse_search_results(
-        self,
-        html: str,
-        filing_year: Optional[int] = None
+        self, html: str, filing_year: int | None = None
     ) -> List[Dict[str, Any]]:
         """
         Parse HTML search results from Senate eFD site.
@@ -272,26 +266,26 @@ class SenateIngester(BaseIngester):
         # Simple regex-based parsing (would use BeautifulSoup in production)
         # Pattern to find disclosure links in the HTML
         # Format: /search/view/paper/XXXXX/
-        pattern = r'/search/view/paper/(\d+)/'
+        pattern = r"/search/view/paper/(\d+)/"
         doc_ids = re.findall(pattern, html)
 
-        # Pattern to extract table row data (simplified)
-        # In production, use BeautifulSoup to properly parse the table
-        row_pattern = r'<tr[^>]*>.*?</tr>'
+        # In production, use BeautifulSoup to properly parse the table.
 
         for doc_id in set(doc_ids):
-            disclosures.append({
-                "document_id": doc_id,
-                "document_url": f"{SENATE_REPORT_URL}/{doc_id}/",
-                "filing_year": filing_year or datetime.now().year,
-                "chamber": "senate",
-                # Other fields would be populated from actual HTML parsing
-                "first_name": "",
-                "last_name": "",
-                "state": "",
-                "filing_type": "",
-                "filing_date": None,
-            })
+            disclosures.append(
+                {
+                    "document_id": doc_id,
+                    "document_url": f"{SENATE_REPORT_URL}/{doc_id}/",
+                    "filing_year": filing_year or datetime.now().year,
+                    "chamber": "senate",
+                    # Other fields would be populated from actual HTML parsing
+                    "first_name": "",
+                    "last_name": "",
+                    "state": "",
+                    "filing_type": "",
+                    "filing_date": None,
+                }
+            )
 
         return disclosures
 
@@ -336,7 +330,7 @@ class SenateIngester(BaseIngester):
         except requests.RequestException as e:
             logger.error(f"Failed to download {disclosure_url}: {e}")
             return False
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to save file {output_path}: {e}")
             return False
 
@@ -351,7 +345,7 @@ class SenatePTRIngester(SenateIngester):
         self,
         first_name: str = "",
         last_name: str = "",
-        filing_year: Optional[int] = None,
+        filing_year: int | None = None,
     ) -> List[Dict[str, Any]]:
         """Search specifically for PTR reports."""
         return self.search_disclosures(
@@ -360,4 +354,3 @@ class SenatePTRIngester(SenateIngester):
             filing_year=filing_year,
             report_type="11",  # PTR type code
         )
-

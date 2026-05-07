@@ -4,4 +4,3 @@ __all__ = [
     "DisclosureParser",
     "parse_disclosure",
 ]
-

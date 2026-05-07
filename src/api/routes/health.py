@@ -1,7 +1,8 @@
 """Health check endpoints."""
+
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
 from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from src.db import get_db_session
 
@@ -22,4 +23,3 @@ async def database_health(db: Session = Depends(get_db_session)):
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
-

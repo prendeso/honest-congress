@@ -1,13 +1,9 @@
 """Analysis package: anomaly detectors and shared helpers."""
-from typing import Any, Dict, List, Optional
+
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from src.db.models import Anomaly, Transaction
-
-from src.analysis.wealth_analyzer import WealthAnalyzer, analyze_wealth
-from src.analysis.trade_analyzer import TradeAnalyzer, analyze_trades
-from src.analysis.performance_analyzer import PerformanceAnalyzer, analyze_performance
 from src.analysis.advanced_anomaly_detector import (
     AdvancedAnomalyDetector,
     run_advanced_anomaly_detection,
@@ -16,6 +12,10 @@ from src.analysis.extended_anomaly_detector import (
     ExtendedAnomalyDetector,
     run_extended_anomaly_detection,
 )
+from src.analysis.performance_analyzer import PerformanceAnalyzer, analyze_performance
+from src.analysis.trade_analyzer import TradeAnalyzer, analyze_trades
+from src.analysis.wealth_analyzer import WealthAnalyzer, analyze_wealth
+from src.db.models import Anomaly, Transaction
 
 
 def transaction_amount(txn: Transaction) -> float:
@@ -107,25 +107,31 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
         severity = _normalize_severity(a.get("severity"))
         description = a.get("description") or title
 
-        existing = db.query(Anomaly).filter(
-            Anomaly.member_id == member_id,
-            Anomaly.anomaly_type == anomaly_type,
-            Anomaly.title == title,
-        ).first()
+        existing = (
+            db.query(Anomaly)
+            .filter(
+                Anomaly.member_id == member_id,
+                Anomaly.anomaly_type == anomaly_type,
+                Anomaly.title == title,
+            )
+            .first()
+        )
         if existing:
             continue
 
-        db.add(Anomaly(
-            member_id=member_id,
-            anomaly_type=anomaly_type,
-            severity=severity,
-            title=title[:200],
-            description=description,
-            disclosure_id=a.get("disclosure_id"),
-            transaction_id=a.get("transaction_id"),
-            computed_value=a.get("computed_value"),
-            threshold_value=a.get("threshold_value"),
-        ))
+        db.add(
+            Anomaly(
+                member_id=member_id,
+                anomaly_type=anomaly_type,
+                severity=severity,
+                title=title[:200],
+                description=description,
+                disclosure_id=a.get("disclosure_id"),
+                transaction_id=a.get("transaction_id"),
+                computed_value=a.get("computed_value"),
+                threshold_value=a.get("threshold_value"),
+            )
+        )
         inserted += 1
 
     if inserted:

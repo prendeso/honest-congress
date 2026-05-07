@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 # Ensure ingestion never stores future dates; normalize tz-aware input.
 
@@ -10,10 +9,10 @@ def _normalize_datetime(value: datetime) -> datetime:
     """Convert tz-aware datetimes to naive UTC for consistent comparisons."""
     if value.tzinfo is None:
         return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
-def coerce_non_future(value: Optional[datetime], now: Optional[datetime] = None) -> Optional[datetime]:
+def coerce_non_future(value: datetime | None, now: datetime | None = None) -> datetime | None:
     """Return value if not in the future; otherwise None."""
     if value is None:
         return None
@@ -24,9 +23,9 @@ def coerce_non_future(value: Optional[datetime], now: Optional[datetime] = None)
 
 
 def choose_filing_date(
-    filing_date: Optional[datetime],
-    filing_year: Optional[int],
-    now: Optional[datetime] = None,
+    filing_date: datetime | None,
+    filing_year: int | None,
+    now: datetime | None = None,
 ) -> datetime:
     """Choose a safe filing date, preferring real data but never future dates."""
     now = now or datetime.utcnow()
@@ -43,9 +42,9 @@ def choose_filing_date(
 
 
 def choose_transaction_date(
-    transaction_date: Optional[datetime],
-    fallback_date: Optional[datetime],
-    now: Optional[datetime] = None,
+    transaction_date: datetime | None,
+    fallback_date: datetime | None,
+    now: datetime | None = None,
 ) -> datetime:
     """Choose a safe transaction date from parsed or fallback dates."""
     now = now or datetime.utcnow()

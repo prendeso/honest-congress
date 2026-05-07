@@ -1,4 +1,5 @@
 """Enhanced web dashboard with detailed anomaly display."""
+
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
@@ -515,8 +516,8 @@ DASHBOARD_HTML = """
 </html>
 """
 
+
 @router.get("/", response_class=HTMLResponse)
 async def dashboard():
     """Serve the enhanced dashboard."""
     return HTMLResponse(content=DASHBOARD_HTML)
-

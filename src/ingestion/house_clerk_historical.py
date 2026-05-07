@@ -2,17 +2,20 @@
 Ingest House Clerk FD data from all available years (2004-2024).
 Downloads XML index files and parses financial disclosures.
 """
-import requests
+
 import logging
 import xml.etree.ElementTree as ET
-from pathlib import Path
-from typing import List, Dict, Optional
 from datetime import datetime
+from typing import Dict, List
+
+import requests
+
 from src.db.database import SessionLocal
-from src.db.models import Disclosure, Member, Chamber
+from src.db.models import Chamber, Disclosure, Member
 from src.ingestion.date_utils import choose_filing_date
 
 logger = logging.getLogger(__name__)
+
 
 class HouseClerkHistorical:
     """Download and parse historical House FD disclosures from House Clerk."""
@@ -21,9 +24,7 @@ class HouseClerkHistorical:
 
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "HonestCongress/1.0 Congressional Analyzer"
-        })
+        self.session.headers.update({"User-Agent": "HonestCongress/1.0 Congressional Analyzer"})
 
     def get_available_years(self) -> List[int]:
         """Find which years have FD XML files available."""
@@ -45,7 +46,7 @@ class HouseClerkHistorical:
         logger.info(f"Found {len(available)} available years: {available}")
         return available
 
-    def download_xml(self, year: int) -> Optional[bytes]:
+    def download_xml(self, year: int) -> bytes | None:
         """Download XML index file for a specific year."""
         url = f"{self.BASE_URL}/{year}FD.xml"
 
@@ -79,15 +80,17 @@ class HouseClerkHistorical:
                 if not first_name or not last_name:
                     continue
 
-                records.append({
-                    "first_name": first_name.strip(),
-                    "last_name": last_name.strip(),
-                    "suffix": suffix.strip() if suffix else "",
-                    "state_dst": state_dst.strip(),
-                    "year": int(year) if year else None,
-                    "doc_id": doc_id.strip(),
-                    "name": f"{last_name}, {first_name}"
-                })
+                records.append(
+                    {
+                        "first_name": first_name.strip(),
+                        "last_name": last_name.strip(),
+                        "suffix": suffix.strip() if suffix else "",
+                        "state_dst": state_dst.strip(),
+                        "year": int(year) if year else None,
+                        "doc_id": doc_id.strip(),
+                        "name": f"{last_name}, {first_name}",
+                    }
+                )
 
             logger.info(f"  Parsed {len(records)} disclosure records")
             return records
@@ -97,9 +100,9 @@ class HouseClerkHistorical:
 
     def ingest_year(self, year: int, db_session) -> Dict:
         """Download and ingest all FD for a specific year."""
-        logger.info(f"\n{'='*70}")
+        logger.info(f"\n{'=' * 70}")
         logger.info(f"Ingesting House FD for {year}")
-        logger.info(f"{'='*70}")
+        logger.info(f"{'=' * 70}")
 
         # Download XML
         xml_content = self.download_xml(year)
@@ -119,11 +122,15 @@ class HouseClerkHistorical:
         for record in records:
             try:
                 # Find member by name (House Clerk doesn't provide bioguide ID in XML)
-                member = db_session.query(Member).filter(
-                    (Member.last_name == record["last_name"]) &
-                    (Member.first_name == record["first_name"]) &
-                    (Member.chamber == Chamber.HOUSE)
-                ).first()
+                member = (
+                    db_session.query(Member)
+                    .filter(
+                        (Member.last_name == record["last_name"])
+                        & (Member.first_name == record["first_name"])
+                        & (Member.chamber == Chamber.HOUSE)
+                    )
+                    .first()
+                )
 
                 if not member:
                     logger.debug(f"  Skipped: Member not found ({record['name']})")
@@ -131,9 +138,11 @@ class HouseClerkHistorical:
                     continue
 
                 # Check for duplicate
-                existing = db_session.query(Disclosure).filter(
-                    Disclosure.document_id == record["doc_id"]
-                ).first()
+                existing = (
+                    db_session.query(Disclosure)
+                    .filter(Disclosure.document_id == record["doc_id"])
+                    .first()
+                )
 
                 if existing:
                     logger.debug(f"  Duplicate: {record['name']} {year}")
@@ -152,7 +161,7 @@ class HouseClerkHistorical:
                     document_id=record["doc_id"],
                     document_url=f"https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{record['year']}/{record['doc_id']}.pdf",
                     is_ptr=False,
-                    parsed=False
+                    parsed=False,
                 )
 
                 db_session.add(disclosure)
@@ -171,7 +180,7 @@ class HouseClerkHistorical:
 
         return {"imported": imported, "errors": errors, "skipped": skipped}
 
-    def ingest_all(self, years: Optional[List[int]] = None):
+    def ingest_all(self, years: List[int] | None = None):
         """Ingest all available House FD data."""
         db = SessionLocal()
 
@@ -196,13 +205,13 @@ class HouseClerkHistorical:
                 total_errors += result["errors"]
                 total_skipped += result["skipped"]
 
-            logger.info(f"\n{'='*70}")
-            logger.info(f"FINAL SUMMARY - House Clerk FD (All Years)")
-            logger.info(f"{'='*70}")
+            logger.info(f"\n{'=' * 70}")
+            logger.info("FINAL SUMMARY - House Clerk FD (All Years)")
+            logger.info(f"{'=' * 70}")
             logger.info(f"Total Imported: {total_imported}")
             logger.info(f"Total Skipped:  {total_skipped}")
             logger.info(f"Total Errors:   {total_errors}")
-            logger.info(f"{'='*70}\n")
+            logger.info(f"{'=' * 70}\n")
 
         finally:
             db.close()
@@ -211,8 +220,7 @@ class HouseClerkHistorical:
 def main():
     """Run House Clerk historical ingestion."""
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     ingester = HouseClerkHistorical()
@@ -221,4 +229,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

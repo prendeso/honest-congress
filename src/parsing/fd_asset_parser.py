@@ -2,13 +2,14 @@
 Parse asset values from Financial Disclosure XML files.
 Extracts asset types, descriptions, and value ranges from FD documents.
 """
+
 import logging
-from typing import List, Dict, Optional
 import xml.etree.ElementTree as ET
 from decimal import Decimal
+from typing import Dict, List
 
 from src.db.database import SessionLocal
-from src.db.models import Asset, Disclosure, AssetType
+from src.db.models import Asset, AssetType, Disclosure
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +61,7 @@ class FDAssetParser:
                 # Single value
                 val = Decimal(value_str)
                 return val, val
-        except:
+        except (ValueError, ArithmeticError):
             return None, None
 
     def parse_fd_xml(self, xml_content: bytes) -> List[Dict]:
@@ -87,14 +88,16 @@ class FDAssetParser:
                     # Classify asset type
                     asset_type = self.classify_asset_type(description)
 
-                    assets.append({
-                        "description": description,
-                        "asset_type": asset_type,
-                        "value_min": value_min,
-                        "value_max": value_max,
-                        "income_min": income_min,
-                        "income_max": income_max,
-                    })
+                    assets.append(
+                        {
+                            "description": description,
+                            "asset_type": asset_type,
+                            "value_min": value_min,
+                            "value_max": value_max,
+                            "income_min": income_min,
+                            "income_max": income_max,
+                        }
+                    )
 
                 except Exception as e:
                     logger.debug(f"Error parsing asset: {str(e)[:50]}")
@@ -139,15 +142,14 @@ class FDAssetParser:
 
         try:
             # Get unparsed FD disclosures
-            unparsed = db.query(Disclosure).filter(
-                (Disclosure.filing_type == "FD") &
-                (Disclosure.parsed == False)
-            ).all()
+            unparsed = (
+                db.query(Disclosure)
+                .filter((Disclosure.filing_type == "FD") & (Disclosure.parsed == False))
+                .all()
+            )
 
             logger.info(f"\nParsing assets from {len(unparsed)} FD disclosures...")
-            logger.info(f"{'='*70}\n")
-
-            total_assets = 0
+            logger.info(f"{'=' * 70}\n")
 
             for disclosure in unparsed:
                 try:
@@ -164,11 +166,11 @@ class FDAssetParser:
 
             db.commit()
 
-            logger.info(f"\n{'='*70}")
-            logger.info(f"Asset Parsing Complete")
+            logger.info(f"\n{'=' * 70}")
+            logger.info("Asset Parsing Complete")
             logger.info(f"Assets parsed: {self.parsed}")
             logger.info(f"Errors: {self.errors}")
-            logger.info(f"{'='*70}\n")
+            logger.info(f"{'=' * 70}\n")
 
         finally:
             db.close()
@@ -177,8 +179,7 @@ class FDAssetParser:
 def main():
     """Run asset parsing."""
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     parser = FDAssetParser()
@@ -187,4 +188,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

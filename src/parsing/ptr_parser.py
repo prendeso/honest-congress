@@ -1,10 +1,10 @@
 """Specialized parser for Periodic Transaction Reports (PTRs)."""
-import re
+
 import logging
-from typing import List, Dict, Any, Optional, Tuple
-from decimal import Decimal
+import re
 from datetime import datetime
-from pathlib import Path
+from decimal import Decimal
+from typing import Any, Dict, List, Tuple
 
 import pdfplumber
 
@@ -30,13 +30,36 @@ SELL_KEYWORDS = ["sale", "sell", "sold", "s"]
 EXCHANGE_KEYWORDS = ["exchange", "ex"]
 
 # Common ticker pattern
-TICKER_PATTERN = re.compile(r'\b([A-Z]{1,5})\b')
+TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
 
 # Words that look like tickers but aren't
 NON_TICKERS = {
-    "THE", "AND", "INC", "LLC", "LP", "NA", "CO", "US", "USA", "ETF",
-    "SP", "JT", "DC", "NY", "CA", "TX", "FL", "IL", "PA", "OH",
-    "PTR", "PDF", "FD", "REP", "SEN", "HON"
+    "THE",
+    "AND",
+    "INC",
+    "LLC",
+    "LP",
+    "NA",
+    "CO",
+    "US",
+    "USA",
+    "ETF",
+    "SP",
+    "JT",
+    "DC",
+    "NY",
+    "CA",
+    "TX",
+    "FL",
+    "IL",
+    "PA",
+    "OH",
+    "PTR",
+    "PDF",
+    "FD",
+    "REP",
+    "SEN",
+    "HON",
 }
 
 
@@ -108,25 +131,23 @@ class PTRParser:
         info = {}
 
         # Look for name pattern - usually first line or after "Name:"
-        name_match = re.search(r'(?:Name:\s*)?([A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+)', text)
+        name_match = re.search(r"(?:Name:\s*)?([A-Z][a-z]+(?:\s+[A-Z]\.?)?\s+[A-Z][a-z]+)", text)
         if name_match:
             info["name"] = name_match.group(1)
 
         # Look for state/district
-        state_match = re.search(r'\b([A-Z]{2})\s*-?\s*(\d{1,2})\b', text)
+        state_match = re.search(r"\b([A-Z]{2})\s*-?\s*(\d{1,2})\b", text)
         if state_match:
             info["state"] = state_match.group(1)
             info["district"] = state_match.group(2)
 
         return info
 
-    def _extract_filing_date(self, text: str) -> Optional[datetime]:
+    def _extract_filing_date(self, text: str) -> datetime | None:
         """Extract filing date from PTR."""
         # Look for "Filed:" or "Filing Date:" patterns
         date_match = re.search(
-            r'(?:Filed|Filing\s*Date):\s*(\d{1,2}/\d{1,2}/\d{2,4})',
-            text,
-            re.IGNORECASE
+            r"(?:Filed|Filing\s*Date):\s*(\d{1,2}/\d{1,2}/\d{2,4})", text, re.IGNORECASE
         )
         if date_match:
             return self._parse_date(date_match.group(1))
@@ -145,9 +166,10 @@ class PTRParser:
             header_text = " ".join(str(h).lower() for h in headers if h)
 
             # PTR tables typically have: Asset, Transaction, Date, Amount, Owner
-            is_transaction_table = any(kw in header_text for kw in [
-                "transaction", "asset", "purchase", "sale", "amount", "date"
-            ])
+            is_transaction_table = any(
+                kw in header_text
+                for kw in ["transaction", "asset", "purchase", "sale", "amount", "date"]
+            )
 
             if not is_transaction_table:
                 continue
@@ -192,10 +214,8 @@ class PTRParser:
         return indices
 
     def _parse_table_row(
-        self,
-        row: List[Any],
-        col_indices: Dict[str, int]
-    ) -> Optional[Dict[str, Any]]:
+        self, row: List[Any], col_indices: Dict[str, int]
+    ) -> Dict[str, Any] | None:
         """Parse a single transaction row."""
         if not row:
             return None
@@ -253,14 +273,24 @@ class PTRParser:
 
         # Look for transaction patterns in text
         # Common pattern: "ASSET DESCRIPTION    P/S    MM/DD/YYYY    $X - $Y    Owner"
-        lines = text.split('\n')
+        lines = text.split("\n")
 
         for line in lines:
             # Skip header/footer lines
-            if any(skip in line.lower() for skip in [
-                'transaction', 'asset', 'owner', 'amount', 'date',
-                'periodic', 'report', 'page', 'filing'
-            ]):
+            if any(
+                skip in line.lower()
+                for skip in [
+                    "transaction",
+                    "asset",
+                    "owner",
+                    "amount",
+                    "date",
+                    "periodic",
+                    "report",
+                    "page",
+                    "filing",
+                ]
+            ):
                 continue
 
             # Try to match transaction pattern
@@ -270,32 +300,31 @@ class PTRParser:
 
         return transactions
 
-    def _parse_text_line(self, line: str) -> Optional[Dict[str, Any]]:
+    def _parse_text_line(self, line: str) -> Dict[str, Any] | None:
         """Try to parse a single line as a transaction."""
         if not line or len(line) < 20:
             return None
 
         # Look for key indicators
-        has_dollar = '$' in line
-        has_date = re.search(r'\d{1,2}/\d{1,2}/\d{2,4}', line)
-        has_type = any(kw in line.lower() for kw in BUY_KEYWORDS + SELL_KEYWORDS)
+        has_dollar = "$" in line
+        has_date = re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", line)
 
         if not (has_dollar or has_date):
             return None
 
         # Try to extract components
-        date_match = re.search(r'(\d{1,2}/\d{1,2}/\d{2,4})', line)
-        amount_match = re.search(r'\$[\d,]+\s*-\s*\$[\d,]+', line)
+        date_match = re.search(r"(\d{1,2}/\d{1,2}/\d{2,4})", line)
+        amount_match = re.search(r"\$[\d,]+\s*-\s*\$[\d,]+", line)
 
         # Extract transaction type
         txn_type = None
         for kw in BUY_KEYWORDS:
-            if re.search(rf'\b{kw}\b', line, re.IGNORECASE):
+            if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
                 txn_type = "purchase"
                 break
         if not txn_type:
             for kw in SELL_KEYWORDS:
-                if re.search(rf'\b{kw}\b', line, re.IGNORECASE):
+                if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
                     txn_type = "sale"
                     break
 
@@ -305,14 +334,14 @@ class PTRParser:
         # Extract description (everything before date or amount)
         description = line
         if date_match:
-            description = line[:date_match.start()].strip()
+            description = line[: date_match.start()].strip()
         elif amount_match:
-            description = line[:amount_match.start()].strip()
+            description = line[: amount_match.start()].strip()
 
         # Clean up description
         for kw in BUY_KEYWORDS + SELL_KEYWORDS:
-            description = re.sub(rf'\b{kw}\b', '', description, flags=re.IGNORECASE)
-        description = re.sub(r'\s+', ' ', description).strip()
+            description = re.sub(rf"\b{kw}\b", "", description, flags=re.IGNORECASE)
+        description = re.sub(r"\s+", " ", description).strip()
 
         if not description:
             return None
@@ -323,12 +352,16 @@ class PTRParser:
             "asset_type": self._determine_asset_type(description),
             "transaction_type": txn_type,
             "transaction_date": self._parse_date(date_match.group(1)) if date_match else None,
-            "amount_min": self._parse_amount_range(amount_match.group(0))[0] if amount_match else None,
-            "amount_max": self._parse_amount_range(amount_match.group(0))[1] if amount_match else None,
+            "amount_min": self._parse_amount_range(amount_match.group(0))[0]
+            if amount_match
+            else None,
+            "amount_max": self._parse_amount_range(amount_match.group(0))[1]
+            if amount_match
+            else None,
             "owner": "Self",
         }
 
-    def _parse_transaction_type(self, text: str) -> Optional[str]:
+    def _parse_transaction_type(self, text: str) -> str | None:
         """Parse transaction type from text."""
         if not text:
             return None
@@ -349,7 +382,7 @@ class PTRParser:
 
         return None
 
-    def _infer_transaction_type(self, description: str) -> Optional[str]:
+    def _infer_transaction_type(self, description: str) -> str | None:
         """Try to infer transaction type from description."""
         desc_lower = description.lower()
 
@@ -360,7 +393,7 @@ class PTRParser:
 
         return None
 
-    def _parse_date(self, text: str) -> Optional[datetime]:
+    def _parse_date(self, text: str) -> datetime | None:
         """Parse date from text."""
         if not text:
             return None
@@ -383,7 +416,7 @@ class PTRParser:
 
         return None
 
-    def _parse_amount_range(self, text: str) -> Tuple[Optional[Decimal], Optional[Decimal]]:
+    def _parse_amount_range(self, text: str) -> Tuple[Decimal | None, Decimal | None]:
         """Parse amount range from text."""
         if not text:
             return None, None
@@ -393,11 +426,11 @@ class PTRParser:
             if range_text.lower() in text.lower():
                 return (
                     Decimal(min_val) if min_val else None,
-                    Decimal(max_val) if max_val else None
+                    Decimal(max_val) if max_val else None,
                 )
 
         # Try to parse custom range
-        amounts = re.findall(r'\$?([\d,]+)', text)
+        amounts = re.findall(r"\$?([\d,]+)", text)
         amounts = [int(a.replace(",", "")) for a in amounts if a]
 
         if len(amounts) >= 2:
@@ -407,20 +440,20 @@ class PTRParser:
 
         return None, None
 
-    def _extract_ticker(self, text: str) -> Optional[str]:
+    def _extract_ticker(self, text: str) -> str | None:
         """Extract stock ticker from text."""
         if not text:
             return None
 
         # Look for explicit ticker notation like (AAPL) or [MSFT]
-        explicit = re.search(r'[\(\[]([A-Z]{1,5})[\)\]]', text)
+        explicit = re.search(r"[\(\[]([A-Z]{1,5})[\)\]]", text)
         if explicit:
             ticker = explicit.group(1)
             if ticker not in NON_TICKERS:
                 return ticker
 
         # Look for ticker at start of description (common PTR format)
-        start_match = re.match(r'^([A-Z]{1,5})\s*[-–—]\s', text)
+        start_match = re.match(r"^([A-Z]{1,5})\s*[-–—]\s", text)
         if start_match:
             ticker = start_match.group(1)
             if ticker not in NON_TICKERS:
@@ -482,4 +515,3 @@ def parse_ptr(pdf_path: str) -> Dict[str, Any]:
     """
     parser = PTRParser()
     return parser.parse_ptr(pdf_path)
-

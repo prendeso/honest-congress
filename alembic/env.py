@@ -4,11 +4,12 @@ Pulls the database URL from `src.config.get_settings()` so migrations and
 the application share the same configuration. Honors Railway / Heroku
 `postgres://` URLs via `_normalize_database_url`.
 """
+
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
 from src.config import get_settings
 from src.db.database import _normalize_database_url
 from src.db.models import Base

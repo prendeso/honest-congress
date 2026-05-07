@@ -1,17 +1,27 @@
 """FastAPI application for Honest Congress."""
+
 import logging
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from src.db import SessionLocal
-from src.api.routes import members, disclosures, anomalies, health, assets
-from src.api.routes import dashboard_v2, performance, admin
-from src.config import get_settings
 from src.analysis.trade_analyzer import TradeAnalyzer
+from src.api.routes import (
+    admin,
+    anomalies,
+    assets,
+    dashboard_v2,
+    disclosures,
+    health,
+    members,
+    performance,
+)
+from src.config import get_settings
+from src.db import SessionLocal
 from src.ingestion.orchestrator import IngestionOrchestrator
 
 settings = get_settings()
@@ -19,7 +29,7 @@ settings = get_settings()
 # Configure logging
 logging.basicConfig(
     level=getattr(logging, settings.log_level),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -92,13 +102,21 @@ async def check_document_exists(doc_id: str):
         if year_dir.is_dir():
             pdf_path = year_dir / f"{doc_id}.pdf"
             if pdf_path.exists():
-                return {"exists": True, "path": f"/api/documents/{year_dir.name}/{doc_id}", "type": "fd"}
+                return {
+                    "exists": True,
+                    "path": f"/api/documents/{year_dir.name}/{doc_id}",
+                    "type": "fd",
+                }
 
     for year_dir in (DISCLOSURES_DIR / "ptr").glob("*"):
         if year_dir.is_dir():
             pdf_path = year_dir / f"{doc_id}.pdf"
             if pdf_path.exists():
-                return {"exists": True, "path": f"/api/documents/{year_dir.name}/{doc_id}", "type": "ptr"}
+                return {
+                    "exists": True,
+                    "path": f"/api/documents/{year_dir.name}/{doc_id}",
+                    "type": "ptr",
+                }
 
     return {"exists": False, "document_id": doc_id}
 
@@ -123,8 +141,8 @@ async def get_document(year: int, doc_id: str):
             content={
                 "error": "This disclosure is from API data and does not have a downloadable PDF",
                 "document_id": doc_id,
-                "hint": "Check the 'Original Source' link for the official filing"
-            }
+                "hint": "Check the 'Original Source' link for the official filing",
+            },
         )
 
     return JSONResponse(
@@ -132,9 +150,10 @@ async def get_document(year: int, doc_id: str):
         content={
             "error": "Document not found locally",
             "document_id": doc_id,
-            "hint": "The PDF may not have been downloaded yet"
-        }
+            "hint": "The PDF may not have been downloaded yet",
+        },
     )
+
 
 # Include routers
 app.include_router(dashboard_v2.router, tags=["Dashboard"])  # Enhanced dashboard
@@ -145,4 +164,3 @@ app.include_router(disclosures.router, prefix="/api/disclosures", tags=["Disclos
 app.include_router(anomalies.router, prefix="/api/anomalies", tags=["Anomalies"])
 app.include_router(assets.router, prefix="/api", tags=["Assets"])
 app.include_router(performance.router, prefix="/api", tags=["Performance"])
-

@@ -1,22 +1,23 @@
 """Performance analyzer - Compare congressional trading vs market benchmarks."""
+
 import logging
-from typing import List, Dict, Any, Optional
-from decimal import Decimal
-from datetime import datetime, timedelta
 from collections import defaultdict
+from datetime import datetime, timedelta
+from decimal import Decimal
+from typing import Any, Dict, List
 
 import yfinance as yf
-from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 
-from src.db.models import Member, Disclosure, Transaction, TransactionType
+from src.db.models import Disclosure, Member, Transaction, TransactionType
 
 logger = logging.getLogger(__name__)
 
 # Benchmark tickers
 BENCHMARKS = {
-    "sp500": "SPY",      # S&P 500 ETF
-    "nasdaq": "QQQ",     # Nasdaq 100 ETF
+    "sp500": "SPY",  # S&P 500 ETF
+    "nasdaq": "QQQ",  # Nasdaq 100 ETF
     "buffett": "BRK-B",  # Berkshire Hathaway
     "total_market": "VTI",  # Total US Market
 }
@@ -37,7 +38,7 @@ class PerformanceAnalyzer:
         self._price_cache: Dict[str, Dict[str, float]] = {}
         self._benchmark_cache: Dict[str, Any] = {}
 
-    def get_stock_price(self, ticker: str, date: datetime) -> Optional[float]:
+    def get_stock_price(self, ticker: str, date: datetime) -> float | None:
         """Get stock price for a specific date."""
         cache_key = f"{ticker}_{date.strftime('%Y-%m-%d')}"
 
@@ -56,14 +57,14 @@ class PerformanceAnalyzer:
                 return None
 
             # Find closest date
-            target_date = date.strftime('%Y-%m-%d')
-            if target_date in hist.index.strftime('%Y-%m-%d').tolist():
-                price = float(hist.loc[target_date]['Close'])
+            target_date = date.strftime("%Y-%m-%d")
+            if target_date in hist.index.strftime("%Y-%m-%d").tolist():
+                price = float(hist.loc[target_date]["Close"])
             else:
                 # Get closest available date
-                hist['date_diff'] = abs((hist.index - date).days)
-                closest = hist.loc[hist['date_diff'].idxmin()]
-                price = float(closest['Close'])
+                hist["date_diff"] = abs((hist.index - date).days)
+                closest = hist.loc[hist["date_diff"].idxmin()]
+                price = float(closest["Close"])
 
             self._price_cache[cache_key] = price
             return price
@@ -73,11 +74,8 @@ class PerformanceAnalyzer:
             return None
 
     def get_benchmark_returns(
-        self,
-        benchmark: str,
-        start_date: datetime,
-        end_date: datetime
-    ) -> Optional[float]:
+        self, benchmark: str, start_date: datetime, end_date: datetime
+    ) -> float | None:
         """Get benchmark returns for a period."""
         ticker = BENCHMARKS.get(benchmark, benchmark)
 
@@ -88,8 +86,8 @@ class PerformanceAnalyzer:
             if hist.empty or len(hist) < 2:
                 return None
 
-            start_price = float(hist.iloc[0]['Close'])
-            end_price = float(hist.iloc[-1]['Close'])
+            start_price = float(hist.iloc[0]["Close"])
+            end_price = float(hist.iloc[-1]["Close"])
 
             return ((end_price - start_price) / start_price) * 100
 
@@ -101,8 +99,8 @@ class PerformanceAnalyzer:
         self,
         db: Session,
         member_id: int,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> Dict[str, Any]:
         """
         Calculate trading returns for a member.
@@ -118,12 +116,18 @@ class PerformanceAnalyzer:
             end_date = datetime.now()
 
         # Get member's transactions
-        transactions = db.query(Transaction).join(Disclosure).filter(
-            Disclosure.member_id == member_id,
-            Transaction.transaction_date >= start_date,
-            Transaction.transaction_date <= end_date,
-            Transaction.ticker.isnot(None)
-        ).order_by(Transaction.transaction_date).all()
+        transactions = (
+            db.query(Transaction)
+            .join(Disclosure)
+            .filter(
+                Disclosure.member_id == member_id,
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date <= end_date,
+                Transaction.ticker.isnot(None),
+            )
+            .order_by(Transaction.transaction_date)
+            .all()
+        )
 
         if not transactions:
             return {
@@ -157,12 +161,14 @@ class PerformanceAnalyzer:
             trades_with_prices += 1
 
             if txn.transaction_type == TransactionType.PURCHASE:
-                positions[ticker].append({
-                    "date": txn.transaction_date,
-                    "amount": amount,
-                    "price": price,
-                    "shares": float(amount) / price
-                })
+                positions[ticker].append(
+                    {
+                        "date": txn.transaction_date,
+                        "amount": amount,
+                        "price": price,
+                        "shares": float(amount) / price,
+                    }
+                )
                 total_invested += amount
 
             elif txn.transaction_type == TransactionType.SALE:
@@ -207,8 +213,8 @@ class PerformanceAnalyzer:
         self,
         db: Session,
         member_id: int,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
     ) -> Dict[str, Any]:
         """Compare member performance to market benchmarks."""
         if not start_date:
@@ -226,10 +232,7 @@ class PerformanceAnalyzer:
         benchmarks = {}
         for name, ticker in BENCHMARKS.items():
             returns = self.get_benchmark_returns(name, start_date, end_date)
-            benchmarks[name] = {
-                "ticker": ticker,
-                "return_pct": returns
-            }
+            benchmarks[name] = {"ticker": ticker, "return_pct": returns}
 
         # Calculate alpha (excess return) vs S&P 500
         member_return = member_returns.get("estimated_return_pct")
@@ -255,18 +258,19 @@ class PerformanceAnalyzer:
             "alpha_vs_sp500": alpha,
             "beats_sp500": alpha > 0 if alpha is not None else None,
             "beats_buffett": (
-                member_return > benchmarks.get("buffett", {}).get("return_pct", float('inf'))
-                if member_return is not None else None
+                member_return > benchmarks.get("buffett", {}).get("return_pct", float("inf"))
+                if member_return is not None
+                else None
             ),
         }
 
     def rank_members_by_performance(
         self,
         db: Session,
-        start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None,
+        start_date: datetime | None = None,
+        end_date: datetime | None = None,
         min_trades: int = 5,
-        limit: int = 20
+        limit: int = 20,
     ) -> Dict[str, Any]:
         """Rank all members by trading performance."""
         if not start_date:
@@ -275,20 +279,22 @@ class PerformanceAnalyzer:
             end_date = datetime.now()
 
         # Find members with enough trades
-        members_with_trades = db.query(
-            Disclosure.member_id,
-            func.count(Transaction.id).label('trade_count')
-        ).join(Transaction).filter(
-            Transaction.ticker.isnot(None),
-            Transaction.transaction_date >= start_date,
-            Transaction.transaction_date <= end_date
-        ).group_by(Disclosure.member_id).having(
-            func.count(Transaction.id) >= min_trades
-        ).all()
+        members_with_trades = (
+            db.query(Disclosure.member_id, func.count(Transaction.id).label("trade_count"))
+            .join(Transaction)
+            .filter(
+                Transaction.ticker.isnot(None),
+                Transaction.transaction_date >= start_date,
+                Transaction.transaction_date <= end_date,
+            )
+            .group_by(Disclosure.member_id)
+            .having(func.count(Transaction.id) >= min_trades)
+            .all()
+        )
 
         performances = []
 
-        for member_id, trade_count in members_with_trades:
+        for member_id, _trade_count in members_with_trades:
             try:
                 comparison = self.compare_to_benchmarks(db, member_id, start_date, end_date)
                 if comparison.get("member_performance", {}).get("estimated_return_pct") is not None:
@@ -299,8 +305,10 @@ class PerformanceAnalyzer:
 
         # Sort by return
         performances.sort(
-            key=lambda x: x.get("member_performance", {}).get("estimated_return_pct", float('-inf')),
-            reverse=True
+            key=lambda x: x.get("member_performance", {}).get(
+                "estimated_return_pct", float("-inf")
+            ),
+            reverse=True,
         )
 
         # Get benchmark for comparison
@@ -318,8 +326,7 @@ class PerformanceAnalyzer:
             },
             "total_members_analyzed": len(performances),
             "members_beating_sp500": sum(
-                1 for p in performances
-                if p.get("alpha_vs_sp500") and p["alpha_vs_sp500"] > 0
+                1 for p in performances if p.get("alpha_vs_sp500") and p["alpha_vs_sp500"] > 0
             ),
             "top_performers": performances[:limit],
             "worst_performers": performances[-limit:][::-1] if len(performances) > limit else [],
@@ -328,49 +335,49 @@ class PerformanceAnalyzer:
     def get_performance_summary(self, db: Session) -> Dict[str, Any]:
         """Get overall performance summary statistics."""
         # Count members with transactions
-        members_with_txn = db.query(
-            func.count(func.distinct(Disclosure.member_id))
-        ).join(Transaction).filter(
-            Transaction.ticker.isnot(None)
-        ).scalar() or 0
+        members_with_txn = (
+            db.query(func.count(func.distinct(Disclosure.member_id)))
+            .join(Transaction)
+            .filter(Transaction.ticker.isnot(None))
+            .scalar()
+            or 0
+        )
 
         # Count total transactions with tickers
-        total_txn = db.query(func.count(Transaction.id)).filter(
-            Transaction.ticker.isnot(None)
-        ).scalar() or 0
+        total_txn = (
+            db.query(func.count(Transaction.id)).filter(Transaction.ticker.isnot(None)).scalar()
+            or 0
+        )
 
         # Get unique tickers traded
-        unique_tickers = db.query(
-            func.count(func.distinct(Transaction.ticker))
-        ).filter(
-            Transaction.ticker.isnot(None)
-        ).scalar() or 0
+        unique_tickers = (
+            db.query(func.count(func.distinct(Transaction.ticker)))
+            .filter(Transaction.ticker.isnot(None))
+            .scalar()
+            or 0
+        )
 
         # Top traded tickers
-        top_tickers = db.query(
-            Transaction.ticker,
-            func.count(Transaction.id).label('count')
-        ).filter(
-            Transaction.ticker.isnot(None)
-        ).group_by(Transaction.ticker).order_by(
-            func.count(Transaction.id).desc()
-        ).limit(10).all()
+        top_tickers = (
+            db.query(Transaction.ticker, func.count(Transaction.id).label("count"))
+            .filter(Transaction.ticker.isnot(None))
+            .group_by(Transaction.ticker)
+            .order_by(func.count(Transaction.id).desc())
+            .limit(10)
+            .all()
+        )
 
         return {
             "members_with_transactions": members_with_txn,
             "total_transactions": total_txn,
             "unique_tickers": unique_tickers,
-            "top_traded_tickers": [
-                {"ticker": t, "count": c} for t, c in top_tickers
-            ],
+            "top_traded_tickers": [{"ticker": t, "count": c} for t, c in top_tickers],
             "benchmarks_available": list(BENCHMARKS.keys()),
         }
 
 
 def analyze_performance(
-    db: Session,
-    member_id: Optional[int] = None,
-    compare_benchmarks: bool = True
+    db: Session, member_id: int | None = None, compare_benchmarks: bool = True
 ) -> Dict[str, Any]:
     """Convenience function for performance analysis."""
     analyzer = PerformanceAnalyzer()
@@ -382,4 +389,3 @@ def analyze_performance(
             return analyzer.calculate_member_returns(db, member_id)
     else:
         return analyzer.get_performance_summary(db)
-

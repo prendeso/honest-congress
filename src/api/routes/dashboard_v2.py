@@ -1,12 +1,13 @@
 """Enhanced web dashboard for Honest Congress - Clean implementation with all pages."""
-from fastapi import APIRouter, Depends, Query
-from fastapi.responses import HTMLResponse
-from sqlalchemy.orm import Session
-from sqlalchemy import func
-from decimal import Decimal
-from typing import List, Dict, Any
 
-from src.db import get_db_session, Transaction, Disclosure, Anomaly, Member
+from typing import Any, Dict, List
+
+from fastapi import APIRouter, Depends
+from fastapi.responses import HTMLResponse
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from src.db import Anomaly, Disclosure, Member, Transaction, get_db_session
 
 router = APIRouter()
 
@@ -59,6 +60,7 @@ STYLES = """
 # API ENDPOINTS
 # ============================================================================
 
+
 @router.get("/api/insights", tags=["Insights"])
 async def get_insights(db: Session = Depends(get_db_session)) -> List[Dict[str, Any]]:
     """Get interesting facts and insights from congressional data."""
@@ -66,87 +68,89 @@ async def get_insights(db: Session = Depends(get_db_session)) -> List[Dict[str, 
 
     try:
         # Get highest anomaly count members
-        top_anomalies_members = db.query(
-            Member.first_name,
-            Member.last_name,
-            func.count(Anomaly.id).label('anomaly_count')
-        ).join(
-            Anomaly, Member.id == Anomaly.member_id
-        ).group_by(
-            Member.id, Member.first_name, Member.last_name
-        ).order_by(
-            func.count(Anomaly.id).desc()
-        ).limit(1).first()
+        top_anomalies_members = (
+            db.query(
+                Member.first_name, Member.last_name, func.count(Anomaly.id).label("anomaly_count")
+            )
+            .join(Anomaly, Member.id == Anomaly.member_id)
+            .group_by(Member.id, Member.first_name, Member.last_name)
+            .order_by(func.count(Anomaly.id).desc())
+            .limit(1)
+            .first()
+        )
 
         if top_anomalies_members:
             member_name = f"{top_anomalies_members[0]} {top_anomalies_members[1]}"
-            insights.append({
-                'id': 1,
-                'icon': '🚨',
-                'title': 'Most Flagged Member',
-                'description': 'Member with the highest number of detected anomalies',
-                'value': f"{member_name} ({top_anomalies_members[2]} flags)"
-            })
+            insights.append(
+                {
+                    "id": 1,
+                    "icon": "🚨",
+                    "title": "Most Flagged Member",
+                    "description": "Member with the highest number of detected anomalies",
+                    "value": f"{member_name} ({top_anomalies_members[2]} flags)",
+                }
+            )
 
         # Get largest single trade
-        largest_trade = db.query(
-            Transaction.description,
-            Transaction.amount_max,
-            Member.first_name,
-            Member.last_name
-        ).join(
-            Disclosure, Transaction.disclosure_id == Disclosure.id
-        ).join(
-            Member, Disclosure.member_id == Member.id
-        ).order_by(
-            Transaction.amount_max.desc()
-        ).first()
+        largest_trade = (
+            db.query(
+                Transaction.description, Transaction.amount_max, Member.first_name, Member.last_name
+            )
+            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
+            .join(Member, Disclosure.member_id == Member.id)
+            .order_by(Transaction.amount_max.desc())
+            .first()
+        )
 
         if largest_trade and largest_trade[1]:
             amount = int(largest_trade[1])
-            insights.append({
-                'id': 2,
-                'icon': '📈',
-                'title': 'Largest Single Trade',
-                'description': f"Highest value stock trade on record",
-                'value': f"${amount:,}"
-            })
+            insights.append(
+                {
+                    "id": 2,
+                    "icon": "📈",
+                    "title": "Largest Single Trade",
+                    "description": "Highest value stock trade on record",
+                    "value": f"${amount:,}",
+                }
+            )
 
         # Get most active trader
-        most_active = db.query(
-            Member.first_name,
-            Member.last_name,
-            func.count(Transaction.id).label('trade_count')
-        ).join(
-            Disclosure, Member.id == Disclosure.member_id
-        ).join(
-            Transaction, Disclosure.id == Transaction.disclosure_id
-        ).group_by(
-            Member.id, Member.first_name, Member.last_name
-        ).order_by(
-            func.count(Transaction.id).desc()
-        ).limit(1).first()
+        most_active = (
+            db.query(
+                Member.first_name, Member.last_name, func.count(Transaction.id).label("trade_count")
+            )
+            .join(Disclosure, Member.id == Disclosure.member_id)
+            .join(Transaction, Disclosure.id == Transaction.disclosure_id)
+            .group_by(Member.id, Member.first_name, Member.last_name)
+            .order_by(func.count(Transaction.id).desc())
+            .limit(1)
+            .first()
+        )
 
         if most_active:
             member_name = f"{most_active[0]} {most_active[1]}"
-            insights.append({
-                'id': 3,
-                'icon': '📊',
-                'title': 'Most Active Trader',
-                'description': 'Member with highest frequency of stock trades',
-                'value': f"{member_name} ({most_active[2]} trades)"
-            })
+            insights.append(
+                {
+                    "id": 3,
+                    "icon": "📊",
+                    "title": "Most Active Trader",
+                    "description": "Member with highest frequency of stock trades",
+                    "value": f"{member_name} ({most_active[2]} trades)",
+                }
+            )
 
         # Get disclosure count
         disclosure_count = db.query(func.count(Disclosure.id)).scalar()
         if disclosure_count:
-            insights.append({
-                'id': 4,
-                'icon': '📄',
-                'title': 'Total Disclosures Analyzed',
-                'description': 'Financial and transaction disclosure reports processed',
-                'value': f"{disclosure_count:,} filings"
-            })
+            insights.append(
+                {
+                    "id": 4,
+                    "icon": "📄",
+                    "title": "Total Disclosures Analyzed",
+                    "description": "Financial and transaction disclosure reports processed",
+                    "value": f"{disclosure_count:,} filings",
+                }
+            )
 
     except Exception as e:
         print(f"Error generating insights: {e}")
@@ -157,6 +161,7 @@ async def get_insights(db: Session = Depends(get_db_session)) -> List[Dict[str, 
 # ============================================================================
 # LANDING PAGE
 # ============================================================================
+
 
 @router.get("/", response_class=HTMLResponse)
 async def landing_page():
@@ -303,6 +308,7 @@ async def landing_page():
 # ============================================================================
 # MEMBERS PAGE
 # ============================================================================
+
 
 @router.get("/members", response_class=HTMLResponse)
 async def members_page():
@@ -802,6 +808,7 @@ async def members_page():
 # DISCLOSURES PAGE
 # ============================================================================
 
+
 @router.get("/disclosures", response_class=HTMLResponse)
 async def disclosures_page():
     """Serve the financial disclosures browsing page."""
@@ -1205,6 +1212,7 @@ async def disclosures_page():
 # TRADES PAGE
 # ============================================================================
 
+
 @router.get("/trades", response_class=HTMLResponse)
 async def trades_page():
     """Serve the stock trades (PTR) browsing page."""
@@ -1467,6 +1475,7 @@ async def trades_page():
 # ============================================================================
 # PARSED DOCUMENTS PAGE
 # ============================================================================
+
 
 @router.get("/parsed", response_class=HTMLResponse)
 async def parsed_page():
@@ -1761,13 +1770,14 @@ async def parsed_page():
 # ANOMALIES PAGE (redirect to main dashboard)
 # ============================================================================
 
+
 @router.get("/anomalies", response_class=HTMLResponse)
 async def anomalies_page():
     """Redirect to the main dashboard which has the full anomalies implementation."""
     from .dashboard import DASHBOARD_HTML
+
     response = HTMLResponse(content=DASHBOARD_HTML)
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
-

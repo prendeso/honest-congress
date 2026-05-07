@@ -18,9 +18,7 @@ class Settings(BaseSettings):
     # this enables stricter checks (e.g. ADMIN_PASSWORD must be non-empty).
     env: str = Field(default="dev", alias="ENV")
 
-    database_url: str = Field(
-        default="sqlite:///./honest_congress.db", alias="DATABASE_URL"
-    )
+    database_url: str = Field(default="sqlite:///./honest_congress.db", alias="DATABASE_URL")
 
     # CORS. Comma-separated origins. "*" is allowed for local/dev only —
     # in production set this to your dashboard origin(s).
@@ -32,7 +30,9 @@ class Settings(BaseSettings):
     # QuiverQuant API key (for congressional trading data)
     quiverquant_api_key: str = Field(default="", alias="QUIVERQUANT_API_KEY")
 
-    wealth_growth_threshold_percent: float = Field(default=200.0, alias="WEALTH_GROWTH_THRESHOLD_PERCENT")
+    wealth_growth_threshold_percent: float = Field(
+        default=200.0, alias="WEALTH_GROWTH_THRESHOLD_PERCENT"
+    )
     congressional_salary: int = Field(default=174000, alias="CONGRESSIONAL_SALARY")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
         return (v or "dev").strip().lower()
 
 
-@lru_cache()
+@lru_cache
 def get_settings() -> Settings:
     settings = Settings()
     if settings.is_production and not settings.admin_password:

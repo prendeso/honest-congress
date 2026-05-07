@@ -1,14 +1,14 @@
 """Wealth anomaly analyzer for congressional disclosures."""
+
 import logging
-from typing import List, Dict, Any, Optional
 from decimal import Decimal
-from datetime import datetime
+from typing import Any, Dict, List
 
-from sqlalchemy.orm import Session
 from sqlalchemy import func
+from sqlalchemy.orm import Session
 
-from src.db import Member, Disclosure, Asset, Anomaly
 from src.config import get_settings
+from src.db import Anomaly, Asset, Disclosure, Member
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -25,9 +25,7 @@ class WealthAnalyzer:
     """
 
     def __init__(
-        self,
-        threshold_percent: Optional[float] = None,
-        congressional_salary: Optional[int] = None
+        self, threshold_percent: float | None = None, congressional_salary: int | None = None
     ):
         self.threshold_percent = threshold_percent or settings.wealth_growth_threshold_percent
         self.congressional_salary = congressional_salary or settings.congressional_salary
@@ -50,10 +48,12 @@ class WealthAnalyzer:
         anomalies = []
 
         # Get all disclosures ordered by year
-        disclosures = db.query(Disclosure).filter(
-            Disclosure.member_id == member_id,
-            Disclosure.parsed == True
-        ).order_by(Disclosure.filing_year).all()
+        disclosures = (
+            db.query(Disclosure)
+            .filter(Disclosure.member_id == member_id, Disclosure.parsed == True)
+            .order_by(Disclosure.filing_year)
+            .all()
+        )
 
         if len(disclosures) < 2:
             return []  # Need at least 2 years to compare
@@ -62,13 +62,15 @@ class WealthAnalyzer:
         net_worths = []
         for disclosure in disclosures:
             net_worth = self._calculate_net_worth(db, disclosure.id)
-            net_worths.append({
-                "year": disclosure.filing_year,
-                "disclosure_id": disclosure.id,
-                "net_worth_min": net_worth["min"],
-                "net_worth_max": net_worth["max"],
-                "net_worth_mid": net_worth["mid"],
-            })
+            net_worths.append(
+                {
+                    "year": disclosure.filing_year,
+                    "disclosure_id": disclosure.id,
+                    "net_worth_min": net_worth["min"],
+                    "net_worth_max": net_worth["max"],
+                    "net_worth_mid": net_worth["mid"],
+                }
+            )
 
         # Check year-over-year growth
         for i in range(1, len(net_worths)):
@@ -94,7 +96,9 @@ class WealthAnalyzer:
                     salary_growth_percent = (max_salary_growth / prev_nw) * 100
 
                     # Flag if growth exceeds salary by threshold
-                    if growth > 0 and growth_percent > (salary_growth_percent + float(self.threshold_percent)):
+                    if growth > 0 and growth_percent > (
+                        salary_growth_percent + float(self.threshold_percent)
+                    ):
                         # Use vague ranges for growth percentage
                         if growth_percent < 100:
                             growth_range = "significantly"
@@ -122,7 +126,9 @@ class WealthAnalyzer:
                             "member_id": member_id,
                             "disclosure_id": curr["disclosure_id"],
                             "anomaly_type": "excessive_wealth_growth",
-                            "severity": self._calculate_severity(growth_percent, salary_growth_percent),
+                            "severity": self._calculate_severity(
+                                growth_percent, salary_growth_percent
+                            ),
                             "title": f"Wealth growth {growth_range} exceeds salary-based expectation ({prev['year']}-{curr['year']})",
                             "description": (
                                 f"Between {prev['year']} and {curr['year']}, "
@@ -161,11 +167,15 @@ class WealthAnalyzer:
 
                 for anomaly in anomalies:
                     # Check if this anomaly already exists
-                    existing = db.query(Anomaly).filter(
-                        Anomaly.member_id == anomaly["member_id"],
-                        Anomaly.anomaly_type == anomaly["anomaly_type"],
-                        Anomaly.title == anomaly["title"]
-                    ).first()
+                    existing = (
+                        db.query(Anomaly)
+                        .filter(
+                            Anomaly.member_id == anomaly["member_id"],
+                            Anomaly.anomaly_type == anomaly["anomaly_type"],
+                            Anomaly.title == anomaly["title"],
+                        )
+                        .first()
+                    )
 
                     if existing:
                         # Skip duplicate
@@ -183,12 +193,14 @@ class WealthAnalyzer:
                         threshold_value=anomaly.get("threshold_value"),
                     )
                     db.add(db_anomaly)
-                    all_anomalies.append({
-                        **anomaly,
-                        "member_name": f"{member.first_name} {member.last_name}",
-                        "state": member.state,
-                        "party": member.party.value,
-                    })
+                    all_anomalies.append(
+                        {
+                            **anomaly,
+                            "member_name": f"{member.first_name} {member.last_name}",
+                            "state": member.state,
+                            "party": member.party.value,
+                        }
+                    )
 
             members_analyzed += 1
 
@@ -201,13 +213,14 @@ class WealthAnalyzer:
             "anomalies": all_anomalies,
         }
 
-    def _calculate_net_worth(self, db: Session, disclosure_id: int) -> Dict[str, Optional[Decimal]]:
+    def _calculate_net_worth(self, db: Session, disclosure_id: int) -> Dict[str, Decimal | None]:
         """Calculate net worth from a disclosure's assets and liabilities."""
         # Sum assets
-        assets_result = db.query(
-            func.sum(Asset.value_min).label("min"),
-            func.sum(Asset.value_max).label("max")
-        ).filter(Asset.disclosure_id == disclosure_id).first()
+        assets_result = (
+            db.query(func.sum(Asset.value_min).label("min"), func.sum(Asset.value_max).label("max"))
+            .filter(Asset.disclosure_id == disclosure_id)
+            .first()
+        )
 
         assets_min = assets_result.min or Decimal(0)
         assets_max = assets_result.max or Decimal(0)
@@ -238,7 +251,7 @@ class WealthAnalyzer:
             return "low"
 
 
-def analyze_wealth(db: Session, member_id: Optional[int] = None) -> Dict[str, Any]:
+def analyze_wealth(db: Session, member_id: int | None = None) -> Dict[str, Any]:
     """
     Convenience function to run wealth analysis.
 
@@ -260,4 +273,3 @@ def analyze_wealth(db: Session, member_id: Optional[int] = None) -> Dict[str, An
         }
     else:
         return analyzer.analyze_all_members(db)
-

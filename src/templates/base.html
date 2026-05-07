@@ -15,9 +15,9 @@
     </style>
 </head>
 <body class="{% block body_class %}bg-gray-100 min-h-screen{% endblock %}">
-    {% include "_partials/header.html" %}
+    {% block header %}{% include "_partials/header.html" %}{% endblock %}
     {% block content %}{% endblock %}
-    {% include "_partials/footer.html" %}
+    {% block footer %}{% include "_partials/footer.html" %}{% endblock %}
     {% block scripts %}{% endblock %}
 </body>
 </html>

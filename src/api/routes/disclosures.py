@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy.orm import Session
 
 from src.db import Asset, Disclosure, Liability, Member, Transaction, get_db_session
@@ -50,8 +50,7 @@ class AssetResponse(BaseModel):
     income_min: float | None
     income_max: float | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TransactionResponse(BaseModel):
@@ -66,8 +65,7 @@ class TransactionResponse(BaseModel):
     amount_max: float | None
     owner: str | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LiabilityResponse(BaseModel):
@@ -79,8 +77,7 @@ class LiabilityResponse(BaseModel):
     amount_min: float | None
     amount_max: float | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DisclosureResponse(BaseModel):
@@ -97,8 +94,7 @@ class DisclosureResponse(BaseModel):
     parsed: bool
     is_ptr: bool = False
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DisclosureDetailResponse(DisclosureResponse):

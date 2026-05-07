@@ -18,11 +18,12 @@ def client():
 
 @pytest.mark.parametrize(
     "path",
-    ["/", "/members", "/disclosures", "/trades", "/parsed", "/anomalies"],
+    ["/", "/members", "/disclosures", "/trades", "/parsed", "/anomalies", "/admin"],
 )
 def test_dashboard_page_renders(client, path):
     response = client.get(path, follow_redirects=False)
     assert response.status_code == 200
     assert "<html" in response.text.lower()
-    # Every page should include the shared header from base.html.
+    # Every page should include the brand name somewhere — base.html
+    # nav for the main pages, the admin top bar for /admin.
     assert "Honest Congress" in response.text

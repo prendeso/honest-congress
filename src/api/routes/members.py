@@ -3,7 +3,7 @@
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from sqlalchemy import exists
 from sqlalchemy.orm import Session
 
@@ -27,8 +27,7 @@ class MemberResponse(BaseModel):
     disclosure_count: int = 0
     anomaly_count: int = 0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MemberDetailResponse(MemberResponse):

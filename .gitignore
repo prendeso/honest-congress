@@ -13,6 +13,8 @@ data/
 
 # Test & debug output
 *.txt
+!requirements.txt
+!requirements-*.txt
 *.json
 *.log
 debug_*.py

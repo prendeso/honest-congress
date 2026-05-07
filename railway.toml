@@ -1,0 +1,25 @@
+# Railway service configuration. Railway auto-detects this file and uses
+# it instead of Nixpacks defaults.
+#
+# Required Railway env vars:
+#   DATABASE_URL       — provided automatically when you attach Postgres
+#   ADMIN_PASSWORD     — strong random string (see /api/anomalies/admin/login)
+#   ALLOWED_ORIGINS    — your dashboard domain(s); comma-separated
+#   ENV=production     — enables production-mode validation
+# Optional:
+#   CONGRESS_GOV_API_KEY, QUIVERQUANT_API_KEY
+#   LATE_FILING_MIN_DAYS (default 60), LATE_FILING_MIN_AMOUNT_USD (default 50000)
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+# Run schema migrations before each deploy — keeps the prod schema in lock
+# step with the code that's about to start serving traffic.
+preDeployCommand = "alembic upgrade head"
+startCommand = "uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"
+healthcheckPath = "/health"
+healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 3

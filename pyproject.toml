@@ -1,0 +1,46 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "honest-congress"
+version = "0.1.0"
+description = "Analyze congressional financial disclosures to detect anomalies and potential inconsistencies"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+
+dependencies = [
+    "fastapi>=0.115,<1.0",
+    "uvicorn[standard]>=0.30,<1.0",
+    "sqlalchemy>=2.0,<3.0",
+    "alembic>=1.13,<2.0",
+    "psycopg[binary]>=3.1,<4.0",
+    "pydantic>=2.7,<3.0",
+    "pydantic-settings>=2.4,<3.0",
+    "python-dotenv>=1.0,<2.0",
+    "requests>=2.32,<3.0",
+    "beautifulsoup4>=4.12,<5.0",
+    "lxml>=5.0,<7.0",
+    "pdfplumber>=0.11,<1.0",
+    "yfinance>=0.2.40,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10.0",
+    "httpx>=0.27,<1.0",
+]
+
+[project.scripts]
+honest-congress = "src.cli:main"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.setuptools.package-data]
+src = ["**/*.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

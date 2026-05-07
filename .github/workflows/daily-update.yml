@@ -13,21 +13,6 @@ jobs:
   update-disclosures:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:15
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: honest_congress
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -43,21 +28,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Create .env file
-        run: |
-          cat << EOF > .env
-          DATABASE_URL=postgresql://postgres:postgres@localhost:5432/honest_congress
-          CONGRESS_GOV_API_KEY=${{ secrets.CONGRESS_GOV_API_KEY }}
-          LOG_LEVEL=INFO
-          EOF
-
-      - name: Initialize database
+      # We point at Railway's external Postgres URL so each daily run
+      # ingests into the *same* database the deployed app reads from.
+      # Configure the secret in repo settings → Secrets → Actions.
+      - name: Run migrations
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli init
 
-      - name: Ingest member data
+      - name: Ingest disclosure data
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
+          QUIVERQUANT_API_KEY: ${{ secrets.QUIVERQUANT_API_KEY }}
         run: python -m src.cli ingest
 
       - name: Run anomaly analysis
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli analyze
 
       - name: Generate summary report
@@ -70,4 +58,3 @@ jobs:
         if: failure()
         run: |
           echo "::error::Daily disclosure update failed. Check logs for details."
-

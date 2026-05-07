@@ -5,7 +5,7 @@ import logging
 import sys
 from datetime import datetime
 
-from src.db import init_db, get_db
+from src.db import get_db
 from src.ingestion import run_ingestion
 from src.analysis import analyze_wealth
 
@@ -20,10 +20,20 @@ def setup_logging(verbose: bool = False):
 
 
 def cmd_init(args):
-    """Initialize the database."""
-    print("Initializing database...")
-    init_db()
-    print("Database initialized successfully!")
+    """Initialize / migrate the database.
+
+    Runs Alembic to upgrade the configured database to the latest revision.
+    Equivalent to `alembic upgrade head` and safe to run repeatedly.
+    """
+    from pathlib import Path
+    from alembic import command
+    from alembic.config import Config
+
+    repo_root = Path(__file__).resolve().parent.parent
+    alembic_cfg = Config(str(repo_root / "alembic.ini"))
+    print("Running database migrations (alembic upgrade head)...")
+    command.upgrade(alembic_cfg, "head")
+    print("Database is up to date.")
 
 
 def cmd_ingest(args):
@@ -316,13 +326,19 @@ def cmd_fix_urls(args):
 
 def cmd_serve(args):
     """Start the API server."""
+    import os
     import uvicorn
 
-    print(f"Starting server on {args.host}:{args.port}...")
+    # Honor PORT/HOST env vars when CLI flags weren't supplied — required for
+    # Railway / Heroku / Fly which inject PORT.
+    host = args.host or os.getenv("HOST", "0.0.0.0")
+    port = args.port or int(os.getenv("PORT", "8000"))
+
+    print(f"Starting server on {host}:{port}...")
     uvicorn.run(
         "src.api.main:app",
-        host=args.host,
-        port=args.port,
+        host=host,
+        port=port,
         reload=args.reload,
     )
 
@@ -512,14 +528,14 @@ def main():
     serve_parser = subparsers.add_parser("serve", help="Start API server")
     serve_parser.add_argument(
         "--host",
-        default="127.0.0.1",
-        help="Host to bind to (default: 127.0.0.1)"
+        default=None,
+        help="Host to bind to (default: $HOST or 0.0.0.0)"
     )
     serve_parser.add_argument(
         "-p", "--port",
         type=int,
-        default=8000,
-        help="Port to bind to (default: 8000)"
+        default=None,
+        help="Port to bind to (default: $PORT or 8000)"
     )
     serve_parser.add_argument(
         "--reload",

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 
-from src.db import init_db, SessionLocal
+from src.db import SessionLocal
 from src.api.routes import members, disclosures, anomalies, health, assets
 from src.api.routes import dashboard_v2, performance, admin
 from src.config import get_settings
@@ -30,11 +30,13 @@ DISCLOSURES_DIR = DATA_DIR / "disclosures"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler."""
-    # Startup
+    """Application lifespan handler.
+
+    The schema is no longer created at startup. Run `alembic upgrade head`
+    as part of the release/deploy step (Railway is configured to do this in
+    railway.toml). The CLI `init` command runs the same migration locally.
+    """
     logger.info("Starting Honest Congress API...")
-    init_db()
-    logger.info("Database initialized")
 
     db = SessionLocal()
     try:
@@ -67,11 +69,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS — driven by ALLOWED_ORIGINS env var. Comma-separated list (or "*"
+# for any). When using "*", credentials must be disabled per the CORS spec.
+_origins = settings.allowed_origins_list
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
-    allow_credentials=True,
+    allow_origins=_origins,
+    allow_credentials=_origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

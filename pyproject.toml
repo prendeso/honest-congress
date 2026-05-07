@@ -24,6 +24,7 @@ dependencies = [
     "lxml>=5.0,<7.0",
     "pdfplumber>=0.11,<1.0",
     "yfinance>=0.2.40,<1.0",
+    "jinja2>=3.1,<4.0",
 ]
 
 [project.optional-dependencies]
@@ -60,11 +61,8 @@ extend-exclude = [
     "alembic/versions",
     "docs/archive",
     "scripts",
-    # Files containing inline HTML/JS templates — being rewritten in
-    # Phase 4 of the modernization plan (Jinja2 + HTMX). Linting them
-    # produces hundreds of false positives in template strings.
-    "src/api/routes/dashboard.py",
-    "src/api/routes/dashboard_v2.py",
+    # admin.py still embeds HTML for the admin panel; will be moved to a
+    # template alongside the rest in a follow-up.
     "src/api/routes/admin.py",
     "verify_retired_fix.py",
 ]

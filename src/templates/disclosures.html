@@ -1,0 +1,386 @@
+{% extends "base.html" %}
+
+{% block title %}Disclosures &mdash; Honest Congress{% endblock %}
+
+{% block content %}
+{% raw %}
+<div x-data="disclosuresPage()" x-init="init()" x-cloak>
+        
+
+        <div class="container mx-auto px-4 py-8">
+            <div class="glass-card rounded-xl shadow-lg p-6">
+                <h2 class="text-3xl font-bold text-gray-800 mb-6">📄 Financial Disclosures</h2>
+
+                <div class="mb-6 p-4 bg-blue-50 rounded-lg">
+                    <p class="text-blue-800">
+                        <strong>Financial Disclosures (FD)</strong> are annual reports where members report their assets, 
+                        income, liabilities, and transactions. These are different from PTRs (stock trades).
+                    </p>
+                </div>
+
+                <!-- Filters -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                    <input type="text" 
+                           x-model="memberSearch" 
+                           @input.debounce.300ms="loadDisclosures()"
+                           placeholder="Search member..." 
+                           class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+
+                    <select x-model="yearFilter" @change="loadDisclosures()" class="border rounded-lg px-4 py-2">
+                        <option value="">All Years</option>
+                        <option value="2026">2026</option>
+                        <option value="2025">2025</option>
+                        <option value="2024">2024</option>
+                        <option value="2023">2023</option>
+                        <option value="2022">2022</option>
+                        <option value="2021">2021</option>
+                        <option value="2020">2020</option>
+                        <option value="2019">2019</option>
+                        <option value="2018">2018</option>
+                        <option value="2017">2017</option>
+                        <option value="2016">2016</option>
+                        <option value="2015">2015</option>
+                        <option value="2014">2014</option>
+                        <option value="2013">2013</option>
+                        <option value="2012">2012</option>
+                    </select>
+
+                    <select x-model="typeFilter" @change="loadDisclosures()" class="border rounded-lg px-4 py-2">
+                        <option value="">All Types</option>
+                        <option value="A">A - Annual Report</option>
+                        <option value="C">C - Candidate Report</option>
+                        <option value="FD">FD - Financial Disclosure</option>
+                        <option value="G">G - Gingles Report</option>
+                        <option value="H">H - House Member Report</option>
+                        <option value="O">O - Original Report</option>
+                        <option value="P">P - Periodic Report</option>
+                        <option value="T">T - Termination Report</option>
+                        <option value="X">X - Amended/Corrected</option>
+                    </select>
+
+                    <select x-model="parsedFilter" @change="loadDisclosures()" class="border rounded-lg px-4 py-2">
+                        <option value="">All Status</option>
+                        <option value="true">Parsed</option>
+                        <option value="false">Not Parsed</option>
+                    </select>
+                </div>
+                <!-- Filing Type Legend -->
+                <div class="mb-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
+                    <h3 class="font-semibold text-blue-900 mb-3">📋 Filing Type Legend</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3 text-sm">
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">A</span>
+                            <p class="text-xs text-blue-800 mt-1">Annual Report</p>
+                            <p class="text-xs text-gray-500">(24)</p>
+                        </div>
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">C</span>
+                            <p class="text-xs text-blue-800 mt-1">Candidate Report</p>
+                            <p class="text-xs text-gray-500">(48)</p>
+                        </div>
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">FD</span>
+                            <p class="text-xs text-blue-800 mt-1">Financial Disclosure</p>
+                            <p class="text-xs text-gray-500">(4,742)</p>
+                        </div>
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">G</span>
+                            <p class="text-xs text-blue-800 mt-1">Gingles Report</p>
+                            <p class="text-xs text-gray-500">(1)</p>
+                        </div>
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">H</span>
+                            <p class="text-xs text-blue-800 mt-1">House Member Report</p>
+                            <p class="text-xs text-gray-500">(43)</p>
+                        </div>
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">O</span>
+                            <p class="text-xs text-blue-800 mt-1">Original Report</p>
+                            <p class="text-xs text-gray-500">(212)</p>
+                        </div>
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">P</span>
+                            <p class="text-xs text-blue-800 mt-1">Periodic Report</p>
+                            <p class="text-xs text-gray-500">(188)</p>
+                        </div>
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">T</span>
+                            <p class="text-xs text-blue-800 mt-1">Termination Report</p>
+                            <p class="text-xs text-gray-500">(1,256)</p>
+                        </div>
+                        <div class="bg-white p-3 rounded border border-blue-100">
+                            <span class="font-medium text-blue-900">X</span>
+                            <p class="text-xs text-blue-800 mt-1">Amended/Corrected</p>
+                            <p class="text-xs text-gray-500">(191)</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Loading -->
+                <template x-if="loading">
+                    <div class="text-center py-12">
+                        <div class="animate-spin inline-block w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full mb-4"></div>
+                        <p class="text-gray-600">Loading disclosures...</p>
+                    </div>
+                </template>
+
+                <!-- Disclosures Table -->
+                <template x-if="!loading">
+                    <div class="overflow-x-auto">
+                        <table class="w-full" style="table-layout: fixed;">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100 w-1/4" @click="sortBy('member')">
+                                        Member <span x-show="sortField === 'member'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100 w-16" @click="sortBy('year')">
+                                        Year <span x-show="sortField === 'year'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100 w-24" @click="sortBy('type')">
+                                        Type <span x-show="sortField === 'type'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100 w-24" @click="sortBy('status')">
+                                        Status <span x-show="sortField === 'status'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 w-20">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y">
+                                <template x-for="disc in disclosures" :key="disc.id">
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-4 py-3 font-medium" x-text="disc.member_name || 'Unknown'"></td>
+                                        <td class="px-4 py-3" x-text="disc.filing_year"></td>
+                                        <td class="px-4 py-3">
+                                            <span class="px-2 py-1 bg-green-100 text-green-800 rounded text-sm" x-text="disc.filing_type"></span>
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span :class="disc.parsed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'"
+                                                  class="px-2 py-1 rounded text-sm font-medium"
+                                                  x-text="disc.parsed ? 'Parsed' : 'Pending'"></span>
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <template x-if="disc.document_url">
+                                                <button @click="openPdfOrFallback(disc)" 
+                                                        class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+                                                    View PDF
+                                                </button>
+                                            </template>
+                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+
+                        <template x-if="disclosures.length === 0">
+                            <div class="text-center py-12 text-gray-500">
+                                No disclosures found matching your filters.
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- Pagination -->
+                <template x-if="!loading && disclosures.length > 0">
+                    <div class="mt-6 flex justify-between items-center">
+                        <span class="text-gray-600 text-sm">
+                            Showing <span x-text="disclosures.length"></span> of <span x-text="total"></span> disclosures
+                        </span>
+                        <div class="flex gap-2">
+                            <button @click="previousPage()" 
+                                    :disabled="page <= 1"
+                                    class="px-4 py-2 border rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50">
+                                Previous
+                            </button>
+                            <span class="px-4 py-2" x-text="'Page ' + page"></span>
+                            <button @click="nextPage()" 
+                                    :disabled="page * pageSize >= total"
+                                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Next
+                            </button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        
+    </div>
+{% endraw %}
+{% endblock %}
+
+{% block scripts %}
+{% raw %}
+<script>
+        function disclosuresPage() {
+            return {
+                disclosures: [],
+                total: 0,
+                page: 1,
+                pageSize: 50,
+                memberSearch: '',
+                yearFilter: '',
+                typeFilter: '',
+                parsedFilter: '',
+                loading: false,
+                sortField: 'filing_date',
+                sortOrder: 'desc',
+                showPdfFallback: false,
+                selectedPdf: null,
+
+                async init() {
+                    console.log('[Disclosures] Initializing...');
+                    await this.loadDisclosures();
+                },
+
+                async loadDisclosures() {
+                    this.loading = true;
+
+                    try {
+                        // Use server-side sorting for accurate results across all entries
+                        let url = `/api/disclosures?page=${this.page}&page_size=${this.pageSize}&is_ptr=false`;
+                        url += `&sort_by=${this.sortField}&sort_order=${this.sortOrder}`;
+
+                        if (this.yearFilter) url += `&filing_year=${this.yearFilter}`;
+                        if (this.typeFilter) url += `&filing_type=${encodeURIComponent(this.typeFilter)}`;
+                        if (this.parsedFilter !== '') url += `&parsed=${this.parsedFilter}`;
+
+                        console.log('[Disclosures] Fetching (server-side sort):', url);
+                        const data = await fetch(url).then(r => r.json());
+
+                        this.total = data.total || 0;
+                        this.disclosures = data.disclosures || [];
+
+                        console.log('[Disclosures] Loaded:', this.disclosures.length, 'total:', this.total);
+                    } catch (e) {
+                        console.error('[Disclosures] Error:', e);
+                        alert('Failed to load disclosures: ' + e.message);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                sortBy(field) {
+                    // Map field names for server-side sorting
+                    const fieldMap = {
+                        'member': 'member_name',
+                        'year': 'year',
+                        'type': 'type',
+                        'status': 'status'
+                    };
+
+                    const sortField = fieldMap[field] || field;
+
+                    if (this.sortField === sortField) {
+                        this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        this.sortField = sortField;
+                        this.sortOrder = 'asc';
+                    }
+
+                    this.page = 1;  // Reset to page 1 when changing sort
+                    this.loadDisclosures();
+                },
+
+                openPdfOrFallback(disclosure) {
+                    this.selectedPdf = disclosure;
+                    console.log('[Disclosures] Attempting to access PDF:', disclosure.document_url);
+
+                    // Strategy: Open in hidden iframe first to detect 404s
+                    // If browser shows error page, we'll detect it and show fallback
+                    // If PDF loads, we open it properly in new tab
+
+                    const testFrame = document.createElement('iframe');
+                    testFrame.style.display = 'none';
+                    let hasErrored = false;
+                    let checkTimeout;
+
+                    // If the iframe receives an error or fails to load, show fallback
+                    testFrame.onerror = () => {
+                        hasErrored = true;
+                        console.error('[Disclosures] iframe onerror triggered - PDF likely 404');
+                        cleanup();
+                        this.showPdfFallback = true;
+                    };
+
+                    // Monitor iframe content for error page indicators
+                    const monitorFrame = () => {
+                        try {
+                            const frameDoc = testFrame.contentDocument || testFrame.contentWindow.document;
+                            if (frameDoc) {
+                                const text = frameDoc.body.innerText || '';
+                                const title = frameDoc.title || '';
+
+                                // Check for common 404 indicators
+                                if (text.includes('404') || 
+                                    text.includes('not found') || 
+                                    text.includes('File or directory not found') ||
+                                    title.includes('404')) {
+                                    hasErrored = true;
+                                    console.error('[Disclosures] Detected 404 error page in iframe');
+                                    cleanup();
+                                    this.showPdfFallback = true;
+                                    return;
+                                }
+
+                                // If we got here and it's still loading, wait a bit more
+                                if (!frameDoc.body || frameDoc.readyState !== 'complete') {
+                                    checkTimeout = setTimeout(monitorFrame, 100);
+                                    return;
+                                }
+
+                                // Content loaded successfully - open in new tab
+                                console.log('[Disclosures] PDF appears valid, opening in new tab');
+                                cleanup();
+                                window.open(disclosure.document_url, '_blank');
+                            }
+                        } catch (e) {
+                            // CORS or other issue - try opening anyway
+                            // Real PDFs will work, fake ones will show error page in browser
+                            console.log('[Disclosures] iframe access blocked by CORS, opening directly');
+                            cleanup();
+                            window.open(disclosure.document_url, '_blank');
+                        }
+                    };
+
+                    const cleanup = () => {
+                        clearTimeout(checkTimeout);
+                        testFrame.onerror = null;
+                        if (testFrame.parentNode) {
+                            testFrame.parentNode.removeChild(testFrame);
+                        }
+                    };
+
+                    // Set overall timeout
+                    const overallTimeout = setTimeout(() => {
+                        if (!hasErrored) {
+                            console.log('[Disclosures] Check timeout, opening PDF');
+                            cleanup();
+                            window.open(disclosure.document_url, '_blank');
+                        }
+                    }, 2000);
+
+                    checkTimeout = overallTimeout;
+
+                    // Append iframe and load URL
+                    document.body.appendChild(testFrame);
+                    testFrame.src = disclosure.document_url;
+                },
+
+                previousPage() {
+                    if (this.page > 1) {
+                        this.page--;
+                        this.loadDisclosures();
+                    }
+                },
+
+                nextPage() {
+                    if (this.page * this.pageSize < this.total) {
+                        this.page++;
+                        this.loadDisclosures();
+                    }
+                }
+            };
+        }
+    </script>
+{% endraw %}
+{% endblock %}

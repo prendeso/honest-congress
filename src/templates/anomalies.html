@@ -1,30 +1,12 @@
-"""Enhanced web dashboard with detailed anomaly display."""
+{% extends "base.html" %}
 
-from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+{% block title %}Anomalies &mdash; Honest Congress{% endblock %}
 
-router = APIRouter()
-
-DASHBOARD_HTML = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Honest Congress - Financial Disclosure Analyzer</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
-    <style>[x-cloak] { display: none !important; }</style>
-</head>
-<body class="bg-gray-100 min-h-screen">
-    <div x-data="dashboard()" x-init="init()" x-cloak>
+{% block content %}
+{% raw %}
+<div x-data="dashboard()" x-init="init()" x-cloak>
         <!-- Header -->
-        <header class="bg-blue-900 text-white shadow-lg">
-            <div class="container mx-auto px-4 py-6">
-                <h1 class="text-3xl font-bold">🏛️ Honest Congress</h1>
-                <p class="text-blue-200 mt-1">Congressional Financial Disclosure Analyzer</p>
-            </div>
-        </header>
+        
 
         <!-- Stats Cards -->
         <div class="container mx-auto px-4 py-8">
@@ -280,7 +262,7 @@ DASHBOARD_HTML = """
                             <code class="bg-gray-100 px-2 py-1 rounded text-sm mt-4 inline-block">python -m src.cli analyze</code>
                         </div>
                     </template>
-                    
+
                     <template x-if="anomalies.length > 0">
                         <div class="space-y-4">
                             <template x-for="anomaly in anomalies" :key="anomaly.id">
@@ -312,10 +294,10 @@ DASHBOARD_HTML = """
                                             <span class="text-xs text-gray-500" x-text="getAnomalyTypeName(anomaly.anomaly_type)"></span>
                                         </div>
                                     </div>
-                                    
+
                                     <!-- Description -->
                                     <p class="text-gray-700 mt-2" x-text="anomaly.description"></p>
-                                    
+
                                     <!-- Details Row -->
                                     <div class="mt-3 pt-3 border-t border-gray-200 flex flex-wrap gap-4 text-sm">
                                         <div class="flex items-center gap-1">
@@ -339,7 +321,7 @@ DASHBOARD_HTML = """
                                             <span class="font-medium" x-text="getSourceFromType(anomaly.anomaly_type)"></span>
                                         </div>
                                     </div>
-                                    
+
                                     <!-- What This Means -->
                                     <div class="mt-3 p-2 bg-white bg-opacity-50 rounded text-sm">
                                         <span class="font-medium text-gray-700">💡 What this means: </span>
@@ -349,7 +331,7 @@ DASHBOARD_HTML = """
                             </template>
                         </div>
                     </template>
-                    
+
                     <div x-show="anomalies.length > 0" class="mt-4 flex justify-between items-center">
                         <span class="text-gray-500 text-sm">Showing <span x-text="anomalies.length"></span> of <span x-text="stats.totalAnomalies"></span> anomalies</span>
                         <div class="flex gap-2">
@@ -363,16 +345,14 @@ DASHBOARD_HTML = """
         </div>
 
         <!-- Footer -->
-        <footer class="bg-gray-800 text-gray-400 py-8 mt-12">
-            <div class="container mx-auto px-4 text-center">
-                <p>Honest Congress - Congressional Financial Disclosure Analyzer</p>
-                <p class="text-sm mt-2">Data: House Clerk, QuiverQuant API, congress-legislators</p>
-                <p class="text-sm mt-2"><a href="/docs" class="text-blue-400 hover:underline">API Documentation</a></p>
-            </div>
-        </footer>
+        
     </div>
+{% endraw %}
+{% endblock %}
 
-    <script>
+{% block scripts %}
+{% raw %}
+<script>
         function dashboard() {
             return {
                 tab: 'members',
@@ -512,12 +492,5 @@ DASHBOARD_HTML = """
             }
         }
     </script>
-</body>
-</html>
-"""
-
-
-@router.get("/", response_class=HTMLResponse)
-async def dashboard():
-    """Serve the enhanced dashboard."""
-    return HTMLResponse(content=DASHBOARD_HTML)
+{% endraw %}
+{% endblock %}

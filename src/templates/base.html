@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Honest Congress{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    {% block head_extra %}{% endblock %}
+    <style>
+        [x-cloak] { display: none !important; }
+        .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
+        .btn-primary { @apply bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition; }
+        .btn-secondary { @apply bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition; }
+    </style>
+</head>
+<body class="{% block body_class %}bg-gray-100 min-h-screen{% endblock %}">
+    {% include "_partials/header.html" %}
+    {% block content %}{% endblock %}
+    {% include "_partials/footer.html" %}
+    {% block scripts %}{% endblock %}
+</body>
+</html>

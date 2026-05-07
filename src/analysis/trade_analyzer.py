@@ -9,8 +9,10 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, and_
 
 from src.db.models import Member, Disclosure, Transaction, Anomaly, TransactionType
+from src.config import get_settings
 
 logger = logging.getLogger(__name__)
+_settings = get_settings()
 
 # Sector keywords for classification
 SECTOR_KEYWORDS = {
@@ -52,11 +54,24 @@ class TradeAnalyzer:
         min_trades_for_concentration: int = 5,
         concentration_threshold_percent: float = 50.0,
         frequency_threshold_per_month: int = 10,
+        late_filing_min_days: Optional[int] = None,
+        late_filing_min_amount_usd: Optional[int] = None,
     ):
         self.ptr_deadline_days = ptr_deadline_days
         self.min_trades_for_concentration = min_trades_for_concentration
         self.concentration_threshold_percent = concentration_threshold_percent
         self.frequency_threshold_per_month = frequency_threshold_per_month
+        # The "late filing" detector previously fired on every PTR more than
+        # 45 days late, generating thousands of low-signal anomalies. We now
+        # require a much later filing AND a non-trivial transaction size.
+        self.late_filing_min_days = (
+            late_filing_min_days if late_filing_min_days is not None
+            else _settings.late_filing_min_days
+        )
+        self.late_filing_min_amount_usd = (
+            late_filing_min_amount_usd if late_filing_min_amount_usd is not None
+            else _settings.late_filing_min_amount_usd
+        )
 
     def _large_trade_asset_name(self, txn: Transaction) -> str:
         return txn.ticker or (txn.description[:20] if txn.description else "unknown")
@@ -143,9 +158,7 @@ class TradeAnalyzer:
 
         self._sync_large_trade_anomalies(db, member_id=member_id)
 
-        # Run different anomaly checks
-        # NOTE: Late filings check disabled - creates 6000+ anomalies, too noisy
-        # anomalies.extend(self._check_late_filings(db, member_id, member))
+        anomalies.extend(self._check_late_filings(db, member_id, member))
         anomalies.extend(self._check_sector_concentration(transactions, member_id, member))
         anomalies.extend(self._check_trading_frequency(transactions, member_id, member))
         anomalies.extend(self._check_large_trades(transactions, member_id, member))
@@ -158,10 +171,17 @@ class TradeAnalyzer:
         member_id: int,
         member: Member
     ) -> List[Dict[str, Any]]:
-        """Check for PTR filings that were submitted late (>45 days after trade)."""
-        anomalies = []
+        """Check for materially late PTR filings.
 
-        # Get PTR disclosures with transactions
+        Only flags trades where (filing_date - transaction_date) exceeds
+        `late_filing_min_days` AND the transaction's max amount meets
+        `late_filing_min_amount_usd`. These thresholds keep the signal
+        meaningful — the raw "anything past the 45-day STOCK Act deadline"
+        check produced thousands of small, noisy anomalies.
+        """
+        anomalies = []
+        min_amount = Decimal(str(self.late_filing_min_amount_usd))
+
         ptr_disclosures = db.query(Disclosure).filter(
             Disclosure.member_id == member_id,
             Disclosure.is_ptr == True,
@@ -174,40 +194,47 @@ class TradeAnalyzer:
             ).all()
 
             for txn in transactions:
-                if txn.transaction_date and disclosure.filing_date:
-                    days_to_file = (disclosure.filing_date - txn.transaction_date).days
+                if not (txn.transaction_date and disclosure.filing_date):
+                    continue
 
-                    if days_to_file > self.ptr_deadline_days:
-                        days_late = days_to_file - self.ptr_deadline_days
-                        severity = min(10, 3 + (days_late // 15))  # Severity increases every 15 days
+                days_to_file = (disclosure.filing_date - txn.transaction_date).days
+                if days_to_file <= self.late_filing_min_days:
+                    continue
 
-                        # Use vague ranges for days late
-                        if days_late <= 7:
-                            late_range = "slightly late (within a week)"
-                        elif days_late <= 30:
-                            late_range = "moderately late (1-4 weeks)"
-                        elif days_late <= 90:
-                            late_range = "significantly late (1-3 months)"
-                        else:
-                            late_range = "severely late (over 3 months)"
+                # Skip small trades — late filings on de minimis amounts are
+                # mostly clerical and we don't want to flood the table.
+                txn_amount = txn.amount_max or txn.amount_min
+                if txn_amount is None or txn_amount < min_amount:
+                    continue
 
-                        anomalies.append({
-                            "member_id": member_id,
-                            "disclosure_id": disclosure.id,
-                            "transaction_id": txn.id,
-                            "anomaly_type": "late_filing",
-                            "severity": severity,
-                            "title": f"Late PTR filing: {late_range}",
-                            "description": (
-                                f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
-                                f"was filed {late_range} on "
-                                f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
-                                f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
-                                f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
-                            ),
-                            "computed_value": Decimal(str(days_to_file)),
-                            "threshold_value": Decimal(str(self.ptr_deadline_days)),
-                        })
+                days_late = days_to_file - self.ptr_deadline_days
+                if days_late <= 30:
+                    severity = "low"
+                    late_range = "moderately late (1-4 weeks)"
+                elif days_late <= 90:
+                    severity = "medium"
+                    late_range = "significantly late (1-3 months)"
+                else:
+                    severity = "high"
+                    late_range = "severely late (over 3 months)"
+
+                anomalies.append({
+                    "member_id": member_id,
+                    "disclosure_id": disclosure.id,
+                    "transaction_id": txn.id,
+                    "anomaly_type": "late_filing",
+                    "severity": severity,
+                    "title": f"Late PTR filing: {late_range}",
+                    "description": (
+                        f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
+                        f"was filed {late_range} on "
+                        f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
+                        f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
+                        f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
+                    ),
+                    "computed_value": Decimal(str(days_to_file)),
+                    "threshold_value": Decimal(str(self.ptr_deadline_days)),
+                })
 
         return anomalies
 

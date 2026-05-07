@@ -66,13 +66,18 @@ def cmd_ingest_trades(args):
 
 def cmd_analyze(args):
     """Run anomaly analysis."""
-    from src.analysis import analyze_wealth, analyze_trades
+    from src.analysis import (
+        analyze_wealth,
+        analyze_trades,
+        run_advanced_anomaly_detection,
+        run_extended_anomaly_detection,
+    )
 
     analysis_types = []
 
-    if args.type == "all" or args.type == "wealth":
+    if args.type in ("all", "wealth"):
         analysis_types.append(("wealth", analyze_wealth))
-    if args.type == "all" or args.type == "trades":
+    if args.type in ("all", "trades"):
         analysis_types.append(("trades", analyze_trades))
 
     total_anomalies = 0
@@ -94,11 +99,31 @@ def cmd_analyze(args):
 
         total_anomalies += result['total_anomalies']
 
-        # Show top anomalies if verbose
         if args.verbose and result.get('anomalies'):
             print(f"\n  Top anomalies:")
             for a in result['anomalies'][:5]:
                 print(f"    - [{a.get('severity', '?')}] {a['title']}")
+
+    # Advanced + extended detectors run only on the full (all-members) pass.
+    # They scan cross-member patterns that don't make sense per-member.
+    if args.type in ("all", "advanced") and not args.member_id:
+        print("\nRunning advanced + extended detection...")
+        with get_db() as db:
+            advanced = run_advanced_anomaly_detection(db)
+            extended = run_extended_anomaly_detection(db, advanced)
+
+        print(f"\nAdvanced Analysis Results:")
+        print(f"  Wealth/Salary: {len(advanced.get('wealth_anomalies', []))}")
+        print(f"  Asset Appreciation: {len(advanced.get('asset_anomalies', []))}")
+        print(f"  Stock Outperformance: {len(advanced.get('stock_anomalies', []))}")
+
+        print(f"\nExtended Analysis Results:")
+        print(f"  Trade Timing: {len(extended.get('timing_anomalies', []))}")
+        print(f"  Committee Conflicts: {len(extended.get('conflict_anomalies', []))}")
+        print(f"  Loss Avoidance: {len(extended.get('loss_avoidance_anomalies', []))}")
+        print(f"  Multi-Factor Risk: {len(extended.get('combination_anomalies', []))}")
+
+        total_anomalies += advanced.get("total", 0) + extended.get("total", 0)
 
     print(f"\nTotal anomalies detected: {total_anomalies}")
 
@@ -358,9 +383,14 @@ def main():
     )
     analyze_parser.add_argument(
         "-t", "--type",
-        choices=["all", "wealth", "trades"],
+        choices=["all", "wealth", "trades", "advanced"],
         default="all",
-        help="Type of analysis to run (default: all)"
+        help=(
+            "Type of analysis to run (default: all). 'advanced' runs the "
+            "wealth-vs-salary, rapid asset appreciation, stock outperformance, "
+            "trade timing, committee conflict, loss avoidance, and "
+            "multi-factor risk detectors."
+        ),
     )
     analyze_parser.add_argument(
         "--verbose",

@@ -10,7 +10,12 @@ import threading
 import time
 
 from src.db import get_db_session, Anomaly, Member, Disclosure, Transaction
-from src.analysis import analyze_wealth
+from src.analysis import (
+    analyze_wealth,
+    analyze_trades,
+    run_advanced_anomaly_detection,
+    run_extended_anomaly_detection,
+)
 from src.analysis.trade_analyzer import TradeAnalyzer
 from src.config import get_settings
 from src.api.auth import issue_admin_token, revoke_admin_token, require_admin
@@ -289,13 +294,29 @@ async def run_analysis(
 ):
     """
     Run anomaly analysis on members.
+
+    Runs the full detector suite: wealth, trades, advanced (wealth-vs-salary,
+    rapid asset appreciation, stock outperformance), and extended (trade
+    timing, committee conflicts, loss avoidance, multi-factor risk).
     """
-    result = analyze_wealth(db, member_id)
+    wealth_result = analyze_wealth(db, member_id)
+    trade_result = analyze_trades(db, member_id)
+
+    # Advanced + extended detectors don't currently support per-member
+    # filtering — only run them when no member filter is set.
+    advanced_result: Dict[str, Any] = {}
+    extended_result: Dict[str, Any] = {}
+    if member_id is None:
+        advanced_result = run_advanced_anomaly_detection(db)
+        extended_result = run_extended_anomaly_detection(db, advanced_result)
 
     return {
         "status": "success",
         "message": "Analysis complete",
-        "result": result,
+        "wealth": wealth_result,
+        "trades": trade_result,
+        "advanced": advanced_result,
+        "extended": extended_result,
     }
 
 
@@ -305,7 +326,7 @@ async def regenerate_anomalies(
     _: str = Depends(require_admin),
 ):
     """
-    Clear all anomalies and regenerate them with fresh analysis.
+    Clear all anomalies and regenerate them with the full detector suite.
     """
     from src.analysis.trade_analyzer import TradeAnalyzer
     from src.analysis.wealth_analyzer import WealthAnalyzer
@@ -313,11 +334,10 @@ async def regenerate_anomalies(
     deleted_count = db.query(Anomaly).delete()
     db.commit()
 
-    trade_analyzer = TradeAnalyzer()
-    trade_result = trade_analyzer.analyze_all_members(db)
-
-    wealth_analyzer = WealthAnalyzer()
-    wealth_result = wealth_analyzer.analyze_all_members(db)
+    trade_result = TradeAnalyzer().analyze_all_members(db)
+    wealth_result = WealthAnalyzer().analyze_all_members(db)
+    advanced_result = run_advanced_anomaly_detection(db)
+    extended_result = run_extended_anomaly_detection(db, advanced_result)
 
     return {
         "status": "success",
@@ -325,6 +345,8 @@ async def regenerate_anomalies(
         "deleted": deleted_count,
         "trade_anomalies": trade_result.get("total_anomalies", 0),
         "wealth_anomalies": wealth_result.get("total_anomalies", 0),
+        "advanced_anomalies": advanced_result.get("total", 0),
+        "extended_anomalies": extended_result.get("total", 0),
     }
 
 
@@ -557,10 +579,19 @@ async def full_data_refresh(
                 wealth_analyzer = WealthAnalyzer()
                 wealth_result = wealth_analyzer.analyze_all_members(sync_db)
 
+                with _sync_lock:
+                    _sync_status["message"] = "Step 3/3: Running advanced + extended detection..."
+                    _sync_status["progress"] = 95
+
+                advanced_result = run_advanced_anomaly_detection(sync_db)
+                extended_result = run_extended_anomaly_detection(sync_db, advanced_result)
+
                 results["anomalies"] = {
                     "deleted": deleted_count,
                     "trade_anomalies": trade_result.get("total_anomalies", 0),
                     "wealth_anomalies": wealth_result.get("total_anomalies", 0),
+                    "advanced_anomalies": advanced_result.get("total", 0),
+                    "extended_anomalies": extended_result.get("total", 0),
                 }
 
                 with _sync_lock:

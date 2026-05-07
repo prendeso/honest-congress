@@ -15,7 +15,7 @@ from collections import defaultdict
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from src.db.models import Member, Disclosure, Transaction, Asset, Anomaly
+from src.db.models import Member, Disclosure, Transaction, Asset, Anomaly, TransactionType
 
 logger = logging.getLogger(__name__)
 
@@ -120,12 +120,18 @@ class AdvancedAnomalyDetector:
                             "anomaly_type": "wealth_vs_salary",
                             "severity": severity,
                             "years": f"{first_year}-{last_year}",
+                            "title": (
+                                f"Wealth growth far exceeds salary "
+                                f"({first_year}-{last_year})"
+                            ),
                             "initial_wealth": float(first_wealth),
                             "final_wealth": float(last_wealth),
                             "wealth_growth": wealth_growth,
                             "cumulative_salary": cumulative_salary,
                             "salary_contribution_ratio": salary_contribution_ratio,
                             "growth_multiple_of_salary": wealth_growth / cumulative_salary if cumulative_salary > 0 else 0,
+                            "computed_value": Decimal(str(round(wealth_growth, 2))),
+                            "threshold_value": Decimal(str(round(cumulative_salary, 2))),
                             "description": (
                                 f"Net worth grew from ${first_wealth:,.0f} to ${last_wealth:,.0f} "
                                 f"({wealth_growth:,.0f} total). Cumulative salary over {years_in_office} years: "
@@ -261,6 +267,10 @@ class AdvancedAnomalyDetector:
                                         "chamber": member.chamber,
                                         "anomaly_type": "rapid_asset_appreciation",
                                         "severity": severity,
+                                        "title": (
+                                            f"Rapid appreciation: {asset_desc[:60]} "
+                                            f"({prev['year']}-{curr['year']})"
+                                        ),
                                         "asset_description": asset_desc,
                                         "asset_type": curr["asset_type"],
                                         "start_year": prev["year"],
@@ -270,12 +280,13 @@ class AdvancedAnomalyDetector:
                                         "growth_amount": value_growth,
                                         "growth_percent": growth_percent,
                                         "annual_growth_rate": annual_growth,
+                                        "computed_value": Decimal(str(round(growth_percent, 2))),
+                                        "threshold_value": Decimal("100"),
                                         "description": (
                                             f"{asset_desc} grew from ${prev['value']:,.0f} ({prev['year']}) "
                                             f"to ${curr['value']:,.0f} ({curr['year']}). "
                                             f"Growth: {growth_percent:.0f}% in {years_diff} year(s) "
-                                            f"({annual_growth:.0f}% annually). "
-                                            f"Example: Similar to Ilhan Omar's winery business case."
+                                            f"({annual_growth:.0f}% annually)."
                                         )
                                     })
 
@@ -310,10 +321,14 @@ class AdvancedAnomalyDetector:
 
             for member in members:
                 try:
-                    # Get all trades for this member
-                    trades = db.query(Transaction).filter(
-                        Transaction.member_id == member.id
-                    ).all()
+                    # Get all trades for this member (joined through Disclosure
+                    # because Transaction has no direct member_id column).
+                    trades = (
+                        db.query(Transaction)
+                        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
+                        .filter(Disclosure.member_id == member.id)
+                        .all()
+                    )
 
                     if not trades:
                         continue
@@ -355,14 +370,16 @@ class AdvancedAnomalyDetector:
 
         # Calculate estimated returns
         # Buy trades = negative (outflow), Sell trades = positive (inflow)
-        buys = [t for t in trades if t.type == "purchase"]
-        sells = [t for t in trades if t.type == "sale"]
+        from src.analysis import transaction_amount
+
+        buys = [t for t in trades if t.transaction_type == TransactionType.PURCHASE]
+        sells = [t for t in trades if t.transaction_type == TransactionType.SALE]
 
         if not buys or not sells:
             return None
 
-        total_bought = sum(Decimal(t.amount) if t.amount else Decimal(0) for t in buys)
-        total_sold = sum(Decimal(t.amount) if t.amount else Decimal(0) for t in sells)
+        total_bought = Decimal(str(sum(transaction_amount(t) for t in buys)))
+        total_sold = Decimal(str(sum(transaction_amount(t) for t in sells)))
 
         if total_bought == 0:
             return None
@@ -384,6 +401,7 @@ class AdvancedAnomalyDetector:
                 "chamber": member.chamber,
                 "anomaly_type": "outperforming_trades",
                 "severity": severity,
+                "title": f"Trading returns outperformed market benchmark ({year})",
                 "year": year,
                 "trades_count": len(trades),
                 "buy_trades": len(buys),
@@ -394,6 +412,8 @@ class AdvancedAnomalyDetector:
                 "return_percent": return_percent,
                 "benchmark_return": benchmark * 100,
                 "excess_return": excess_return,
+                "computed_value": Decimal(str(round(return_percent, 2))),
+                "threshold_value": Decimal(str(round(benchmark * 100, 2))),
                 "description": (
                     f"{member.first_name} {member.last_name} trading in {year}: "
                     f"Invested ${total_bought:,.0f}, received ${total_sold:,.0f}. "
@@ -406,33 +426,44 @@ class AdvancedAnomalyDetector:
         return None
 
 
-def run_advanced_anomaly_detection(db: Session) -> Dict:
-    """Run all three anomaly detection types."""
+def run_advanced_anomaly_detection(db: Session, persist: bool = True) -> Dict:
+    """Run all three advanced anomaly detection types.
+
+    When `persist` is true, detected anomalies are written to the database
+    via `persist_anomalies` (deduplicated by member_id+type+title).
+    """
+    from src.analysis import persist_anomalies
+
     detector = AdvancedAnomalyDetector()
 
     logger.info("\n" + "="*70)
     logger.info("ADVANCED ANOMALY DETECTION")
     logger.info("="*70 + "\n")
 
-    # Anomaly 1: Wealth vs Salary
     logger.info("1. Detecting wealth vs salary anomalies...")
     wealth_anomalies = detector.detect_wealth_vs_salary_anomalies(db)
     logger.info(f"   Found {len(wealth_anomalies)} anomalies\n")
 
-    # Anomaly 2: Asset Appreciation
     logger.info("2. Detecting rapid asset appreciation...")
     asset_anomalies = detector.detect_asset_appreciation_anomalies(db)
     logger.info(f"   Found {len(asset_anomalies)} anomalies\n")
 
-    # Anomaly 3: Stock Performance
     logger.info("3. Detecting stock outperformance...")
     stock_anomalies = detector.detect_stock_outperformance_anomalies(db)
     logger.info(f"   Found {len(stock_anomalies)} anomalies\n")
 
+    persisted = 0
+    if persist:
+        persisted += persist_anomalies(db, wealth_anomalies)
+        persisted += persist_anomalies(db, asset_anomalies)
+        persisted += persist_anomalies(db, stock_anomalies)
+        logger.info(f"Persisted {persisted} new anomalies to database.\n")
+
+    total = len(wealth_anomalies) + len(asset_anomalies) + len(stock_anomalies)
     logger.info("="*70)
     logger.info("SUMMARY")
     logger.info("="*70)
-    logger.info(f"Total anomalies detected: {len(wealth_anomalies) + len(asset_anomalies) + len(stock_anomalies)}")
+    logger.info(f"Total anomalies detected: {total}")
     logger.info(f"  • Wealth/Salary: {len(wealth_anomalies)}")
     logger.info(f"  • Asset Appreciation: {len(asset_anomalies)}")
     logger.info(f"  • Stock Outperformance: {len(stock_anomalies)}")
@@ -442,7 +473,8 @@ def run_advanced_anomaly_detection(db: Session) -> Dict:
         "wealth_anomalies": wealth_anomalies,
         "asset_anomalies": asset_anomalies,
         "stock_anomalies": stock_anomalies,
-        "total": len(wealth_anomalies) + len(asset_anomalies) + len(stock_anomalies),
+        "persisted": persisted,
+        "total": total,
     }
 
 

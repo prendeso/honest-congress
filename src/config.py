@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
 
+    # Late-filing detector knobs. Defaults are tuned to keep the noise low —
+    # only PTRs filed >60 days late AND for trades >= $50k are flagged.
+    late_filing_min_days: int = Field(default=60, alias="LATE_FILING_MIN_DAYS")
+    late_filing_min_amount_usd: int = Field(default=50000, alias="LATE_FILING_MIN_AMOUNT_USD")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

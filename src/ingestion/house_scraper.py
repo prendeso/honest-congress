@@ -1,9 +1,10 @@
 """House Clerk HTML scraper for PTR data when XML is unavailable."""
+
 import logging
 import re
 import time
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Dict, List
 
 import requests
 from bs4 import BeautifulSoup
@@ -24,17 +25,19 @@ class HouseClerkScraper:
     def __init__(self, delay: float = 1.0):
         self.delay = delay
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        })
+        self.session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            }
+        )
 
     def search_ptrs(
         self,
         year: int,
         filing_type: str = "P",  # P = PTR
-        last_name: Optional[str] = None,
-        state: Optional[str] = None,
+        last_name: str | None = None,
+        state: str | None = None,
     ) -> List[Dict[str, Any]]:
         """
         Search for PTR filings via the House Clerk search form.
@@ -119,8 +122,6 @@ class HouseClerkScraper:
                 # Typical columns: Name, Office, Year, Filing Type, Document
                 name_cell = cells[0]
                 office_cell = cells[1] if len(cells) > 1 else None
-                year_cell = cells[2] if len(cells) > 2 else None
-                type_cell = cells[3] if len(cells) > 3 else None
                 doc_cell = cells[4] if len(cells) > 4 else None
 
                 # Parse name
@@ -151,17 +152,19 @@ class HouseClerkScraper:
                     filing_date = self._parse_date(date_text)
 
                 if doc_id:
-                    results.append({
-                        "document_id": doc_id,
-                        "first_name": first_name,
-                        "last_name": last_name,
-                        "state": state,
-                        "filing_year": year,
-                        "filing_type": "PTR",
-                        "filing_date": filing_date,
-                        "document_url": doc_link,
-                        "is_ptr": True,
-                    })
+                    results.append(
+                        {
+                            "document_id": doc_id,
+                            "first_name": first_name,
+                            "last_name": last_name,
+                            "state": state,
+                            "filing_year": year,
+                            "filing_type": "PTR",
+                            "filing_date": filing_date,
+                            "document_url": doc_link,
+                            "is_ptr": True,
+                        }
+                    )
 
             except Exception as e:
                 logger.warning(f"Error parsing row: {e}")
@@ -181,27 +184,27 @@ class HouseClerkScraper:
                 return parts[-1], " ".join(parts[:-1])
             return name_text, ""
 
-    def _extract_state(self, office_text: str) -> Optional[str]:
+    def _extract_state(self, office_text: str) -> str | None:
         """Extract state abbreviation from office text."""
         # Look for 2-letter state code
-        match = re.search(r'\b([A-Z]{2})\b', office_text)
+        match = re.search(r"\b([A-Z]{2})\b", office_text)
         if match:
             return match.group(1)
         return None
 
-    def _extract_doc_id(self, url: str) -> Optional[str]:
+    def _extract_doc_id(self, url: str) -> str | None:
         """Extract document ID from URL."""
         # Pattern: /public_disc/ptr-pdfs/2024/12345678.pdf
-        match = re.search(r'/(\d+)\.pdf', url)
+        match = re.search(r"/(\d+)\.pdf", url)
         if match:
             return match.group(1)
         # Alternative pattern
-        match = re.search(r'docid=(\d+)', url, re.IGNORECASE)
+        match = re.search(r"docid=(\d+)", url, re.IGNORECASE)
         if match:
             return match.group(1)
         return None
 
-    def _parse_date(self, date_text: str) -> Optional[datetime]:
+    def _parse_date(self, date_text: str) -> datetime | None:
         """Parse date string into datetime."""
         formats = ["%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"]
         for fmt in formats:
@@ -221,11 +224,10 @@ class HouseClerkScraper:
         return all_results
 
 
-def scrape_house_ptrs(years: Optional[List[int]] = None) -> List[Dict[str, Any]]:
+def scrape_house_ptrs(years: List[int] | None = None) -> List[Dict[str, Any]]:
     """Convenience function to scrape House PTRs."""
     if years is None:
         years = [datetime.now().year]
 
     scraper = HouseClerkScraper()
     return scraper.fetch_all_ptrs(years)
-

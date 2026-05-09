@@ -13,11 +13,14 @@ data/
 
 # Test & debug output
 *.txt
+!requirements.txt
+!requirements-*.txt
 *.json
 *.log
 debug_*.py
 check_*.py
 test_*.py
+!tests/test_*.py
 *_output.txt
 *_result.txt
 *_check.*

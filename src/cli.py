@@ -1,29 +1,39 @@
 #!/usr/bin/env python
 """Command-line interface for Honest Congress."""
+
 import argparse
 import logging
 import sys
 from datetime import datetime
 
-from src.db import init_db, get_db
-from src.ingestion import run_ingestion
 from src.analysis import analyze_wealth
+from src.db import get_db
+from src.ingestion import run_ingestion
 
 
 def setup_logging(verbose: bool = False):
     """Configure logging."""
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
+    logging.basicConfig(level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
 
 def cmd_init(args):
-    """Initialize the database."""
-    print("Initializing database...")
-    init_db()
-    print("Database initialized successfully!")
+    """Initialize / migrate the database.
+
+    Runs Alembic to upgrade the configured database to the latest revision.
+    Equivalent to `alembic upgrade head` and safe to run repeatedly.
+    """
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    from alembic import command
+
+    repo_root = Path(__file__).resolve().parent.parent
+    alembic_cfg = Config(str(repo_root / "alembic.ini"))
+    print("Running database migrations (alembic upgrade head)...")
+    command.upgrade(alembic_cfg, "head")
+    print("Database is up to date.")
 
 
 def cmd_ingest(args):
@@ -35,13 +45,9 @@ def cmd_ingest(args):
     if include_ptrs:
         print("Including Periodic Transaction Reports (stock trades)")
 
-    summary = run_ingestion(
-        years=years,
-        download_files=args.download,
-        include_ptrs=include_ptrs
-    )
+    summary = run_ingestion(years=years, download_files=args.download, include_ptrs=include_ptrs)
 
-    print(f"\nIngestion complete:")
+    print("\nIngestion complete:")
     print(f"  Members synced: {summary['members']}")
     print(f"  House disclosures: {summary['house_disclosures']}")
     print(f"  House PTRs (stock trades): {summary['house_ptrs']}")
@@ -57,7 +63,7 @@ def cmd_ingest_trades(args):
     with get_db() as db:
         result = ingest_quiverquant_trades(db, chamber=args.chamber)
 
-    print(f"\nTrade Ingestion Complete:")
+    print("\nTrade Ingestion Complete:")
     print(f"  Imported: {result['imported']}")
     print(f"  Duplicates: {result['duplicates']}")
     print(f"  Errors: {result['errors']}")
@@ -66,13 +72,17 @@ def cmd_ingest_trades(args):
 
 def cmd_analyze(args):
     """Run anomaly analysis."""
-    from src.analysis import analyze_wealth, analyze_trades
+    from src.analysis import (
+        analyze_trades,
+        run_advanced_anomaly_detection,
+        run_extended_anomaly_detection,
+    )
 
     analysis_types = []
 
-    if args.type == "all" or args.type == "wealth":
+    if args.type in ("all", "wealth"):
         analysis_types.append(("wealth", analyze_wealth))
-    if args.type == "all" or args.type == "trades":
+    if args.type in ("all", "trades"):
         analysis_types.append(("trades", analyze_trades))
 
     total_anomalies = 0
@@ -92,21 +102,42 @@ def cmd_analyze(args):
             print(f"  Members with anomalies: {result.get('members_with_anomalies', 'N/A')}")
             print(f"  Total anomalies: {result['total_anomalies']}")
 
-        total_anomalies += result['total_anomalies']
+        total_anomalies += result["total_anomalies"]
 
-        # Show top anomalies if verbose
-        if args.verbose and result.get('anomalies'):
-            print(f"\n  Top anomalies:")
-            for a in result['anomalies'][:5]:
+        if args.verbose and result.get("anomalies"):
+            print("\n  Top anomalies:")
+            for a in result["anomalies"][:5]:
                 print(f"    - [{a.get('severity', '?')}] {a['title']}")
+
+    # Advanced + extended detectors run only on the full (all-members) pass.
+    # They scan cross-member patterns that don't make sense per-member.
+    if args.type in ("all", "advanced") and not args.member_id:
+        print("\nRunning advanced + extended detection...")
+        with get_db() as db:
+            advanced = run_advanced_anomaly_detection(db)
+            extended = run_extended_anomaly_detection(db, advanced)
+
+        print("\nAdvanced Analysis Results:")
+        print(f"  Wealth/Salary: {len(advanced.get('wealth_anomalies', []))}")
+        print(f"  Asset Appreciation: {len(advanced.get('asset_anomalies', []))}")
+        print(f"  Stock Outperformance: {len(advanced.get('stock_anomalies', []))}")
+
+        print("\nExtended Analysis Results:")
+        print(f"  Trade Timing: {len(extended.get('timing_anomalies', []))}")
+        print(f"  Committee Conflicts: {len(extended.get('conflict_anomalies', []))}")
+        print(f"  Loss Avoidance: {len(extended.get('loss_avoidance_anomalies', []))}")
+        print(f"  Multi-Factor Risk: {len(extended.get('combination_anomalies', []))}")
+
+        total_anomalies += advanced.get("total", 0) + extended.get("total", 0)
 
     print(f"\nTotal anomalies detected: {total_anomalies}")
 
 
 def cmd_performance(args):
     """Analyze trading performance vs benchmarks."""
-    from src.analysis.performance_analyzer import PerformanceAnalyzer
     from datetime import datetime
+
+    from src.analysis.performance_analyzer import PerformanceAnalyzer
 
     analyzer = PerformanceAnalyzer()
 
@@ -121,13 +152,21 @@ def cmd_performance(args):
             member = result.get("member", {})
             perf = result.get("member_performance", {})
 
-            print(f"\n{member.get('name', 'Unknown')} ({member.get('party', '')} - {member.get('state', '')})")
-            print(f"  Period: {result.get('period', {}).get('start', '')} to {result.get('period', {}).get('end', '')}")
+            print(
+                f"\n{member.get('name', 'Unknown')} ({member.get('party', '')} - {member.get('state', '')})"
+            )
+            print(
+                f"  Period: {result.get('period', {}).get('start', '')} to {result.get('period', {}).get('end', '')}"
+            )
             print(f"  Trades analyzed: {perf.get('trades_analyzed', 0)}")
             print(f"  Total invested: ${perf.get('total_invested', 0):,.0f}")
-            print(f"  Estimated return: {perf.get('estimated_return_pct', 'N/A'):.1f}%" if perf.get('estimated_return_pct') else "  Estimated return: N/A")
+            print(
+                f"  Estimated return: {perf.get('estimated_return_pct', 'N/A'):.1f}%"
+                if perf.get("estimated_return_pct")
+                else "  Estimated return: N/A"
+            )
 
-            print(f"\nBenchmark Comparison:")
+            print("\nBenchmark Comparison:")
             for name, data in result.get("benchmarks", {}).items():
                 ret = data.get("return_pct")
                 print(f"  {name.upper()}: {ret:.1f}%" if ret else f"  {name.upper()}: N/A")
@@ -141,37 +180,41 @@ def cmd_performance(args):
         elif args.rankings:
             print("Ranking members by trading performance...")
             result = analyzer.rank_members_by_performance(
-                db, start_date, end_date,
-                min_trades=args.min_trades,
-                limit=args.limit
+                db, start_date, end_date, min_trades=args.min_trades, limit=args.limit
             )
 
-            print(f"\nPeriod: {result.get('period', {}).get('start', '')} to {result.get('period', {}).get('end', '')}")
+            print(
+                f"\nPeriod: {result.get('period', {}).get('start', '')} to {result.get('period', {}).get('end', '')}"
+            )
             print(f"Members analyzed: {result.get('total_members_analyzed', 0)}")
             print(f"Members beating S&P 500: {result.get('members_beating_sp500', 0)}")
 
             benchmarks = result.get("benchmarks", {})
-            print(f"\nBenchmarks: S&P 500: {benchmarks.get('sp500', 'N/A'):.1f}%, Buffett: {benchmarks.get('buffett', 'N/A'):.1f}%")
+            print(
+                f"\nBenchmarks: S&P 500: {benchmarks.get('sp500', 'N/A'):.1f}%, Buffett: {benchmarks.get('buffett', 'N/A'):.1f}%"
+            )
 
             print(f"\nTop {args.limit} Performers:")
-            for i, p in enumerate(result.get("top_performers", [])[:args.limit], 1):
+            for i, p in enumerate(result.get("top_performers", [])[: args.limit], 1):
                 member = p.get("member", {})
                 ret = p.get("member_performance", {}).get("estimated_return_pct", 0)
                 alpha = p.get("alpha_vs_sp500", 0)
-                print(f"  {i}. {member.get('name', 'Unknown')} ({member.get('party', '')}-{member.get('state', '')}): {ret:.1f}% (α: {alpha:+.1f}%)")
+                print(
+                    f"  {i}. {member.get('name', 'Unknown')} ({member.get('party', '')}-{member.get('state', '')}): {ret:.1f}% (α: {alpha:+.1f}%)"
+                )
 
         else:
             print("Getting performance summary...")
             result = analyzer.get_performance_summary(db)
 
-            print(f"\nPerformance Summary:")
+            print("\nPerformance Summary:")
             print(f"  Members with transactions: {result.get('members_with_transactions', 0)}")
             print(f"  Total transactions: {result.get('total_transactions', 0)}")
             print(f"  Unique tickers: {result.get('unique_tickers', 0)}")
 
-            if result.get('top_traded_tickers'):
-                print(f"\n  Top traded tickers:")
-                for t in result['top_traded_tickers'][:5]:
+            if result.get("top_traded_tickers"):
+                print("\n  Top traded tickers:")
+                for t in result["top_traded_tickers"][:5]:
                     print(f"    {t['ticker']}: {t['count']} trades")
 
 
@@ -195,7 +238,7 @@ def cmd_parse(args):
             delay=args.delay,
         )
 
-    print(f"\nParsing complete:")
+    print("\nParsing complete:")
     print(f"  Successfully parsed: {result['parsed']}")
     print(f"  Failed: {result['failed']}")
     print(f"  Skipped: {result['skipped']}")
@@ -223,11 +266,11 @@ def cmd_download_pdfs(args):
             delay=args.delay,
         )
 
-    print(f"\nDownload complete:")
+    print("\nDownload complete:")
     print(f"  Downloaded: {result['downloaded']}")
     print(f"  Already exists: {result['already_exists']}")
     print(f"  Failed: {result['failed']}")
-    print(f"\nPDFs stored in: data/disclosures/")
+    print("\nPDFs stored in: data/disclosures/")
 
 
 def cmd_fix_dates(args):
@@ -263,9 +306,7 @@ def cmd_fix_urls(args):
     print("Checking disclosure URLs...")
 
     with get_db() as db:
-        disclosures = db.query(Disclosure).filter(
-            ~Disclosure.document_id.like("QANT_%")
-        ).all()
+        disclosures = db.query(Disclosure).filter(~Disclosure.document_id.like("QANT_%")).all()
 
         issues = []
         for d in disclosures:
@@ -291,13 +332,20 @@ def cmd_fix_urls(args):
 
 def cmd_serve(args):
     """Start the API server."""
+    import os
+
     import uvicorn
 
-    print(f"Starting server on {args.host}:{args.port}...")
+    # Honor PORT/HOST env vars when CLI flags weren't supplied — required for
+    # Railway / Heroku / Fly which inject PORT.
+    host = args.host or os.getenv("HOST", "0.0.0.0")
+    port = args.port or int(os.getenv("PORT", "8000"))
+
+    print(f"Starting server on {host}:{port}...")
     uvicorn.run(
         "src.api.main:app",
-        host=args.host,
-        port=args.port,
+        host=host,
+        port=port,
         reload=args.reload,
     )
 
@@ -307,11 +355,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="Honest Congress - Congressional Financial Disclosure Analyzer"
     )
-    parser.add_argument(
-        "-v", "--verbose",
-        action="store_true",
-        help="Enable verbose logging"
-    )
+    parser.add_argument("-v", "--verbose", action="store_true", help="Enable verbose logging")
 
     subparsers = parser.add_subparsers(dest="command", help="Commands")
 
@@ -322,179 +366,130 @@ def main():
     # Ingest command
     ingest_parser = subparsers.add_parser("ingest", help="Ingest disclosure data")
     ingest_parser.add_argument(
-        "-y", "--years",
-        type=int,
-        nargs="+",
-        help="Years to ingest (default: current year)"
+        "-y", "--years", type=int, nargs="+", help="Years to ingest (default: current year)"
     )
+    ingest_parser.add_argument("-d", "--download", action="store_true", help="Download PDF files")
     ingest_parser.add_argument(
-        "-d", "--download",
-        action="store_true",
-        help="Download PDF files"
-    )
-    ingest_parser.add_argument(
-        "--no-ptr",
-        action="store_true",
-        help="Skip Periodic Transaction Reports (stock trades)"
+        "--no-ptr", action="store_true", help="Skip Periodic Transaction Reports (stock trades)"
     )
     ingest_parser.set_defaults(func=cmd_ingest)
 
     # Ingest trades command
-    ingest_trades_parser = subparsers.add_parser("ingest-trades", help="Import trades from QuiverQuant")
+    ingest_trades_parser = subparsers.add_parser(
+        "ingest-trades", help="Import trades from QuiverQuant"
+    )
     ingest_trades_parser.add_argument(
-        "-c", "--chamber",
+        "-c",
+        "--chamber",
         choices=["house", "senate", "both"],
         default="both",
-        help="Which chamber to import (default: both)"
+        help="Which chamber to import (default: both)",
     )
     ingest_trades_parser.set_defaults(func=cmd_ingest_trades)
 
     # Analyze command
     analyze_parser = subparsers.add_parser("analyze", help="Run anomaly analysis")
+    analyze_parser.add_argument("-m", "--member-id", type=int, help="Analyze specific member by ID")
     analyze_parser.add_argument(
-        "-m", "--member-id",
-        type=int,
-        help="Analyze specific member by ID"
-    )
-    analyze_parser.add_argument(
-        "-t", "--type",
-        choices=["all", "wealth", "trades"],
+        "-t",
+        "--type",
+        choices=["all", "wealth", "trades", "advanced"],
         default="all",
-        help="Type of analysis to run (default: all)"
+        help=(
+            "Type of analysis to run (default: all). 'advanced' runs the "
+            "wealth-vs-salary, rapid asset appreciation, stock outperformance, "
+            "trade timing, committee conflict, loss avoidance, and "
+            "multi-factor risk detectors."
+        ),
     )
     analyze_parser.add_argument(
-        "--verbose",
-        action="store_true",
-        help="Show detailed anomaly information"
+        "--verbose", action="store_true", help="Show detailed anomaly information"
     )
     analyze_parser.set_defaults(func=cmd_analyze)
 
     # Parse command
     parse_parser = subparsers.add_parser("parse", help="Parse disclosure PDFs")
     parse_parser.add_argument(
-        "-l", "--limit",
-        type=int,
-        help="Maximum number of disclosures to parse"
+        "-l", "--limit", type=int, help="Maximum number of disclosures to parse"
     )
     parse_parser.add_argument(
-        "-m", "--member-id",
-        type=int,
-        help="Parse disclosures for specific member ID"
+        "-m", "--member-id", type=int, help="Parse disclosures for specific member ID"
+    )
+    parse_parser.add_argument("-y", "--year", type=int, help="Parse disclosures for specific year")
+    parse_parser.add_argument(
+        "--ptr-only", action="store_true", help="Only parse PTR (stock trade) disclosures"
     )
     parse_parser.add_argument(
-        "-y", "--year",
-        type=int,
-        help="Parse disclosures for specific year"
+        "--reparse", action="store_true", help="Re-parse already parsed disclosures"
     )
     parse_parser.add_argument(
-        "--ptr-only",
-        action="store_true",
-        help="Only parse PTR (stock trade) disclosures"
-    )
-    parse_parser.add_argument(
-        "--reparse",
-        action="store_true",
-        help="Re-parse already parsed disclosures"
-    )
-    parse_parser.add_argument(
-        "--delay",
-        type=float,
-        default=1.0,
-        help="Delay between downloads in seconds (default: 1.0)"
+        "--delay", type=float, default=1.0, help="Delay between downloads in seconds (default: 1.0)"
     )
     parse_parser.add_argument(
         "--failed-only",
         action="store_true",
-        help="Only retry disclosures that previously failed to download"
+        help="Only retry disclosures that previously failed to download",
     )
     parse_parser.set_defaults(func=cmd_parse)
 
     # Download PDFs command
-    download_parser = subparsers.add_parser("download-pdfs", help="Download PDFs for all disclosures (paper trail)")
-    download_parser.add_argument(
-        "-l", "--limit",
-        type=int,
-        help="Maximum number of PDFs to download"
+    download_parser = subparsers.add_parser(
+        "download-pdfs", help="Download PDFs for all disclosures (paper trail)"
     )
     download_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Re-download even if file already exists"
+        "-l", "--limit", type=int, help="Maximum number of PDFs to download"
     )
     download_parser.add_argument(
-        "--delay",
-        type=float,
-        default=0.5,
-        help="Delay between downloads in seconds (default: 0.5)"
+        "--force", action="store_true", help="Re-download even if file already exists"
+    )
+    download_parser.add_argument(
+        "--delay", type=float, default=0.5, help="Delay between downloads in seconds (default: 0.5)"
     )
     download_parser.set_defaults(func=cmd_download_pdfs)
 
     # Fix dates command
-    fix_dates_parser = subparsers.add_parser("fix-dates", help="Fix future dates in database records")
+    fix_dates_parser = subparsers.add_parser(
+        "fix-dates", help="Fix future dates in database records"
+    )
     fix_dates_parser.set_defaults(func=cmd_fix_dates)
 
     # Fix URLs command
-    fix_urls_parser = subparsers.add_parser("fix-urls", help="Fix incorrect disclosure URLs in database")
+    fix_urls_parser = subparsers.add_parser(
+        "fix-urls", help="Fix incorrect disclosure URLs in database"
+    )
     fix_urls_parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Preview changes without applying them"
+        "--dry-run", action="store_true", help="Preview changes without applying them"
     )
     fix_urls_parser.set_defaults(func=cmd_fix_urls)
 
     # Performance command
-    perf_parser = subparsers.add_parser("performance", help="Analyze trading performance vs benchmarks")
+    perf_parser = subparsers.add_parser(
+        "performance", help="Analyze trading performance vs benchmarks"
+    )
+    perf_parser.add_argument("-m", "--member-id", type=int, help="Analyze specific member by ID")
     perf_parser.add_argument(
-        "-m", "--member-id",
-        type=int,
-        help="Analyze specific member by ID"
+        "-r", "--rankings", action="store_true", help="Show ranked list of performers"
+    )
+    perf_parser.add_argument("--start-date", type=str, help="Start date (YYYY-MM-DD)")
+    perf_parser.add_argument("--end-date", type=str, help="End date (YYYY-MM-DD)")
+    perf_parser.add_argument(
+        "--min-trades", type=int, default=5, help="Minimum trades for rankings (default: 5)"
     )
     perf_parser.add_argument(
-        "-r", "--rankings",
-        action="store_true",
-        help="Show ranked list of performers"
-    )
-    perf_parser.add_argument(
-        "--start-date",
-        type=str,
-        help="Start date (YYYY-MM-DD)"
-    )
-    perf_parser.add_argument(
-        "--end-date",
-        type=str,
-        help="End date (YYYY-MM-DD)"
-    )
-    perf_parser.add_argument(
-        "--min-trades",
-        type=int,
-        default=5,
-        help="Minimum trades for rankings (default: 5)"
-    )
-    perf_parser.add_argument(
-        "-l", "--limit",
-        type=int,
-        default=10,
-        help="Number of top performers to show (default: 10)"
+        "-l", "--limit", type=int, default=10, help="Number of top performers to show (default: 10)"
     )
     perf_parser.set_defaults(func=cmd_performance)
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start API server")
     serve_parser.add_argument(
-        "--host",
-        default="127.0.0.1",
-        help="Host to bind to (default: 127.0.0.1)"
+        "--host", default=None, help="Host to bind to (default: $HOST or 0.0.0.0)"
     )
     serve_parser.add_argument(
-        "-p", "--port",
-        type=int,
-        default=8000,
-        help="Port to bind to (default: 8000)"
+        "-p", "--port", type=int, default=None, help="Port to bind to (default: $PORT or 8000)"
     )
     serve_parser.add_argument(
-        "--reload",
-        action="store_true",
-        help="Enable auto-reload for development"
+        "--reload", action="store_true", help="Enable auto-reload for development"
     )
     serve_parser.set_defaults(func=cmd_serve)
 
@@ -511,4 +506,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

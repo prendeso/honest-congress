@@ -2,16 +2,19 @@
 Scrape Senate eFD database using API.
 The Senate eFD website uses an undocumented API - let's use it directly!
 """
+
 import logging
-import requests
-import json
-from typing import List, Dict, Optional
 from datetime import datetime
+from typing import Dict, List
+
+import requests
+
 from src.db.database import SessionLocal
-from src.db.models import Disclosure, Member, Chamber
+from src.db.models import Chamber, Disclosure, Member
 from src.ingestion.date_utils import choose_filing_date
 
 logger = logging.getLogger(__name__)
+
 
 class SenateEFDAPI:
     """Use Senate eFD API to fetch disclosures"""
@@ -21,12 +24,16 @@ class SenateEFDAPI:
 
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://efdsearch.senate.gov/",
-        })
+        self.session.headers.update(
+            {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Referer": "https://efdsearch.senate.gov/",
+            }
+        )
 
-    def search_filings(self, last_name: Optional[str] = None, year: Optional[int] = None, filing_type: Optional[str] = None) -> List[Dict]:
+    def search_filings(
+        self, last_name: str | None = None, year: int | None = None, filing_type: str | None = None
+    ) -> List[Dict]:
         """Search for filings using the API."""
         filings = []
 
@@ -74,7 +81,7 @@ class SenateEFDAPI:
                 except Exception as e:
                     logger.debug(f"    Error: {str(e)[:50]}")
 
-            logger.debug(f"  No data found from API endpoints")
+            logger.debug("  No data found from API endpoints")
             return []
 
         except Exception as e:
@@ -119,12 +126,18 @@ class SenateEFDAPI:
 
                         if filings and len(filings) > 0:
                             logger.info(f"  ✓ Got {len(filings)} filings from {url}")
-                            return filings if isinstance(filings, list) else list(filings.values()) if isinstance(filings, dict) else []
+                            return (
+                                filings
+                                if isinstance(filings, list)
+                                else list(filings.values())
+                                if isinstance(filings, dict)
+                                else []
+                            )
 
                 except Exception as e:
                     logger.debug(f"    Failed: {str(e)[:50]}")
 
-            logger.warning(f"  No filings found from any API endpoint")
+            logger.warning("  No filings found from any API endpoint")
             return []
 
         except Exception as e:
@@ -133,9 +146,9 @@ class SenateEFDAPI:
 
     def ingest_year(self, year: int, db_session) -> Dict:
         """Ingest all Senate filings for a year."""
-        logger.info(f"\n{'='*70}")
+        logger.info(f"\n{'=' * 70}")
         logger.info(f"Ingesting Senate eFD for {year}")
-        logger.info(f"{'='*70}")
+        logger.info(f"{'=' * 70}")
 
         filings = self.get_all_filings(year)
 
@@ -153,20 +166,31 @@ class SenateEFDAPI:
                 if isinstance(filing, dict):
                     last_name = filing.get("lastName") or filing.get("last_name") or ""
                     first_name = filing.get("firstName") or filing.get("first_name") or ""
-                    filing_date_str = filing.get("filingDate") or filing.get("filing_date") or filing.get("date") or ""
+                    filing_date_str = (
+                        filing.get("filingDate")
+                        or filing.get("filing_date")
+                        or filing.get("date")
+                        or ""
+                    )
                     filing_type = filing.get("filingType") or filing.get("filing_type") or "FD"
-                    doc_id = filing.get("filingId") or filing.get("filing_id") or filing.get("id") or ""
+                    doc_id = (
+                        filing.get("filingId") or filing.get("filing_id") or filing.get("id") or ""
+                    )
 
                     if not last_name or not doc_id:
                         skipped += 1
                         continue
 
                     # Find member
-                    member = db_session.query(Member).filter(
-                        (Member.last_name == last_name.strip()) &
-                        (Member.first_name == first_name.strip()) &
-                        (Member.chamber == Chamber.SENATE)
-                    ).first()
+                    member = (
+                        db_session.query(Member)
+                        .filter(
+                            (Member.last_name == last_name.strip())
+                            & (Member.first_name == first_name.strip())
+                            & (Member.chamber == Chamber.SENATE)
+                        )
+                        .first()
+                    )
 
                     if not member:
                         logger.debug(f"    Member not found: {first_name} {last_name}")
@@ -174,9 +198,11 @@ class SenateEFDAPI:
                         continue
 
                     # Check for duplicate
-                    existing = db_session.query(Disclosure).filter(
-                        Disclosure.document_id == str(doc_id)
-                    ).first()
+                    existing = (
+                        db_session.query(Disclosure)
+                        .filter(Disclosure.document_id == str(doc_id))
+                        .first()
+                    )
 
                     if existing:
                         skipped += 1
@@ -185,7 +211,9 @@ class SenateEFDAPI:
                     # Parse filing date
                     try:
                         if filing_date_str:
-                            filing_date = datetime.fromisoformat(filing_date_str.replace("Z", "+00:00"))
+                            filing_date = datetime.fromisoformat(
+                                filing_date_str.replace("Z", "+00:00")
+                            )
                         else:
                             filing_date = None
                     except Exception:
@@ -200,7 +228,7 @@ class SenateEFDAPI:
                         document_id=str(doc_id),
                         document_url=f"https://efdsearch.senate.gov/filing/{doc_id}/",
                         is_ptr=False,
-                        parsed=False
+                        parsed=False,
                     )
 
                     db_session.add(disclosure)
@@ -239,13 +267,13 @@ class SenateEFDAPI:
                 total_errors += result["errors"]
                 total_skipped += result["skipped"]
 
-            logger.info(f"\n{'='*70}")
-            logger.info(f"FINAL SUMMARY - Senate eFD (All Years)")
-            logger.info(f"{'='*70}")
+            logger.info(f"\n{'=' * 70}")
+            logger.info("FINAL SUMMARY - Senate eFD (All Years)")
+            logger.info(f"{'=' * 70}")
             logger.info(f"Total Imported: {total_imported}")
             logger.info(f"Total Skipped: {total_skipped}")
             logger.info(f"Total Errors: {total_errors}")
-            logger.info(f"{'='*70}\n")
+            logger.info(f"{'=' * 70}\n")
 
         finally:
             db.close()
@@ -254,8 +282,7 @@ class SenateEFDAPI:
 def main():
     """Run Senate eFD ingestion."""
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     scraper = SenateEFDAPI()
@@ -267,4 +294,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

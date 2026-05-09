@@ -1,11 +1,12 @@
 """Performance comparison API endpoints."""
-from typing import Optional
+
 from datetime import datetime
-from fastapi import APIRouter, Depends, Query, HTTPException
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from src.db import get_db
 from src.analysis.performance_analyzer import PerformanceAnalyzer
+from src.db import get_db
 
 router = APIRouter(tags=["performance"])
 
@@ -20,8 +21,8 @@ async def get_performance_summary(db: Session = Depends(get_db)):
 @router.get("/performance/member/{member_id}")
 async def get_member_performance(
     member_id: int,
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
     compare_benchmarks: bool = Query(True, description="Include benchmark comparison"),
     db: Session = Depends(get_db),
 ):
@@ -39,8 +40,8 @@ async def get_member_performance(
 
 @router.get("/performance/rankings")
 async def get_performance_rankings(
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
     min_trades: int = Query(5, description="Minimum trades to include"),
     limit: int = Query(20, description="Number of top/bottom performers"),
     db: Session = Depends(get_db),
@@ -56,8 +57,8 @@ async def get_performance_rankings(
 
 @router.get("/performance/benchmarks")
 async def get_benchmark_returns(
-    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
-    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    start_date: str | None = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: str | None = Query(None, description="End date (YYYY-MM-DD)"),
 ):
     """Get benchmark returns for a period."""
     analyzer = PerformanceAnalyzer()
@@ -78,4 +79,3 @@ async def get_benchmark_returns(
         }
 
     return results
-

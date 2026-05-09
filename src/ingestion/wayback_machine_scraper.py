@@ -2,15 +2,14 @@
 Scrape historical House Clerk data from Wayback Machine.
 Useful for years before 2010 when House Clerk XML not available.
 """
+
 import logging
+from typing import Dict, List
+
 import requests
-import json
-from typing import List, Dict, Optional
-from datetime import datetime
-from src.db.database import SessionLocal
-from src.db.models import Disclosure, Member, Chamber
 
 logger = logging.getLogger(__name__)
+
 
 class WaybackMachineScraper:
     """Retrieve historical House Clerk snapshots from web.archive.org"""
@@ -20,9 +19,7 @@ class WaybackMachineScraper:
 
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "HonestCongress/1.0 (Archive Crawler)"
-        })
+        self.session.headers.update({"User-Agent": "HonestCongress/1.0 (Archive Crawler)"})
 
     def get_snapshots(self, target_url: str, start_year: int, end_year: int) -> List[str]:
         """Get list of available snapshots for a URL in a date range."""
@@ -32,11 +29,7 @@ class WaybackMachineScraper:
 
         try:
             # Use availability API to get snapshots
-            params = {
-                "url": target_url,
-                "matchType": "prefix",
-                "output": "json"
-            }
+            params = {"url": target_url, "matchType": "prefix", "output": "json"}
 
             r = self.session.get(self.AVAILABILITY_API, params=params, timeout=30)
             r.raise_for_status()
@@ -59,7 +52,7 @@ class WaybackMachineScraper:
             logger.error(f"✗ Error querying Wayback: {str(e)}")
             return []
 
-    def download_snapshot(self, snapshot_id: str, target_url: str) -> Optional[str]:
+    def download_snapshot(self, snapshot_id: str, target_url: str) -> str | None:
         """Download a specific snapshot from Wayback Machine."""
         url = f"{self.CAPTURE_API}/{snapshot_id}/{target_url}"
 
@@ -104,9 +97,9 @@ class WaybackMachineScraper:
 
     def scrape_historical_period(self, start_year: int = 2004, end_year: int = 2009):
         """Scrape House Clerk data for years before 2010."""
-        logger.info(f"\n{'='*70}")
+        logger.info(f"\n{'=' * 70}")
         logger.info(f"Scraping Wayback Machine for {start_year}-{end_year}")
-        logger.info(f"{'='*70}\n")
+        logger.info(f"{'=' * 70}\n")
 
         target_url = "disclosures-clerk.house.gov"
 
@@ -134,11 +127,11 @@ class WaybackMachineScraper:
                 logger.error(f"Error processing snapshot {snapshot_id}: {str(e)[:50]}")
                 total_errors += 1
 
-        logger.info(f"\n{'='*70}")
-        logger.info(f"Wayback Machine Scraping Complete")
+        logger.info(f"\n{'=' * 70}")
+        logger.info("Wayback Machine Scraping Complete")
         logger.info(f"Imported: {total_imported}")
         logger.info(f"Errors: {total_errors}")
-        logger.info(f"{'='*70}\n")
+        logger.info(f"{'=' * 70}\n")
 
         return {"imported": total_imported, "errors": total_errors}
 
@@ -146,14 +139,12 @@ class WaybackMachineScraper:
 def main():
     """Run Wayback Machine scraping."""
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     scraper = WaybackMachineScraper()
-    result = scraper.scrape_historical_period(start_year=2004, end_year=2009)
+    scraper.scrape_historical_period(start_year=2004, end_year=2009)
 
 
 if __name__ == "__main__":
     main()
-

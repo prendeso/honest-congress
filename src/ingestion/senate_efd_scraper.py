@@ -3,14 +3,16 @@ Scrape Senate eFD database using Playwright.
 Handles JavaScript-rendered pages and anti-bot protection.
 Focuses on extracting individual filings with proper data parsing.
 """
-import logging
+
 import asyncio
-from typing import List, Dict, Optional
-from datetime import datetime
+import logging
+from typing import Dict, List
+
 from src.db.database import SessionLocal
-from src.db.models import Disclosure, Member, Chamber
+from src.db.models import Chamber, Member
 
 logger = logging.getLogger(__name__)
+
 
 class SenateEFDScraper:
     """Scrape Senate Financial Disclosures from efdsearch.senate.gov"""
@@ -25,6 +27,7 @@ class SenateEFDScraper:
         """Initialize Playwright browser."""
         try:
             from playwright.async_api import async_playwright
+
             self.playwright = await async_playwright().start()
 
             # Launch browser with anti-detection measures
@@ -34,7 +37,7 @@ class SenateEFDScraper:
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
                     "--no-sandbox",
-                ]
+                ],
             )
 
             logger.info("✓ Playwright browser initialized")
@@ -63,11 +66,13 @@ class SenateEFDScraper:
             page = await self.browser.new_page()
 
             # Set user agent to avoid detection
-            await page.set_extra_http_headers({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
-            })
+            await page.set_extra_http_headers(
+                {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+                }
+            )
 
-            logger.debug(f"  Loading search page...")
+            logger.debug("  Loading search page...")
 
             # Navigate to the search/index page
             try:
@@ -82,7 +87,9 @@ class SenateEFDScraper:
             # Try to find the search input
             try:
                 # Look for senator name input
-                name_input = await page.query_selector("input[name='name'], input[placeholder*='name'], input[placeholder*='Name']")
+                name_input = await page.query_selector(
+                    "input[name='name'], input[placeholder*='name'], input[placeholder*='Name']"
+                )
 
                 if name_input:
                     logger.debug(f"  Found name input, entering '{senator_name}'...")
@@ -90,20 +97,24 @@ class SenateEFDScraper:
                     await asyncio.sleep(1)
 
                 # Try year input
-                year_input = await page.query_selector("input[name='year'], input[placeholder*='year'], input[placeholder*='Year']")
+                year_input = await page.query_selector(
+                    "input[name='year'], input[placeholder*='year'], input[placeholder*='Year']"
+                )
                 if year_input:
                     logger.debug(f"  Found year input, entering {year}...")
                     await year_input.fill(str(year))
                     await asyncio.sleep(1)
 
                 # Try to find and click search button
-                search_btn = await page.query_selector("button[type='submit'], button:has-text('Search')")
+                search_btn = await page.query_selector(
+                    "button[type='submit'], button:has-text('Search')"
+                )
                 if search_btn:
-                    logger.debug(f"  Clicking search button...")
+                    logger.debug("  Clicking search button...")
                     await search_btn.click()
                     await asyncio.sleep(3)
                 else:
-                    logger.debug(f"  No search button found, trying Enter key...")
+                    logger.debug("  No search button found, trying Enter key...")
                     await page.keyboard.press("Enter")
                     await asyncio.sleep(3)
 
@@ -113,7 +124,9 @@ class SenateEFDScraper:
             # Try to extract results from table or list
             try:
                 # Look for table rows with filing data
-                rows = await page.query_selector_all("table tbody tr, div[class*='filing'], div[class*='row']")
+                rows = await page.query_selector_all(
+                    "table tbody tr, div[class*='filing'], div[class*='row']"
+                )
                 logger.debug(f"  Found {len(rows)} potential result rows")
 
                 for i, row in enumerate(rows[:20]):  # Limit to first 20 results
@@ -128,7 +141,7 @@ class SenateEFDScraper:
                                     text = await cell.text_content()
                                     if text and text.strip():
                                         text_content.append(text.strip())
-                                except:
+                                except Exception:
                                     pass
 
                             if text_content:
@@ -136,10 +149,10 @@ class SenateEFDScraper:
                                     "name": senator_name,
                                     "year": year,
                                     "filing_date": None,
-                                    "data": " | ".join(text_content)
+                                    "data": " | ".join(text_content),
                                 }
                                 filings.append(filing_data)
-                                logger.debug(f"    Filing {i+1}: {' | '.join(text_content[:2])}")
+                                logger.debug(f"    Filing {i + 1}: {' | '.join(text_content[:2])}")
                     except Exception as e:
                         logger.debug(f"    Error parsing row {i}: {str(e)[:30]}")
 
@@ -159,20 +172,21 @@ class SenateEFDScraper:
             logger.error(f"  ✗ Error searching filings: {str(e)[:100]}")
             try:
                 await page.close()
-            except:
+            except Exception:
                 pass
             return []
 
     async def get_all_senators(self, db_session) -> List[str]:
         """Get list of all current Senate members from database."""
-        senators = db_session.query(Member.first_name, Member.last_name).filter(
-            Member.chamber == Chamber.SENATE,
-            Member.in_office == True
-        ).all()
+        senators = (
+            db_session.query(Member.first_name, Member.last_name)
+            .filter(Member.chamber == Chamber.SENATE, Member.in_office == True)
+            .all()
+        )
 
         return [f"{first} {last}" for first, last in senators]
 
-    async def scrape_years(self, years: List[int], max_senators: Optional[int] = None) -> Dict:
+    async def scrape_years(self, years: List[int], max_senators: int | None = None) -> Dict:
         """Scrape Senate FD for multiple years."""
         if not await self.init():
             return {"imported": 0, "errors": 1, "tried": 0}
@@ -192,9 +206,9 @@ class SenateEFDScraper:
             total_errors = 0
             attempts = 0
 
-            logger.info(f"\n{'='*70}")
+            logger.info(f"\n{'=' * 70}")
             logger.info(f"Scraping Senate eFD for {len(years)} years")
-            logger.info(f"{'='*70}\n")
+            logger.info(f"{'=' * 70}\n")
 
             for year in sorted(years, reverse=True):  # Start with most recent
                 logger.info(f"Year {year}:")
@@ -216,7 +230,7 @@ class SenateEFDScraper:
                 "tried": attempts,
                 "imported": total_filings,
                 "errors": total_errors,
-                "years": len(years)
+                "years": len(years),
             }
 
         finally:
@@ -227,8 +241,7 @@ class SenateEFDScraper:
 async def main():
     """Run Senate eFD scraping."""
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     scraper = SenateEFDScraper()
@@ -236,15 +249,15 @@ async def main():
     # Test with just 2024 and a few senators
     result = await scraper.scrape_years(
         years=[2024, 2023],
-        max_senators=5  # Test with 5 senators first
+        max_senators=5,  # Test with 5 senators first
     )
 
-    logger.info(f"\n{'='*70}")
-    logger.info(f"Senate eFD Scraping Complete")
+    logger.info(f"\n{'=' * 70}")
+    logger.info("Senate eFD Scraping Complete")
     logger.info(f"Attempts: {result['tried']}")
     logger.info(f"Filings Found: {result['imported']}")
     logger.info(f"Errors: {result['errors']}")
-    logger.info(f"{'='*70}")
+    logger.info(f"{'=' * 70}")
 
 
 if __name__ == "__main__":

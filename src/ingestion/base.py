@@ -1,7 +1,8 @@
 """Base class for data ingestion."""
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+
 import logging
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -23,4 +24,3 @@ class BaseIngester(ABC):
     def download_disclosure(self, disclosure_url: str, output_path: str) -> bool:
         """Download a disclosure document."""
         pass
-

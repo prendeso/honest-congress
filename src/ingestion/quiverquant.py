@@ -1,15 +1,16 @@
 """QuiverQuant API client for congressional trading data."""
+
 import logging
 import os
 import time
-from typing import List, Dict, Any, Optional
 from datetime import datetime
+from typing import Any, Dict, List
 
 import requests
-from sqlalchemy.orm import Session
 from dotenv import load_dotenv
+from sqlalchemy.orm import Session
 
-from src.db.models import Disclosure, Transaction, Member, TransactionType
+from src.db.models import Disclosure, Member, Transaction, TransactionType
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 
 # Load .env file
@@ -37,7 +38,7 @@ LIVE_CONGRESS_ENDPOINT = f"{QUIVERQUANT_BASE}/live/congresstrading"
 class QuiverQuantClient:
     """Client for QuiverQuant congressional trading API."""
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: str | None = None):
         """Initialize QuiverQuant client."""
         self.api_key = api_key or os.getenv("QUIVERQUANT_API_KEY")
 
@@ -48,17 +49,19 @@ class QuiverQuantClient:
             )
 
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "HonestCongress/1.0",
-            "Authorization": f"Bearer {self.api_key}",
-        })
+        self.session.headers.update(
+            {
+                "User-Agent": "HonestCongress/1.0",
+                "Authorization": f"Bearer {self.api_key}",
+            }
+        )
         self.delay = 0.5  # Rate limiting
 
     # =========================================================================
     # BULK ENDPOINT - Recommended for complete coverage
     # =========================================================================
 
-    def get_bulk_congress_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_bulk_congress_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         """
         Fetch ALL congressional trades (House + Senate, active + retired members).
         This is the recommended endpoint for comprehensive historical data.
@@ -69,15 +72,15 @@ class QuiverQuantClient:
     # HISTORICAL ENDPOINTS - Full historical data by chamber
     # =========================================================================
 
-    def get_historical_house_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_historical_house_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         """Fetch historical House trading data (all members)."""
         return self._fetch_trades(HISTORICAL_HOUSE_ENDPOINT, limit)
 
-    def get_historical_senate_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_historical_senate_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         """Fetch historical Senate trading data (all members)."""
         return self._fetch_trades(HISTORICAL_SENATE_ENDPOINT, limit)
 
-    def get_historical_congress_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_historical_congress_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         """Fetch historical Congress trading data (House + Senate)."""
         return self._fetch_trades(HISTORICAL_CONGRESS_ENDPOINT, limit)
 
@@ -85,30 +88,30 @@ class QuiverQuantClient:
     # LIVE ENDPOINTS - Recent data only
     # =========================================================================
 
-    def get_live_house_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_live_house_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         """Fetch recent House trades."""
         return self._fetch_trades(LIVE_HOUSE_ENDPOINT, limit)
 
-    def get_live_senate_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_live_senate_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         """Fetch recent Senate trades."""
         return self._fetch_trades(LIVE_SENATE_ENDPOINT, limit)
 
-    def get_live_congress_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_live_congress_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         """Fetch recent Congress trades."""
         return self._fetch_trades(LIVE_CONGRESS_ENDPOINT, limit)
 
     # Legacy aliases
-    def get_house_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_house_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         return self.get_historical_house_trades(limit)
 
-    def get_senate_trades(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_senate_trades(self, limit: int | None = None) -> List[Dict[str, Any]]:
         return self.get_historical_senate_trades(limit)
 
     # =========================================================================
     # INTERNAL METHODS
     # =========================================================================
 
-    def _fetch_trades(self, endpoint: str, limit: Optional[int]) -> List[Dict[str, Any]]:
+    def _fetch_trades(self, endpoint: str, limit: int | None) -> List[Dict[str, Any]]:
         """Fetch trades from an endpoint."""
         try:
             logger.info(f"Fetching trades from {endpoint}")
@@ -220,9 +223,9 @@ class QuiverQuantClient:
         try:
             # Extract member name (bulk uses "Name", live uses "Representative"/"Senator")
             member_name = (
-                trade_data.get("Name") or
-                trade_data.get("Representative") or
-                trade_data.get("Senator")
+                trade_data.get("Name")
+                or trade_data.get("Representative")
+                or trade_data.get("Senator")
             )
             if not member_name:
                 return "error"
@@ -282,23 +285,30 @@ class QuiverQuantClient:
                     return "error"
 
             # Check for duplicates
-            existing = db.query(Transaction).filter(
-                Transaction.ticker == ticker,
-                Transaction.transaction_type == txn_type,
-                Transaction.transaction_date == transaction_date,
-            ).filter(
-                Transaction.disclosure.has(Disclosure.member_id == member.id)
-            ).first()
+            existing = (
+                db.query(Transaction)
+                .filter(
+                    Transaction.ticker == ticker,
+                    Transaction.transaction_type == txn_type,
+                    Transaction.transaction_date == transaction_date,
+                )
+                .filter(Transaction.disclosure.has(Disclosure.member_id == member.id))
+                .first()
+            )
 
             if existing:
                 return "duplicate"
 
             # Create or find disclosure record
-            disclosure = db.query(Disclosure).filter(
-                Disclosure.member_id == member.id,
-                Disclosure.filing_year == safe_transaction_date.year,
-                Disclosure.document_id.like(f"QANT_{member.id}_%"),
-            ).first()
+            disclosure = (
+                db.query(Disclosure)
+                .filter(
+                    Disclosure.member_id == member.id,
+                    Disclosure.filing_year == safe_transaction_date.year,
+                    Disclosure.document_id.like(f"QANT_{member.id}_%"),
+                )
+                .first()
+            )
 
             if not disclosure:
                 disclosure = Disclosure(
@@ -343,13 +353,13 @@ class QuiverQuantClient:
             logger.error(f"Error in _ingest_trade: {e}")
             return "error"
 
-    def _create_member_from_trade(self, db: Session, trade_data: Dict[str, Any]) -> Optional[Member]:
+    def _create_member_from_trade(self, db: Session, trade_data: Dict[str, Any]) -> Member | None:
         """Auto-create a member from trade data if they don't exist."""
         try:
             name = (
-                trade_data.get("Name") or
-                trade_data.get("Representative") or
-                trade_data.get("Senator")
+                trade_data.get("Name")
+                or trade_data.get("Representative")
+                or trade_data.get("Senator")
             )
             if not name:
                 return None
@@ -392,13 +402,17 @@ class QuiverQuantClient:
             logger.error(f"Error creating member: {e}")
             return None
 
-    def _find_member(self, db: Session, name: str) -> Optional[Member]:
+    def _find_member(self, db: Session, name: str) -> Member | None:
         """Find member by name."""
         # Try exact match
-        member = db.query(Member).filter(
-            (Member.first_name + ' ' + Member.last_name).ilike(name) |
-            (Member.last_name + ', ' + Member.first_name).ilike(name)
-        ).first()
+        member = (
+            db.query(Member)
+            .filter(
+                (Member.first_name + " " + Member.last_name).ilike(name)
+                | (Member.last_name + ", " + Member.first_name).ilike(name)
+            )
+            .first()
+        )
 
         if member:
             return member
@@ -408,14 +422,18 @@ class QuiverQuantClient:
         if len(parts) >= 2:
             first = parts[0]
             last = parts[-1]
-            member = db.query(Member).filter(
-                Member.first_name.ilike(f"{first}%"),
-                Member.last_name.ilike(f"{last}%"),
-            ).first()
+            member = (
+                db.query(Member)
+                .filter(
+                    Member.first_name.ilike(f"{first}%"),
+                    Member.last_name.ilike(f"{last}%"),
+                )
+                .first()
+            )
 
         return member
 
-    def _parse_date(self, date_str: Optional[str]) -> Optional[datetime]:
+    def _parse_date(self, date_str: str | None) -> datetime | None:
         """Parse date string in various formats."""
         if not date_str:
             return None
@@ -437,4 +455,3 @@ def ingest_quiverquant_trades(db: Session, chamber: str = "both") -> Dict[str, i
     except ValueError as e:
         logger.error(f"QuiverQuant configuration error: {e}")
         return {"imported": 0, "duplicates": 0, "errors": 0}
-

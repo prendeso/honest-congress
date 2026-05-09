@@ -1,172 +1,153 @@
 # Honest Congress
 
-A Python application that analyzes congressional financial disclosures to detect anomalies and potential inconsistencies in reported wealth and investments.
+A Python application that ingests US congressional financial disclosures
+from public sources, parses them, and detects anomalies that may indicate
+inconsistencies in reported wealth or trading activity.
 
 ## Features
 
-- **Data Ingestion**: Pulls financial disclosures from House Clerk XML and QuiverQuant API
-- **Member Metadata**: 547 current Congress members from congress-legislators
-- **PDF Parsing**: Extracts assets, transactions from disclosure documents
-- **Anomaly Detection**: 7 detection types including:
-  - Net worth vs salary comparison
-  - Asset appreciation tracking
-  - Stock performance vs benchmarks
-  - Trade timing analysis
-  - Committee conflict detection
-  - Loss avoidance patterns
-  - Multi-factor risk scoring
-- **Web Dashboard**: View members, disclosures, trades, and anomalies
-- **REST API**: FastAPI-based API for all data
+- **Multi-source ingestion** — House Clerk XML, Senate eFD, congress-legislators,
+  Congress.gov, optional QuiverQuant API for live trade data.
+- **PDF parsing** — assets, transactions, and liabilities extracted from
+  disclosure documents (pdfplumber).
+- **Anomaly detection** — 13 detector types covering wealth vs. salary
+  growth, rapid asset appreciation, trade outperformance vs. S&P 500,
+  trade timing patterns, committee conflicts, loss-avoidance, multi-factor
+  risk, late PTR filings, and more.
+- **Web dashboard** — server-rendered Jinja2 templates + Alpine.js for
+  members, disclosures, trades, parsed data, and anomalies.
+- **REST API** — FastAPI; OpenAPI docs at `/docs`.
 
-## Current Status
+## Quickstart (local)
 
-| Component | Records |
-|-----------|---------|
-| Members | 547 |
-| Disclosures | 5,690 |
-| Stock Trades | 9,777 |
-| Assets | 6,308 |
-| **Anomalies Detected** | **188** |
-
-## Quick Start
-
-### Prerequisites
-
-- Python 3.10+
-- QuiverQuant API key ($10/month) - Optional for trade data
-
-### Installation
+Requires Python 3.11+.
 
 ```bash
-# Clone repository
-git clone https://github.com/yourusername/honest-congress.git
+git clone https://github.com/prendeso/honest-congress.git
 cd honest-congress
 
-# Create virtual environment
-python -m venv venv
-.\venv\Scripts\activate  # Windows
-# source venv/bin/activate  # Linux/Mac
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 
-# Install dependencies
-pip install -r requirements.txt
+cp .env.example .env                 # edit if you want non-default knobs
 
-# Configure environment
-copy .env.example .env
-# Edit .env with your QuiverQuant API key (optional)
-```
-
-### Run the Application
-
-```bash
-# Initialize database and ingest data
-python -m src.cli init
+python -m src.cli init               # alembic upgrade head
 python -m src.cli ingest -y 2024 2025
-
-# Run anomaly detection
 python -m src.cli analyze
-
-# Start web dashboard
-python -m src.cli serve --port 8001
+python -m src.cli serve              # http://localhost:8000
 ```
 
-Open http://localhost:8001 in your browser.
+`/health` returns 503 if the database is unreachable; `/health/live`
+always returns 200 and is intended for liveness probes.
 
-## Dashboard
+## Deploying to Railway
 
-The web dashboard has 4 tabs:
+The repo ships with a `Dockerfile` and a `railway.toml` that Railway
+auto-detects.
 
-1. **Members** - Browse 547 Congress members with search and filter
-2. **Disclosures** - View financial disclosure filings
-3. **Stock Trades** - 9,777 congressional stock trades
-4. **Anomalies** - 188 detected anomalies with detailed explanations
+1. **Create a Railway project** and attach the **Postgres** plugin.
+2. **Set env vars** in the Railway dashboard:
+   - `ENV=production` (enables prod-mode validation)
+   - `ADMIN_PASSWORD=<strong random>` (required when ENV=production)
+   - `ALLOWED_ORIGINS=https://your.domain.up.railway.app`
+   - Optional: `CONGRESS_GOV_API_KEY`, `QUIVERQUANT_API_KEY`,
+     `LATE_FILING_MIN_DAYS`, `LATE_FILING_MIN_AMOUNT_USD`
+3. **Push the branch.** Railway builds the Docker image, runs
+   `alembic upgrade head` as the pre-deploy step, then starts uvicorn.
 
-### Anomaly Types
+The `daily-update.yml` GitHub Action re-runs ingestion + anomaly
+detection nightly. Add `RAILWAY_DATABASE_URL` (the external connection
+string from Railway) as a repo secret so the cron job lands rows in the
+deployed database.
 
-| Type | Description |
-|------|-------------|
-| **Wealth vs Salary** | Net worth grew faster than salary could explain |
-| **Asset Appreciation** | Single asset grew >100% in one year |
-| **Stock Outperformance** | Trading returns beat S&P 500 significantly |
-| **Trade Timing** | Perfect timing, consecutive trades, volume spikes |
-| **Committee Conflict** | Trading in sectors member oversees |
-| **Loss Avoidance** | 80%+ success rate (statistically improbable) |
-| **Multi-Factor Risk** | Member has 3+ different anomaly types |
-
-## API Endpoints
-
-```
-GET /api/members           List members
-GET /api/disclosures       List disclosures
-GET /api/anomalies         List anomalies
-GET /api/anomalies/summary Anomaly statistics
-GET /docs                  API documentation
-```
-
-## Data Sources
-
-| Source | Data | Cost |
-|--------|------|------|
-| House Clerk XML | FD Reports | Free |
-| QuiverQuant API | Stock Trades | $10/mo |
-| congress-legislators | Members | Free |
-
-## Project Structure
+## Architecture
 
 ```
 honest-congress/
 ├── src/
-│   ├── analysis/     # Anomaly detection (7 types)
-│   ├── api/          # FastAPI web server
-│   ├── db/           # Database models
-│   ├── ingestion/    # Data collection
-│   ├── parsing/      # PDF/XML parsing
-│   └── cli.py        # Command-line interface
-├── data/             # SQLite database
-├── ARCHITECTURE.md   # System architecture
-├── IMPLEMENTATION_PLAN.md  # Roadmap
-└── README.md         # This file
+│   ├── analysis/         anomaly detectors (wealth, trade, advanced, extended)
+│   ├── api/
+│   │   ├── main.py       FastAPI app + lifespan
+│   │   ├── middleware.py request-ID + access logging
+│   │   ├── routes/
+│   │   │   ├── anomalies/  package: query/detect/admin
+│   │   │   ├── members.py
+│   │   │   ├── disclosures.py
+│   │   │   ├── dashboard_v2.py  thin handlers returning TemplateResponse
+│   │   │   └── ...
+│   │   └── templating.py
+│   ├── templates/        Jinja2 templates (one per page + base + partials)
+│   ├── ingestion/        source-specific scrapers + orchestrator
+│   ├── parsing/          PDF / XML extractors
+│   ├── db/               SQLAlchemy models + engine + URL normalization
+│   └── cli.py            init / ingest / analyze / serve / parse / ...
+├── alembic/              migrations (autogenerated baseline)
+├── tests/                pytest suite (66+ tests)
+├── Dockerfile, railway.toml, pyproject.toml, requirements.txt
+└── docs/archive/         pre-modernization completion notes
 ```
 
-## Documentation
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the deeper design dive.
 
-- **ARCHITECTURE.md** - System architecture, data models, diagrams
-- **IMPLEMENTATION_PLAN.md** - Implementation status and pending items
-- **/docs** (on running server) - Swagger API documentation
+## Anomaly types
 
-## Commands
+| Type | Description |
+|------|-------------|
+| `excessive_wealth_growth` | Year-over-year net worth grew far above salary contribution |
+| `wealth_vs_salary` | Lifetime wealth growth exceeds cumulative salary by >2x |
+| `rapid_asset_appreciation` | Single asset grew >100% in one year (or >500% annualized) |
+| `large_trade` | Single transaction over $1M |
+| `late_filing` | PTR filed >60 days late on a >=$50k transaction |
+| `sector_concentration` | >50% of trades in one regulated sector in a disclosure year |
+| `high_trading_frequency` | >10 trades in a single month |
+| `outperforming_trades` | Year's return >2x the S&P 500 benchmark |
+| `trade_clustering` | 5+ consecutive same-direction trades |
+| `perfect_timing` | 80%+ profitable buy-then-sell patterns |
+| `loss_avoidance` | 80%+ success rate across 5+ ticker positions |
+| `volume_spikes` | 2+ trades exceeding 3 standard deviations of typical size |
+| `multi_factor_risk` | Member shows 3+ different anomaly types |
+
+Thresholds for `late_filing` are tunable via `LATE_FILING_MIN_DAYS` and
+`LATE_FILING_MIN_AMOUNT_USD` in the environment.
+
+## API endpoints
+
+```
+GET  /health                       readiness probe (DB ping)
+GET  /health/live                  liveness probe
+GET  /api/members                  paginated list with filters and sort
+GET  /api/members/{id}             member detail + recent disclosures
+GET  /api/disclosures              paginated list with filters
+GET  /api/anomalies/               paginated anomalies (severity-ordered)
+GET  /api/anomalies/summary        counts by type / severity / party / chamber
+GET  /api/anomalies/{id}           detail
+POST /api/anomalies/admin/login    issue token; required for mutating routes
+POST /api/anomalies/analyze        run full detector suite
+POST /api/anomalies/regenerate     wipe + recompute all anomalies
+GET  /api/insights                 dashboard hero stats
+GET  /docs                         Swagger UI
+```
+
+Every response carries an `X-Request-ID` header (echoed if you supply one,
+otherwise auto-generated) so logs can be correlated.
+
+## Development
 
 ```bash
-# Activate virtual environment
-.\venv\Scripts\activate
+pip install -e ".[dev]"
+pre-commit install     # ruff + format + trailing-whitespace + check-yaml
 
-# Ingest data
-python -m src.cli ingest -y 2024 2025
-python -m src.cli ingest-trades
-
-# Parse disclosures
-python -m src.cli parse --limit 100
-
-# Run analysis
-python -m src.cli analyze
-
-# Run all 7 anomaly types
-python scripts/run_complete_anomaly_detection.py
-
-# Start dashboard
-python -m src.cli serve --port 8001
+ruff check .           # lint
+ruff format .          # format
+mypy src               # types (non-strict, advisory)
+pytest                 # 66 tests
+pytest --cov=src       # coverage report
 ```
 
-## Documentation
-
-For detailed information, see:
-
-- **[ARCHITECTURE.md](ARCHITECTURE.md)** - System design, data flow, and technical overview
-- **[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md)** - Current status, tech stack, and deployment guide
-- **[FUTURE_IMPROVEMENTS.md](FUTURE_IMPROVEMENTS.md)** - Roadmap for phases 2-7
-- **[FIXES_APPLIED.md](FIXES_APPLIED.md)** - Recent fixes and improvements
-- **[docs/](docs/)** - Additional reference materials
+CI on every PR runs lint → typecheck → tests via
+`.github/workflows/ci.yml`.
 
 ## License
 
-MIT License - See LICENSE file
-
+MIT — see [LICENSE](LICENSE).

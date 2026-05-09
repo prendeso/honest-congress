@@ -1,0 +1,276 @@
+{% extends "base.html" %}
+
+{% block title %}Parsed Data &mdash; Honest Congress{% endblock %}
+
+{% block content %}
+{% raw %}
+<div x-data="parsedPage()" x-init="init()" x-cloak>
+        
+
+        <div class="container mx-auto px-4 py-8">
+            <div class="glass-card rounded-xl shadow-lg p-6">
+                <h2 class="text-3xl font-bold text-gray-800 mb-6">📊 Parsed Documents</h2>
+
+                <div class="mb-6 p-4 bg-teal-50 rounded-lg">
+                    <p class="text-teal-800">
+                        <strong>Parsed Documents</strong> are disclosures and PTRs that have been processed to extract 
+                        structured data like assets, transactions, and liabilities.
+                    </p>
+                </div>
+
+                <!-- Filters -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                    <input type="text" 
+                           x-model="memberSearch" 
+                           @input.debounce.300ms="loadParsed()"
+                           placeholder="Search member..." 
+                           class="border rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-teal-500">
+
+                    <select x-model="docTypeFilter" @change="loadParsed()" class="border rounded-lg px-4 py-2">
+                        <option value="">All Document Types</option>
+                        <option value="disclosure">Financial Disclosures</option>
+                        <option value="ptr">Stock Trades (PTR)</option>
+                    </select>
+
+                    <select x-model="yearFilter" @change="loadParsed()" class="border rounded-lg px-4 py-2">
+                        <option value="">All Years</option>
+                        <option value="2026">2026</option>
+                        <option value="2025">2025</option>
+                        <option value="2024">2024</option>
+                        <option value="2023">2023</option>
+                        <option value="2022">2022</option>
+                        <option value="2021">2021</option>
+                        <option value="2020">2020</option>
+                        <option value="2019">2019</option>
+                        <option value="2018">2018</option>
+                        <option value="2017">2017</option>
+                        <option value="2016">2016</option>
+                        <option value="2015">2015</option>
+                        <option value="2014">2014</option>
+                        <option value="2013">2013</option>
+                        <option value="2012">2012</option>
+                    </select>
+
+                    <select x-model="hasDataFilter" @change="loadParsed()" class="border rounded-lg px-4 py-2">
+                        <option value="">All Documents</option>
+                        <option value="assets">With Assets</option>
+                        <option value="transactions">With Transactions</option>
+                        <option value="liabilities">With Liabilities</option>
+                    </select>
+                </div>
+
+                <!-- Loading -->
+                <template x-if="loading">
+                    <div class="text-center py-12">
+                        <div class="animate-spin inline-block w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full mb-4"></div>
+                        <p class="text-gray-600">Loading parsed documents...</p>
+                    </div>
+                </template>
+
+                <!-- Parsed Documents Table -->
+                <template x-if="!loading">
+                    <div class="overflow-x-auto">
+                        <table class="w-full">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('member')">
+                                        Member <span x-show="sortField === 'member'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('year')">
+                                        Year <span x-show="sortField === 'year'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500">Type</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('assets')">
+                                        Assets <span x-show="sortField === 'assets'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('transactions')">
+                                        Transactions <span x-show="sortField === 'transactions'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('liabilities')">
+                                        Liabilities <span x-show="sortField === 'liabilities'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('filing_date')">
+                                        Filing Date <span x-show="sortField === 'filing_date'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    </th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y">
+                                <template x-for="doc in documents" :key="doc.id">
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-4 py-3 font-medium" x-text="doc.member_name || 'Unknown'"></td>
+                                        <td class="px-4 py-3" x-text="doc.filing_year"></td>
+                                        <td class="px-4 py-3">
+                                            <span :class="doc.is_ptr ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'"
+                                                  class="px-2 py-1 rounded text-sm"
+                                                  x-text="doc.is_ptr ? 'PTR' : 'FD'"></span>
+                                        </td>
+                                        <td class="px-4 py-3 text-center">
+                                            <span class="font-medium" x-text="doc.asset_count || 0"></span>
+                                        </td>
+                                        <td class="px-4 py-3 text-center">
+                                            <span class="font-medium" x-text="doc.transaction_count || 0"></span>
+                                        </td>
+                                        <td class="px-4 py-3 text-center">
+                                            <span class="font-medium" x-text="doc.liability_count || 0"></span>
+                                        </td>
+                                        <td class="px-4 py-3" x-text="doc.filing_date ? new Date(doc.filing_date).toLocaleDateString() : '-'"></td>
+                                        <td class="px-4 py-3">
+                                            <template x-if="doc.document_url">
+                                                <a :href="doc.document_url" 
+                                                   target="_blank"
+                                                   class="text-teal-600 hover:text-teal-800 text-sm">
+                                                    View PDF
+                                                </a>
+                                            </template>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+
+                        <template x-if="documents.length === 0">
+                            <div class="text-center py-12 text-gray-500">
+                                No parsed documents found matching your filters.
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- Pagination -->
+                <template x-if="!loading && documents.length > 0">
+                    <div class="mt-6 flex justify-between items-center">
+                        <span class="text-gray-600 text-sm">
+                            Showing <span x-text="documents.length"></span> of <span x-text="total"></span> documents
+                        </span>
+                        <div class="flex gap-2">
+                            <button @click="previousPage()" 
+                                    :disabled="page <= 1"
+                                    class="px-4 py-2 border rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-gray-50">
+                                Previous
+                            </button>
+                            <span class="px-4 py-2" x-text="'Page ' + page"></span>
+                            <button @click="nextPage()" 
+                                    :disabled="page * pageSize >= total"
+                                    class="px-4 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                                Next
+                            </button>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+
+        
+    </div>
+{% endraw %}
+{% endblock %}
+
+{% block scripts %}
+{% raw %}
+<script>
+        function parsedPage() {
+            return {
+                documents: [],
+                total: 0,
+                page: 1,
+                pageSize: 50,
+                memberSearch: '',
+                docTypeFilter: '',
+                yearFilter: '',
+                hasDataFilter: '',
+                loading: false,
+                sortField: 'filing_date',
+                sortOrder: 'desc',
+
+                async init() {
+                    console.log('[Parsed] Initializing...');
+                    await this.loadParsed();
+                },
+
+                async loadParsed() {
+                    this.loading = true;
+
+                    try {
+                        let url = `/api/disclosures?page=${this.page}&page_size=${this.pageSize}&parsed=true`;
+
+                        if (this.docTypeFilter === 'disclosure') {
+                            url += '&is_ptr=false';
+                        } else if (this.docTypeFilter === 'ptr') {
+                            url += '&is_ptr=true';
+                        }
+
+                        if (this.yearFilter) {
+                            url += `&filing_year=${this.yearFilter}`;
+                        }
+
+                        // Note: has_data filters would need backend support
+
+                        console.log('[Parsed] Fetching:', url);
+                        const data = await fetch(url).then(r => r.json());
+
+                        this.documents = data.disclosures || [];
+                        this.total = data.total || 0;
+
+                        // Apply client-side sorting
+                        this.applySorting();
+
+                        console.log('[Parsed] Loaded:', this.documents.length, 'total:', this.total);
+                    } catch (e) {
+                        console.error('[Parsed] Error:', e);
+                        alert('Failed to load parsed documents: ' + e.message);
+                    } finally {
+                        this.loading = false;
+                    }
+                },
+
+                sortBy(field) {
+                    if (this.sortField === field) {
+                        this.sortOrder = this.sortOrder === 'asc' ? 'desc' : 'asc';
+                    } else {
+                        this.sortField = field;
+                        this.sortOrder = 'asc';
+                    }
+                    this.applySorting();
+                },
+
+                applySorting() {
+                    const sortMultiplier = this.sortOrder === 'asc' ? 1 : -1;
+
+                    if (this.sortField === 'member') {
+                        this.documents.sort((a, b) => (a.member_name || '').localeCompare(b.member_name || '') * sortMultiplier);
+                    } else if (this.sortField === 'year') {
+                        this.documents.sort((a, b) => ((a.filing_year || 0) - (b.filing_year || 0)) * sortMultiplier);
+                    } else if (this.sortField === 'assets') {
+                        this.documents.sort((a, b) => ((a.asset_count || 0) - (b.asset_count || 0)) * sortMultiplier);
+                    } else if (this.sortField === 'transactions') {
+                        this.documents.sort((a, b) => ((a.transaction_count || 0) - (b.transaction_count || 0)) * sortMultiplier);
+                    } else if (this.sortField === 'liabilities') {
+                        this.documents.sort((a, b) => ((a.liability_count || 0) - (b.liability_count || 0)) * sortMultiplier);
+                    } else if (this.sortField === 'filing_date') {
+                        this.documents.sort((a, b) => {
+                            const dateA = new Date(a.filing_date ||  0);
+                            const dateB = new Date(b.filing_date || 0);
+                            return (dateA - dateB) * sortMultiplier;
+                        });
+                    }
+                },
+
+                previousPage() {
+                    if (this.page > 1) {
+                        this.page--;
+                        this.loadParsed();
+                    }
+                },
+
+                nextPage() {
+                    if (this.page * this.pageSize < this.total) {
+                        this.page++;
+                        this.loadParsed();
+                    }
+                }
+            };
+        }
+    </script>
+{% endraw %}
+{% endblock %}

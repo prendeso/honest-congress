@@ -2,8 +2,8 @@
 Final verification test for retired members with anomalies.
 Run this AFTER restarting the server.
 """
+
 import requests
-import json
 
 print("=" * 80)
 print("FINAL VERIFICATION TEST")
@@ -12,12 +12,12 @@ print("=" * 80)
 # Test 1: Database query
 print("\n1. DATABASE CHECK (direct query)")
 from sqlalchemy import exists
-from src.db import get_db_session, Member, Anomaly
+
+from src.db import Anomaly, Member, get_db_session
 
 db = next(get_db_session())
 retired_query = db.query(Member).filter(
-    Member.in_office == False,
-    exists().where(Anomaly.member_id == Member.id)
+    Member.in_office == False, exists().where(Anomaly.member_id == Member.id)
 )
 db_retired_count = retired_query.count()
 print(f"   ✓ Retired members with anomalies in DB: {db_retired_count}")
@@ -26,28 +26,34 @@ print(f"   ✓ Retired members with anomalies in DB: {db_retired_count}")
 examples = retired_query.limit(5).all()
 for m in examples:
     anomaly_count = db.query(Anomaly).filter(Anomaly.member_id == m.id).count()
-    print(f"     - {m.first_name} {m.last_name} ({m.party.value}-{m.state}): {anomaly_count} anomalies")
+    print(
+        f"     - {m.first_name} {m.last_name} ({m.party.value}-{m.state}): {anomaly_count} anomalies"
+    )
 db.close()
 
 # Test 2: API endpoint
 print("\n2. API ENDPOINT CHECK")
 try:
-    response = requests.get('http://localhost:8000/api/members?has_anomalies=true&page_size=500', timeout=5)
+    response = requests.get(
+        "http://localhost:8000/api/members?has_anomalies=true&page_size=500", timeout=5
+    )
     if response.status_code == 200:
         data = response.json()
-        total = data['total']
-        members = data['members']
-        retired_api = [m for m in members if m['in_office'] == False]
-        active_api = [m for m in members if m['in_office'] == True]
+        total = data["total"]
+        members = data["members"]
+        retired_api = [m for m in members if m["in_office"] == False]
+        active_api = [m for m in members if m["in_office"] == True]
 
         print(f"   ✓ Total members with anomalies: {total}")
         print(f"   ✓ Returned in this page: {len(members)}")
         print(f"   ✓ Active members: {len(active_api)}")
         print(f"   ✓ Retired members: {len(retired_api)}")
 
-        print(f"\n   Sample retired members from API:")
+        print("\n   Sample retired members from API:")
         for m in retired_api[:5]:
-            print(f"     - {m['first_name']} {m['last_name']} ({m['party']}-{m['state']}): {m['anomaly_count']} anomalies, in_office={m['in_office']}")
+            print(
+                f"     - {m['first_name']} {m['last_name']} ({m['party']}-{m['state']}): {m['anomaly_count']} anomalies, in_office={m['in_office']}"
+            )
 
         if len(retired_api) == 0:
             print("\n   ❌ ERROR: API returned 0 retired members!")
@@ -96,4 +102,3 @@ Expected result: You should see 55 retired members including:
   - James Inhofe (R-OK)
 """)
 print("=" * 80)
-

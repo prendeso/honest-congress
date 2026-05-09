@@ -1,11 +1,12 @@
 """House of Representatives financial disclosure ingestion."""
-import requests
+
 import logging
-from typing import List, Dict, Any, Optional
+import xml.etree.ElementTree as ET
 from datetime import datetime
 from pathlib import Path
-import xml.etree.ElementTree as ET
-import re
+from typing import Any, Dict, List
+
+import requests
 
 from src.ingestion.base import BaseIngester
 
@@ -23,9 +24,9 @@ class HouseIngester(BaseIngester):
 
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({
-            "User-Agent": "HonestCongress/1.0 (Congressional Disclosure Analyzer)"
-        })
+        self.session.headers.update(
+            {"User-Agent": "HonestCongress/1.0 (Congressional Disclosure Analyzer)"}
+        )
 
     def fetch_members(self) -> List[Dict[str, Any]]:
         """
@@ -40,7 +41,7 @@ class HouseIngester(BaseIngester):
     def search_disclosures(
         self,
         last_name: str = "",
-        filing_year: Optional[int] = None,
+        filing_year: int | None = None,
         state: str = "",
     ) -> List[Dict[str, Any]]:
         """
@@ -166,20 +167,22 @@ class HouseIngester(BaseIngester):
                 # Build PDF URL for PTR
                 pdf_url = f"{HOUSE_PTR_DOWNLOAD_URL}/{year}/{doc_id}.pdf"
 
-                ptrs.append({
-                    "first_name": first,
-                    "last_name": last,
-                    "full_name": full_name,
-                    "state": state,
-                    "district": district,
-                    "filing_type": f"PTR" if not filing_type else f"PTR-{filing_type}",
-                    "filing_date": parsed_date,
-                    "filing_year": year,
-                    "document_id": doc_id,
-                    "document_url": pdf_url,
-                    "chamber": "house",
-                    "is_ptr": True,
-                })
+                ptrs.append(
+                    {
+                        "first_name": first,
+                        "last_name": last,
+                        "full_name": full_name,
+                        "state": state,
+                        "district": district,
+                        "filing_type": "PTR" if not filing_type else f"PTR-{filing_type}",
+                        "filing_date": parsed_date,
+                        "filing_year": year,
+                        "document_id": doc_id,
+                        "document_url": pdf_url,
+                        "chamber": "house",
+                        "is_ptr": True,
+                    }
+                )
 
         except ET.ParseError as e:
             logger.error(f"Failed to parse PTR XML index: {e}")
@@ -221,19 +224,21 @@ class HouseIngester(BaseIngester):
                 # Build PDF URL
                 pdf_url = f"{HOUSE_DOWNLOAD_URL}/{year}/{doc_id}.pdf"
 
-                disclosures.append({
-                    "first_name": first,
-                    "last_name": last,
-                    "full_name": full_name,
-                    "state": state,
-                    "district": district,
-                    "filing_type": filing_type,
-                    "filing_date": parsed_date,
-                    "filing_year": year,
-                    "document_id": doc_id,
-                    "document_url": pdf_url,
-                    "chamber": "house",
-                })
+                disclosures.append(
+                    {
+                        "first_name": first,
+                        "last_name": last,
+                        "full_name": full_name,
+                        "state": state,
+                        "district": district,
+                        "filing_type": filing_type,
+                        "filing_date": parsed_date,
+                        "filing_year": year,
+                        "document_id": doc_id,
+                        "document_url": pdf_url,
+                        "chamber": "house",
+                    }
+                )
 
         except ET.ParseError as e:
             logger.error(f"Failed to parse XML index: {e}")
@@ -277,7 +282,6 @@ class HouseIngester(BaseIngester):
         except requests.RequestException as e:
             logger.error(f"Failed to download {disclosure_url}: {e}")
             return False
-        except IOError as e:
+        except OSError as e:
             logger.error(f"Failed to save file {output_path}: {e}")
             return False
-

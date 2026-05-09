@@ -1,7 +1,7 @@
-from src.ingestion.house import HouseIngester
-from src.ingestion.senate import SenateIngester, SenatePTRIngester
 from src.ingestion.congress_gov import CongressGovClient, ProPublicaClient
+from src.ingestion.house import HouseIngester
 from src.ingestion.orchestrator import IngestionOrchestrator, run_ingestion
+from src.ingestion.senate import SenateIngester, SenatePTRIngester
 
 __all__ = [
     "HouseIngester",
@@ -12,4 +12,3 @@ __all__ = [
     "IngestionOrchestrator",
     "run_ingestion",
 ]
-

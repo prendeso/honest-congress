@@ -1,17 +1,18 @@
 """Disclosure API endpoints."""
-from typing import List, Optional
-from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from datetime import datetime
 
-from src.db import get_db_session, Disclosure, Asset, Transaction, Liability, Member
+from datetime import datetime
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy.orm import Session
+
+from src.db import Asset, Disclosure, Liability, Member, Transaction, get_db_session
 
 router = APIRouter()
 
 
-def _normalized_document_url(disclosure: Disclosure) -> Optional[str]:
+def _normalized_document_url(disclosure: Disclosure) -> str | None:
     url = disclosure.document_url
 
     if not disclosure.document_id or disclosure.document_id.startswith("QANT_"):
@@ -39,67 +40,68 @@ def _normalized_document_url(disclosure: Disclosure) -> Optional[str]:
 
 class AssetResponse(BaseModel):
     """Asset response schema."""
+
     id: int
     asset_type: str
     description: str
-    ticker: Optional[str]
-    value_min: Optional[float]
-    value_max: Optional[float]
-    income_min: Optional[float]
-    income_max: Optional[float]
+    ticker: str | None
+    value_min: float | None
+    value_max: float | None
+    income_min: float | None
+    income_max: float | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class TransactionResponse(BaseModel):
     """Transaction response schema."""
+
     id: int
     transaction_type: str
     description: str
-    ticker: Optional[str]
-    transaction_date: Optional[datetime]
-    amount_min: Optional[float]
-    amount_max: Optional[float]
-    owner: Optional[str]
+    ticker: str | None
+    transaction_date: datetime | None
+    amount_min: float | None
+    amount_max: float | None
+    owner: str | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class LiabilityResponse(BaseModel):
     """Liability response schema."""
+
     id: int
     creditor: str
-    description: Optional[str]
-    amount_min: Optional[float]
-    amount_max: Optional[float]
+    description: str | None
+    amount_min: float | None
+    amount_max: float | None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DisclosureResponse(BaseModel):
     """Disclosure response schema."""
+
     id: int
     member_id: int
     member_name: str
     filing_year: int
     filing_type: str
-    filing_date: Optional[datetime]
+    filing_date: datetime | None
     document_id: str
-    document_url: Optional[str]
+    document_url: str | None
     parsed: bool
     is_ptr: bool = False
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DisclosureDetailResponse(DisclosureResponse):
     """Detailed disclosure response with assets, transactions, liabilities."""
-    total_assets_min: Optional[float] = None
-    total_assets_max: Optional[float] = None
+
+    total_assets_min: float | None = None
+    total_assets_max: float | None = None
     assets: List[AssetResponse] = []
     transactions: List[TransactionResponse] = []
     liabilities: List[LiabilityResponse] = []
@@ -107,6 +109,7 @@ class DisclosureDetailResponse(DisclosureResponse):
 
 class DisclosureListResponse(BaseModel):
     """Paginated list of disclosures."""
+
     total: int
     page: int
     page_size: int
@@ -115,13 +118,15 @@ class DisclosureListResponse(BaseModel):
 
 @router.get("", response_model=DisclosureListResponse)
 async def list_disclosures(
-    member_id: Optional[int] = Query(None, description="Filter by member ID"),
-    filing_year: Optional[int] = Query(None, description="Filter by filing year"),
-    filing_type: Optional[str] = Query(None, description="Filter by filing type"),
-    parsed: Optional[bool] = Query(None, description="Filter by parsed status"),
-    is_ptr: Optional[bool] = Query(None, description="Filter by PTR (stock trade) status"),
-    sort_by: Optional[str] = Query("filing_date", description="Field to sort by: member_name, year, filing_date, status"),
-    sort_order: Optional[str] = Query("desc", description="Sort order: asc or desc"),
+    member_id: int | None = Query(None, description="Filter by member ID"),
+    filing_year: int | None = Query(None, description="Filter by filing year"),
+    filing_type: str | None = Query(None, description="Filter by filing type"),
+    parsed: bool | None = Query(None, description="Filter by parsed status"),
+    is_ptr: bool | None = Query(None, description="Filter by PTR (stock trade) status"),
+    sort_by: str | None = Query(
+        "filing_date", description="Field to sort by: member_name, year, filing_date, status"
+    ),
+    sort_order: str | None = Query("desc", description="Sort order: asc or desc"),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db_session),
@@ -151,18 +156,26 @@ async def list_disclosures(
     total = query.count()
 
     # Apply server-side sorting
-    is_desc = sort_order.lower() == 'desc'
-    if sort_by == 'member_name':
-        query = query.order_by(Member.first_name.desc() if is_desc else Member.first_name.asc(),
-                              Member.last_name.desc() if is_desc else Member.last_name.asc())
-    elif sort_by == 'year':
-        query = query.order_by(Disclosure.filing_year.desc() if is_desc else Disclosure.filing_year.asc())
-    elif sort_by == 'type':
-        query = query.order_by(Disclosure.filing_type.desc() if is_desc else Disclosure.filing_type.asc())
-    elif sort_by == 'status':
+    is_desc = sort_order.lower() == "desc"
+    if sort_by == "member_name":
+        query = query.order_by(
+            Member.first_name.desc() if is_desc else Member.first_name.asc(),
+            Member.last_name.desc() if is_desc else Member.last_name.asc(),
+        )
+    elif sort_by == "year":
+        query = query.order_by(
+            Disclosure.filing_year.desc() if is_desc else Disclosure.filing_year.asc()
+        )
+    elif sort_by == "type":
+        query = query.order_by(
+            Disclosure.filing_type.desc() if is_desc else Disclosure.filing_type.asc()
+        )
+    elif sort_by == "status":
         query = query.order_by(Disclosure.parsed.desc() if is_desc else Disclosure.parsed.asc())
     else:  # Default to filing_date
-        query = query.order_by(Disclosure.filing_date.desc() if is_desc else Disclosure.filing_date.asc())
+        query = query.order_by(
+            Disclosure.filing_date.desc() if is_desc else Disclosure.filing_date.asc()
+        )
 
     # Apply pagination
     disclosures = query.offset((page - 1) * page_size).limit(page_size).all()
@@ -206,22 +219,14 @@ async def get_disclosure(
     assets = db.query(Asset).filter(Asset.disclosure_id == disclosure_id).all()
 
     # Get transactions
-    transactions = db.query(Transaction).filter(
-        Transaction.disclosure_id == disclosure_id
-    ).all()
+    transactions = db.query(Transaction).filter(Transaction.disclosure_id == disclosure_id).all()
 
     # Get liabilities
-    liabilities = db.query(Liability).filter(
-        Liability.disclosure_id == disclosure_id
-    ).all()
+    liabilities = db.query(Liability).filter(Liability.disclosure_id == disclosure_id).all()
 
     # Calculate totals
-    total_min = sum(
-        float(a.value_min) for a in assets if a.value_min
-    ) if assets else None
-    total_max = sum(
-        float(a.value_max) for a in assets if a.value_max
-    ) if assets else None
+    total_min = sum(float(a.value_min) for a in assets if a.value_min) if assets else None
+    total_max = sum(float(a.value_max) for a in assets if a.value_max) if assets else None
 
     return DisclosureDetailResponse(
         id=disclosure.id,
@@ -263,13 +268,13 @@ async def get_disclosure(
         ],
         liabilities=[
             LiabilityResponse(
-                id=l.id,
-                creditor=l.creditor,
-                description=l.description,
-                amount_min=float(l.amount_min) if l.amount_min else None,
-                amount_max=float(l.amount_max) if l.amount_max else None,
+                id=lia.id,
+                creditor=lia.creditor,
+                description=lia.description,
+                amount_min=float(lia.amount_min) if lia.amount_min else None,
+                amount_max=float(lia.amount_max) if lia.amount_max else None,
             )
-            for l in liabilities
+            for lia in liabilities
         ],
     )
 
@@ -287,34 +292,36 @@ async def get_member_disclosure_summary(
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
-    disclosures = db.query(Disclosure).filter(
-        Disclosure.member_id == member_id,
-        Disclosure.parsed == True
-    ).order_by(Disclosure.filing_year).all()
+    disclosures = (
+        db.query(Disclosure)
+        .filter(Disclosure.member_id == member_id, Disclosure.parsed == True)
+        .order_by(Disclosure.filing_year)
+        .all()
+    )
 
     net_worth_history = []
 
     for disclosure in disclosures:
         assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).all()
-        liabilities = db.query(Liability).filter(
-            Liability.disclosure_id == disclosure.id
-        ).all()
+        liabilities = db.query(Liability).filter(Liability.disclosure_id == disclosure.id).all()
 
         total_assets_min = sum(float(a.value_min or 0) for a in assets)
         total_assets_max = sum(float(a.value_max or 0) for a in assets)
-        total_liabilities_min = sum(float(l.amount_min or 0) for l in liabilities)
-        total_liabilities_max = sum(float(l.amount_max or 0) for l in liabilities)
+        total_liabilities_min = sum(float(lia.amount_min or 0) for lia in liabilities)
+        total_liabilities_max = sum(float(lia.amount_max or 0) for lia in liabilities)
 
-        net_worth_history.append({
-            "year": disclosure.filing_year,
-            "disclosure_id": disclosure.id,
-            "assets_min": total_assets_min,
-            "assets_max": total_assets_max,
-            "liabilities_min": total_liabilities_min,
-            "liabilities_max": total_liabilities_max,
-            "net_worth_min": total_assets_min - total_liabilities_max,
-            "net_worth_max": total_assets_max - total_liabilities_min,
-        })
+        net_worth_history.append(
+            {
+                "year": disclosure.filing_year,
+                "disclosure_id": disclosure.id,
+                "assets_min": total_assets_min,
+                "assets_max": total_assets_max,
+                "liabilities_min": total_liabilities_min,
+                "liabilities_max": total_liabilities_max,
+                "net_worth_min": total_assets_min - total_liabilities_max,
+                "net_worth_max": total_assets_max - total_liabilities_min,
+            }
+        )
 
     return {
         "member_id": member_id,

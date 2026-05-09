@@ -1,0 +1,50 @@
+# Keep build context lean — anything not needed at runtime stays out.
+
+# Version control
+.git/
+.gitignore
+.gitattributes
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.pyo
+
+# Virtualenvs
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Local databases / data — never bake into the image
+*.db
+*.sqlite
+data/
+honest_congress.db
+alembic_baseline_temp.db
+
+# Local env / logs
+.env
+.env.*
+!.env.example
+*.log
+
+# Docs / dev artifacts
+docs/
+*.md
+!README.md
+
+# Tests aren't needed in runtime image
+tests/
+
+# Misc
+.DS_Store
+node_modules/

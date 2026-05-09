@@ -1,24 +1,69 @@
 """Trade anomaly analyzer for congressional stock transactions."""
+
 import logging
-from typing import List, Dict, Any, Optional
-from decimal import Decimal
-from datetime import datetime, timedelta
 from collections import defaultdict
+from decimal import Decimal
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
-from sqlalchemy import func, and_
 
-from src.db.models import Member, Disclosure, Transaction, Anomaly, TransactionType
+from src.config import get_settings
+from src.db.models import Anomaly, Disclosure, Member, Transaction
 
 logger = logging.getLogger(__name__)
+_settings = get_settings()
 
 # Sector keywords for classification
 SECTOR_KEYWORDS = {
-    "technology": ["tech", "software", "computer", "semiconductor", "chip", "apple", "microsoft", "google", "meta", "nvidia", "amd", "intel"],
-    "healthcare": ["health", "pharma", "biotech", "medical", "drug", "pfizer", "moderna", "johnson", "merck", "hospital"],
-    "finance": ["bank", "financial", "insurance", "capital", "goldman", "jpmorgan", "wells fargo", "citibank", "visa", "mastercard"],
+    "technology": [
+        "tech",
+        "software",
+        "computer",
+        "semiconductor",
+        "chip",
+        "apple",
+        "microsoft",
+        "google",
+        "meta",
+        "nvidia",
+        "amd",
+        "intel",
+    ],
+    "healthcare": [
+        "health",
+        "pharma",
+        "biotech",
+        "medical",
+        "drug",
+        "pfizer",
+        "moderna",
+        "johnson",
+        "merck",
+        "hospital",
+    ],
+    "finance": [
+        "bank",
+        "financial",
+        "insurance",
+        "capital",
+        "goldman",
+        "jpmorgan",
+        "wells fargo",
+        "citibank",
+        "visa",
+        "mastercard",
+    ],
     "energy": ["oil", "gas", "energy", "exxon", "chevron", "shell", "solar", "wind", "renewable"],
-    "defense": ["defense", "military", "aerospace", "lockheed", "raytheon", "boeing", "northrop", "general dynamics"],
+    "defense": [
+        "defense",
+        "military",
+        "aerospace",
+        "lockheed",
+        "raytheon",
+        "boeing",
+        "northrop",
+        "general dynamics",
+    ],
     "telecom": ["telecom", "communications", "at&t", "verizon", "t-mobile", "comcast"],
     "retail": ["retail", "amazon", "walmart", "target", "costco", "home depot"],
     "real_estate": ["real estate", "reit", "property", "housing"],
@@ -52,11 +97,26 @@ class TradeAnalyzer:
         min_trades_for_concentration: int = 5,
         concentration_threshold_percent: float = 50.0,
         frequency_threshold_per_month: int = 10,
+        late_filing_min_days: int | None = None,
+        late_filing_min_amount_usd: int | None = None,
     ):
         self.ptr_deadline_days = ptr_deadline_days
         self.min_trades_for_concentration = min_trades_for_concentration
         self.concentration_threshold_percent = concentration_threshold_percent
         self.frequency_threshold_per_month = frequency_threshold_per_month
+        # The "late filing" detector previously fired on every PTR more than
+        # 45 days late, generating thousands of low-signal anomalies. We now
+        # require a much later filing AND a non-trivial transaction size.
+        self.late_filing_min_days = (
+            late_filing_min_days
+            if late_filing_min_days is not None
+            else _settings.late_filing_min_days
+        )
+        self.late_filing_min_amount_usd = (
+            late_filing_min_amount_usd
+            if late_filing_min_amount_usd is not None
+            else _settings.late_filing_min_amount_usd
+        )
 
     def _large_trade_asset_name(self, txn: Transaction) -> str:
         return txn.ticker or (txn.description[:20] if txn.description else "unknown")
@@ -72,11 +132,13 @@ class TradeAnalyzer:
         )
         return {"title": title, "description": description}
 
-    def _sync_large_trade_anomalies(self, db: Session, member_id: Optional[int] = None) -> None:
+    def _sync_large_trade_anomalies(self, db: Session, member_id: int | None = None) -> None:
         """Backfill transaction_id and sync title/description for large trades."""
         large_trade_threshold = Decimal("1000000")
-        query = db.query(Transaction).join(Disclosure).filter(
-            Transaction.amount_min > large_trade_threshold
+        query = (
+            db.query(Transaction)
+            .join(Disclosure)
+            .filter(Transaction.amount_min > large_trade_threshold)
         )
         if member_id:
             query = query.filter(Disclosure.member_id == member_id)
@@ -88,10 +150,11 @@ class TradeAnalyzer:
 
             text = self._build_large_trade_text(txn)
 
-            existing = db.query(Anomaly).filter(
-                Anomaly.anomaly_type == "large_trade",
-                Anomaly.transaction_id == txn.id
-            ).first()
+            existing = (
+                db.query(Anomaly)
+                .filter(Anomaly.anomaly_type == "large_trade", Anomaly.transaction_id == txn.id)
+                .first()
+            )
 
             if existing:
                 if (
@@ -104,12 +167,16 @@ class TradeAnalyzer:
                     existing.disclosure_id = disclosure.id
                 continue
 
-            existing_no_txn = db.query(Anomaly).filter(
-                Anomaly.anomaly_type == "large_trade",
-                Anomaly.member_id == disclosure.member_id,
-                Anomaly.disclosure_id == disclosure.id,
-                Anomaly.title == text["title"]
-            ).first()
+            existing_no_txn = (
+                db.query(Anomaly)
+                .filter(
+                    Anomaly.anomaly_type == "large_trade",
+                    Anomaly.member_id == disclosure.member_id,
+                    Anomaly.disclosure_id == disclosure.id,
+                    Anomaly.title == text["title"],
+                )
+                .first()
+            )
 
             if existing_no_txn:
                 existing_no_txn.transaction_id = txn.id
@@ -134,18 +201,20 @@ class TradeAnalyzer:
         anomalies = []
 
         # Get all transactions for this member
-        transactions = db.query(Transaction).join(Disclosure).filter(
-            Disclosure.member_id == member_id
-        ).order_by(Transaction.transaction_date).all()
+        transactions = (
+            db.query(Transaction)
+            .join(Disclosure)
+            .filter(Disclosure.member_id == member_id)
+            .order_by(Transaction.transaction_date)
+            .all()
+        )
 
         if not transactions:
             return []
 
         self._sync_large_trade_anomalies(db, member_id=member_id)
 
-        # Run different anomaly checks
-        # NOTE: Late filings check disabled - creates 6000+ anomalies, too noisy
-        # anomalies.extend(self._check_late_filings(db, member_id, member))
+        anomalies.extend(self._check_late_filings(db, member_id, member))
         anomalies.extend(self._check_sector_concentration(transactions, member_id, member))
         anomalies.extend(self._check_trading_frequency(transactions, member_id, member))
         anomalies.extend(self._check_large_trades(transactions, member_id, member))
@@ -153,75 +222,88 @@ class TradeAnalyzer:
         return anomalies
 
     def _check_late_filings(
-        self,
-        db: Session,
-        member_id: int,
-        member: Member
+        self, db: Session, member_id: int, member: Member
     ) -> List[Dict[str, Any]]:
-        """Check for PTR filings that were submitted late (>45 days after trade)."""
-        anomalies = []
+        """Check for materially late PTR filings.
 
-        # Get PTR disclosures with transactions
-        ptr_disclosures = db.query(Disclosure).filter(
-            Disclosure.member_id == member_id,
-            Disclosure.is_ptr == True,
-            Disclosure.parsed == True
-        ).all()
+        Only flags trades where (filing_date - transaction_date) exceeds
+        `late_filing_min_days` AND the transaction's max amount meets
+        `late_filing_min_amount_usd`. These thresholds keep the signal
+        meaningful — the raw "anything past the 45-day STOCK Act deadline"
+        check produced thousands of small, noisy anomalies.
+        """
+        anomalies = []
+        min_amount = Decimal(str(self.late_filing_min_amount_usd))
+
+        ptr_disclosures = (
+            db.query(Disclosure)
+            .filter(
+                Disclosure.member_id == member_id,
+                Disclosure.is_ptr == True,
+                Disclosure.parsed == True,
+            )
+            .all()
+        )
 
         for disclosure in ptr_disclosures:
-            transactions = db.query(Transaction).filter(
-                Transaction.disclosure_id == disclosure.id
-            ).all()
+            transactions = (
+                db.query(Transaction).filter(Transaction.disclosure_id == disclosure.id).all()
+            )
 
             for txn in transactions:
-                if txn.transaction_date and disclosure.filing_date:
-                    days_to_file = (disclosure.filing_date - txn.transaction_date).days
+                if not (txn.transaction_date and disclosure.filing_date):
+                    continue
 
-                    if days_to_file > self.ptr_deadline_days:
-                        days_late = days_to_file - self.ptr_deadline_days
-                        severity = min(10, 3 + (days_late // 15))  # Severity increases every 15 days
+                days_to_file = (disclosure.filing_date - txn.transaction_date).days
+                if days_to_file <= self.late_filing_min_days:
+                    continue
 
-                        # Use vague ranges for days late
-                        if days_late <= 7:
-                            late_range = "slightly late (within a week)"
-                        elif days_late <= 30:
-                            late_range = "moderately late (1-4 weeks)"
-                        elif days_late <= 90:
-                            late_range = "significantly late (1-3 months)"
-                        else:
-                            late_range = "severely late (over 3 months)"
+                # Skip small trades — late filings on de minimis amounts are
+                # mostly clerical and we don't want to flood the table.
+                txn_amount = txn.amount_max or txn.amount_min
+                if txn_amount is None or txn_amount < min_amount:
+                    continue
 
-                        anomalies.append({
-                            "member_id": member_id,
-                            "disclosure_id": disclosure.id,
-                            "transaction_id": txn.id,
-                            "anomaly_type": "late_filing",
-                            "severity": severity,
-                            "title": f"Late PTR filing: {late_range}",
-                            "description": (
-                                f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
-                                f"was filed {late_range} on "
-                                f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
-                                f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
-                                f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
-                            ),
-                            "computed_value": Decimal(str(days_to_file)),
-                            "threshold_value": Decimal(str(self.ptr_deadline_days)),
-                        })
+                days_late = days_to_file - self.ptr_deadline_days
+                if days_late <= 30:
+                    severity = "low"
+                    late_range = "moderately late (1-4 weeks)"
+                elif days_late <= 90:
+                    severity = "medium"
+                    late_range = "significantly late (1-3 months)"
+                else:
+                    severity = "high"
+                    late_range = "severely late (over 3 months)"
+
+                anomalies.append(
+                    {
+                        "member_id": member_id,
+                        "disclosure_id": disclosure.id,
+                        "transaction_id": txn.id,
+                        "anomaly_type": "late_filing",
+                        "severity": severity,
+                        "title": f"Late PTR filing: {late_range}",
+                        "description": (
+                            f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
+                            f"was filed {late_range} on "
+                            f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
+                            f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
+                            f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
+                        ),
+                        "computed_value": Decimal(str(days_to_file)),
+                        "threshold_value": Decimal(str(self.ptr_deadline_days)),
+                    }
+                )
 
         return anomalies
 
     def _check_sector_concentration(
-        self,
-        transactions: List[Transaction],
-        member_id: int,
-        member: Member
+        self, transactions: List[Transaction], member_id: int, member: Member
     ) -> List[Dict[str, Any]]:
         """Check if trades are unusually concentrated in a specific sector, per disclosure year."""
         anomalies = []
 
         # Group transactions by disclosure (by year)
-        from collections import defaultdict
         disclosures_map = defaultdict(list)
 
         for txn in transactions:
@@ -267,28 +349,27 @@ class TradeAnalyzer:
                     else:
                         concentration_range = "over 90%"
 
-                    anomalies.append({
-                        "member_id": member_id,
-                        "disclosure_id": disclosure_id,
-                        "anomaly_type": "sector_concentration",
-                        "severity": min(10, 5 + int((concentration_percent - 50) / 10)),
-                        "title": f"High concentration in {sector} sector ({concentration_range})",
-                        "description": (
-                            f"A significant portion of trades ({concentration_range}) "
-                            f"are concentrated in the {sector} sector. This unusual concentration "
-                            f"may warrant further review."
-                        ),
-                        "computed_value": Decimal(str(concentration_percent)),
-                        "threshold_value": Decimal(str(self.concentration_threshold_percent)),
-                    })
+                    anomalies.append(
+                        {
+                            "member_id": member_id,
+                            "disclosure_id": disclosure_id,
+                            "anomaly_type": "sector_concentration",
+                            "severity": min(10, 5 + int((concentration_percent - 50) / 10)),
+                            "title": f"High concentration in {sector} sector ({concentration_range})",
+                            "description": (
+                                f"A significant portion of trades ({concentration_range}) "
+                                f"are concentrated in the {sector} sector. This unusual concentration "
+                                f"may warrant further review."
+                            ),
+                            "computed_value": Decimal(str(concentration_percent)),
+                            "threshold_value": Decimal(str(self.concentration_threshold_percent)),
+                        }
+                    )
 
         return anomalies
 
     def _check_trading_frequency(
-        self,
-        transactions: List[Transaction],
-        member_id: int,
-        member: Member
+        self, transactions: List[Transaction], member_id: int, member: Member
     ) -> List[Dict[str, Any]]:
         """Check for unusually high trading frequency, per disclosure year."""
         anomalies = []
@@ -297,7 +378,6 @@ class TradeAnalyzer:
             return []
 
         # Group transactions by disclosure first (by year), then by month
-        from collections import defaultdict
         disclosures_map = defaultdict(list)
 
         for txn in transactions:
@@ -320,9 +400,10 @@ class TradeAnalyzer:
                     # Format month from YYYY-MM to "Month Year"
                     try:
                         from datetime import datetime
+
                         date_obj = datetime.strptime(month, "%Y-%m")
                         formatted_month = date_obj.strftime("%B %Y")
-                    except:
+                    except ValueError:
                         formatted_month = month
 
                     # Use vague ranges instead of exact counts
@@ -337,29 +418,28 @@ class TradeAnalyzer:
                     else:
                         trade_range = "more than 100"
 
-                    anomalies.append({
-                        "member_id": member_id,
-                        "disclosure_id": disclosure_id,
-                        "anomaly_type": "high_trading_frequency",
-                        "severity": min(10, 4 + (count - self.frequency_threshold_per_month)),
-                        "title": f"High trading activity: {trade_range} trades in {formatted_month}",
-                        "description": (
-                            f"Between {trade_range} stock trades were made in {formatted_month}, "
-                            f"which exceeds the threshold of {self.frequency_threshold_per_month} "
-                            f"trades per month. High trading frequency may indicate "
-                            f"active trading based on non-public information."
-                        ),
-                        "computed_value": Decimal(str(count)),
-                        "threshold_value": Decimal(str(self.frequency_threshold_per_month)),
-                    })
+                    anomalies.append(
+                        {
+                            "member_id": member_id,
+                            "disclosure_id": disclosure_id,
+                            "anomaly_type": "high_trading_frequency",
+                            "severity": min(10, 4 + (count - self.frequency_threshold_per_month)),
+                            "title": f"High trading activity: {trade_range} trades in {formatted_month}",
+                            "description": (
+                                f"Between {trade_range} stock trades were made in {formatted_month}, "
+                                f"which exceeds the threshold of {self.frequency_threshold_per_month} "
+                                f"trades per month. High trading frequency may indicate "
+                                f"active trading based on non-public information."
+                            ),
+                            "computed_value": Decimal(str(count)),
+                            "threshold_value": Decimal(str(self.frequency_threshold_per_month)),
+                        }
+                    )
 
         return anomalies
 
     def _check_large_trades(
-        self,
-        transactions: List[Transaction],
-        member_id: int,
-        member: Member
+        self, transactions: List[Transaction], member_id: int, member: Member
     ) -> List[Dict[str, Any]]:
         """Flag unusually large trades (over $1M)."""
         anomalies = []
@@ -369,17 +449,19 @@ class TradeAnalyzer:
             if txn.amount_min and txn.amount_min > large_trade_threshold:
                 text = self._build_large_trade_text(txn)
 
-                anomalies.append({
-                    "member_id": member_id,
-                    "disclosure_id": txn.disclosure_id,
-                    "transaction_id": txn.id,
-                    "anomaly_type": "large_trade",
-                    "severity": min(10, 5 + int(txn.amount_min / Decimal("5000000"))),
-                    "title": text["title"],
-                    "description": text["description"],
-                    "computed_value": txn.amount_min,
-                    "threshold_value": large_trade_threshold,
-                })
+                anomalies.append(
+                    {
+                        "member_id": member_id,
+                        "disclosure_id": txn.disclosure_id,
+                        "transaction_id": txn.id,
+                        "anomaly_type": "large_trade",
+                        "severity": min(10, 5 + int(txn.amount_min / Decimal("5000000"))),
+                        "title": text["title"],
+                        "description": text["description"],
+                        "computed_value": txn.amount_min,
+                        "threshold_value": large_trade_threshold,
+                    }
+                )
 
         return anomalies
 
@@ -413,11 +495,15 @@ class TradeAnalyzer:
                     # For large_trade, check by transaction_id to ensure each transaction is unique
                     # For others, check by title within the same disclosure
                     if anomaly.get("transaction_id"):
-                        existing = db.query(Anomaly).filter(
-                            Anomaly.member_id == anomaly["member_id"],
-                            Anomaly.anomaly_type == anomaly["anomaly_type"],
-                            Anomaly.transaction_id == anomaly["transaction_id"]
-                        ).first()
+                        existing = (
+                            db.query(Anomaly)
+                            .filter(
+                                Anomaly.member_id == anomaly["member_id"],
+                                Anomaly.anomaly_type == anomaly["anomaly_type"],
+                                Anomaly.transaction_id == anomaly["transaction_id"],
+                            )
+                            .first()
+                        )
 
                         if existing:
                             if (
@@ -430,12 +516,16 @@ class TradeAnalyzer:
                                 existing.disclosure_id = anomaly.get("disclosure_id")
                             continue
                     else:
-                        existing = db.query(Anomaly).filter(
-                            Anomaly.member_id == anomaly["member_id"],
-                            Anomaly.anomaly_type == anomaly["anomaly_type"],
-                            Anomaly.disclosure_id == anomaly.get("disclosure_id"),
-                            Anomaly.title == anomaly["title"]
-                        ).first()
+                        existing = (
+                            db.query(Anomaly)
+                            .filter(
+                                Anomaly.member_id == anomaly["member_id"],
+                                Anomaly.anomaly_type == anomaly["anomaly_type"],
+                                Anomaly.disclosure_id == anomaly.get("disclosure_id"),
+                                Anomaly.title == anomaly["title"],
+                            )
+                            .first()
+                        )
 
                         if existing:
                             # Skip duplicate
@@ -455,12 +545,14 @@ class TradeAnalyzer:
                     )
                     db.add(db_anomaly)
 
-                    all_anomalies.append({
-                        **anomaly,
-                        "member_name": f"{member.first_name} {member.last_name}",
-                        "state": member.state,
-                        "party": member.party.value,
-                    })
+                    all_anomalies.append(
+                        {
+                            **anomaly,
+                            "member_name": f"{member.first_name} {member.last_name}",
+                            "state": member.state,
+                            "party": member.party.value,
+                        }
+                    )
 
         db.commit()
 
@@ -472,10 +564,7 @@ class TradeAnalyzer:
         }
 
 
-def analyze_trades(
-    db: Session,
-    member_id: Optional[int] = None
-) -> Dict[str, Any]:
+def analyze_trades(db: Session, member_id: int | None = None) -> Dict[str, Any]:
     """
     Convenience function to run trade analysis.
 

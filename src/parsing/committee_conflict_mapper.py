@@ -2,12 +2,14 @@
 Map committee assignments and detect trading conflicts.
 Links members to committees and identifies sector conflicts.
 """
+
 import logging
-from typing import List, Dict, Optional, Set
+from typing import Dict, List, Set
+
 from sqlalchemy.orm import Session
 
 from src.db.database import SessionLocal
-from src.db.models import Member, Transaction, Chamber
+from src.db.models import Member, Transaction
 
 logger = logging.getLogger(__name__)
 
@@ -21,28 +23,22 @@ class CommitteeConflictMapper:
         "finance": ["finance", "banking", "insurance", "capital", "jpmorgan", "wells fargo"],
         "banking": ["bank", "financial", "credit", "visa", "mastercard"],
         "appropriations": ["defense", "weapons", "lockheed", "boeing", "raytheon"],
-
         # Technology committees
         "science": ["tech", "software", "semiconductor", "intel", "nvidia", "apple"],
         "commerce": ["internet", "telecom", "wireless", "at&t", "verizon", "comcast"],
         "energy": ["energy", "oil", "gas", "exxon", "chevron", "renewables"],
-
         # Healthcare committees
         "health": ["pharma", "biotech", "hospital", "pfizer", "moderna", "merck"],
         "labor": ["healthcare", "medical", "insurance", "wellness"],
-
         # Defense committees
         "armed_services": ["defense", "military", "aerospace", "weapons", "lockheed"],
         "intelligence": ["defense", "security", "intel"],
         "homeland_security": ["security", "defense", "safety"],
-
         # Environment/Energy
         "environment": ["energy", "renewable", "environmental", "solar", "wind"],
         "natural_resources": ["oil", "gas", "mining", "energy"],
-
         # Agriculture
         "agriculture": ["food", "agriculture", "farming", "monsanto"],
-
         # Veterans
         "veterans": ["defense", "weapons", "military", "healthcare"],
     }
@@ -68,7 +64,7 @@ class CommitteeConflictMapper:
 
         return set()
 
-    def classify_ticker_sector(self, ticker: str, description: str = "") -> Optional[str]:
+    def classify_ticker_sector(self, ticker: str, description: str = "") -> str | None:
         """Classify ticker to sector."""
         # Map specific companies to sectors
         company_sectors = {
@@ -81,7 +77,6 @@ class CommitteeConflictMapper:
             "TSLA": "tech",
             "INTC": "tech",
             "AMD": "tech",
-
             # Finance
             "JPM": "finance",
             "GS": "finance",
@@ -89,24 +84,20 @@ class CommitteeConflictMapper:
             "WFC": "finance",
             "V": "finance",
             "MA": "finance",
-
             # Defense
             "LMT": "defense",
             "BA": "defense",
             "RTX": "defense",
             "NOC": "defense",
-
             # Energy
             "XOM": "energy",
             "CVX": "energy",
             "COP": "energy",
-
             # Healthcare
             "PFE": "healthcare",
             "JNJ": "healthcare",
             "MRK": "healthcare",
             "MRNA": "healthcare",
-
             # Telecom
             "T": "telecom",
             "VZ": "telecom",
@@ -119,7 +110,9 @@ class CommitteeConflictMapper:
 
         return None
 
-    def detect_conflicts(self, member_id: int, committees: List[str], db_session: Session) -> List[Dict]:
+    def detect_conflicts(
+        self, member_id: int, committees: List[str], db_session: Session
+    ) -> List[Dict]:
         """Detect trading conflicts for a member."""
         conflicts = []
 
@@ -130,9 +123,7 @@ class CommitteeConflictMapper:
                 return conflicts
 
             # Get member's trades
-            trades = db_session.query(Transaction).filter(
-                Transaction.member_id == member_id
-            ).all()
+            trades = db_session.query(Transaction).filter(Transaction.member_id == member_id).all()
 
             # Get committee sectors
             committee_sectors = set()
@@ -145,14 +136,16 @@ class CommitteeConflictMapper:
                 trade_sector = self.classify_ticker_sector(trade.ticker)
 
                 if trade_sector and trade_sector in committee_sectors:
-                    conflicts.append({
-                        "member": member,
-                        "committee": [c for c in committees if self.get_committee_sectors(c)],
-                        "ticker": trade.ticker,
-                        "sector": trade_sector,
-                        "date": trade.transaction_date,
-                        "type": "potential_conflict",
-                    })
+                    conflicts.append(
+                        {
+                            "member": member,
+                            "committee": [c for c in committees if self.get_committee_sectors(c)],
+                            "ticker": trade.ticker,
+                            "sector": trade_sector,
+                            "date": trade.transaction_date,
+                            "type": "potential_conflict",
+                        }
+                    )
                     self.conflicts_found += 1
 
         except Exception as e:
@@ -166,8 +159,8 @@ class CommitteeConflictMapper:
         db = SessionLocal()
 
         try:
-            logger.info(f"\nMapping committee assignments...")
-            logger.info(f"{'='*70}\n")
+            logger.info("\nMapping committee assignments...")
+            logger.info(f"{'=' * 70}\n")
 
             members = db.query(Member).all()
 
@@ -186,18 +179,22 @@ class CommitteeConflictMapper:
                         total_mapped += 1
 
                         if conflicts:
-                            logger.info(f"{member.first_name} {member.last_name}: {len(conflicts)} potential conflicts")
+                            logger.info(
+                                f"{member.first_name} {member.last_name}: {len(conflicts)} potential conflicts"
+                            )
 
                 except Exception as e:
-                    logger.error(f"Error mapping {member.first_name} {member.last_name}: {str(e)[:50]}")
+                    logger.error(
+                        f"Error mapping {member.first_name} {member.last_name}: {str(e)[:50]}"
+                    )
                     self.errors += 1
 
-            logger.info(f"\n{'='*70}")
-            logger.info(f"Committee Mapping Complete")
+            logger.info(f"\n{'=' * 70}")
+            logger.info("Committee Mapping Complete")
             logger.info(f"Members mapped: {total_mapped}")
             logger.info(f"Conflicts detected: {self.conflicts_found}")
             logger.info(f"Errors: {self.errors}")
-            logger.info(f"{'='*70}\n")
+            logger.info(f"{'=' * 70}\n")
 
             logger.info("NOTE: Committee data would be fetched from Congress.gov API in production")
 
@@ -212,8 +209,7 @@ class CommitteeConflictMapper:
 def main():
     """Run committee mapping."""
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
 
     mapper = CommitteeConflictMapper()
@@ -222,4 +218,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

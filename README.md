@@ -44,22 +44,20 @@ always returns 200 and is intended for liveness probes.
 ## Deploying to Railway
 
 The repo ships with a `Dockerfile` and a `railway.toml` that Railway
-auto-detects.
+auto-detects. See **[docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md)** for the
+full step-by-step guide. Short version:
 
-1. **Create a Railway project** and attach the **Postgres** plugin.
-2. **Set env vars** in the Railway dashboard:
-   - `ENV=production` (enables prod-mode validation)
-   - `ADMIN_PASSWORD=<strong random>` (required when ENV=production)
-   - `ALLOWED_ORIGINS=https://your.domain.up.railway.app`
-   - Optional: `CONGRESS_GOV_API_KEY`, `QUIVERQUANT_API_KEY`,
-     `LATE_FILING_MIN_DAYS`, `LATE_FILING_MIN_AMOUNT_USD`
-3. **Push the branch.** Railway builds the Docker image, runs
-   `alembic upgrade head` as the pre-deploy step, then starts uvicorn.
-
-The `daily-update.yml` GitHub Action re-runs ingestion + anomaly
-detection nightly. Add `RAILWAY_DATABASE_URL` (the external connection
-string from Railway) as a repo secret so the cron job lands rows in the
-deployed database.
+1. **Create a Railway project** from the GitHub repo, attach the **Postgres**
+   plugin, and reference `DATABASE_URL` on the app service.
+2. **Set env vars**: `ENV=production`, `ADMIN_PASSWORD=<strong random>`,
+   `ALLOWED_ORIGINS=https://<your-railway-domain>`. Optional:
+   `CONGRESS_GOV_API_KEY`, `QUIVERQUANT_API_KEY`.
+3. **Push to `main`.** Railway builds the Docker image, runs
+   `alembic upgrade head` as the pre-deploy step, then starts uvicorn on
+   `$PORT`.
+4. **Run the daily-update GitHub Action** by adding `RAILWAY_DATABASE_URL`
+   (the external connection string from Railway) as a repo secret so the
+   cron job lands ingestion rows in the deployed database.
 
 ## Architecture
 

@@ -1,6 +1,5 @@
 """Unified ingestion orchestrator."""
 
-import csv
 import logging
 import time
 from datetime import datetime
@@ -13,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from src.db import Chamber, Disclosure, Member, Party, get_db
 from src.db.models import Asset, AssetType, Liability, Transaction, TransactionType
+from src.ingestion import _helpers
 from src.ingestion.congress_gov import CongressGovClient
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 from src.ingestion.house import HouseIngester
@@ -462,48 +462,10 @@ class IngestionOrchestrator:
         return None
 
     def _build_alt_pdf_url(self, disclosure: Disclosure) -> str | None:
-        """Try alternative PDF URL patterns if the primary URL 404s."""
-        if not disclosure.document_url:
-            return None
-
-        # Example: /financial-pdfs/2024/123.pdf -> /financial-pdfs/123.pdf
-        if (
-            "/financial-pdfs/" in disclosure.document_url
-            and "/ptr-pdfs/" not in disclosure.document_url
-        ):
-            parts = disclosure.document_url.split("/financial-pdfs/")
-            if len(parts) == 2:
-                tail = parts[1]
-                if "/" in tail:
-                    doc_name = tail.split("/", 1)[1]
-                    return f"{parts[0]}/financial-pdfs/{doc_name}"
-        return None
+        return _helpers.build_alt_pdf_url(disclosure)
 
     def _record_failed_download(self, disclosure: Disclosure, reason: str) -> str:
-        """Append failed download details to a CSV for later review."""
-        failed_path = self.data_dir / "failed_downloads.csv"
-        failed_path.parent.mkdir(parents=True, exist_ok=True)
-        is_new = not failed_path.exists()
-
-        with open(failed_path, "a", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            if is_new:
-                writer.writerow(
-                    ["timestamp", "document_id", "filing_year", "is_ptr", "document_url", "reason"]
-                )
-            writer.writerow(
-                [
-                    datetime.utcnow().isoformat(),
-                    disclosure.document_id,
-                    disclosure.filing_year,
-                    disclosure.is_ptr,
-                    disclosure.document_url,
-                    reason,
-                ]
-            )
-
-        logger.error(f"Failed to download {disclosure.document_url}: {reason}")
-        return reason
+        return _helpers.record_failed_download(self.data_dir, disclosure, reason)
 
     def parse_disclosure(
         self, db: Session, disclosure: Disclosure, pdf_path: Path | None = None
@@ -773,27 +735,12 @@ class IngestionOrchestrator:
         return summary
 
     def fix_future_dates(self, db: Session) -> int:
+        """Fix any disclosure records with future filing dates.
+
+        Delegates to the standalone helper; the wrapper remains for
+        backward compatibility with existing callers (CLI, API, tests).
         """
-        Fix any disclosure records that have future filing dates.
-
-        Returns:
-            Number of records fixed
-        """
-        now = datetime.now()
-        future_disclosures = db.query(Disclosure).filter(Disclosure.filing_date > now).all()
-
-        fixed = 0
-        for disclosure in future_disclosures:
-            old_date = disclosure.filing_date
-            disclosure.filing_date = now
-            logger.info(f"Fixed future date: {disclosure.document_id} {old_date} -> {now}")
-            fixed += 1
-
-        if fixed > 0:
-            db.commit()
-            logger.info(f"Fixed {fixed} disclosures with future dates")
-
-        return fixed
+        return _helpers.fix_future_dates(db)
 
     def download_all_pdfs(
         self, db: Session, limit: int | None = None, force: bool = False, delay: float = 0.5

@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, List
@@ -10,7 +11,7 @@ import requests
 from dotenv import load_dotenv
 from sqlalchemy.orm import Session
 
-from src.db.models import Disclosure, Member, Transaction, TransactionType
+from src.db.models import Chamber, Disclosure, Member, Party, Transaction, TransactionType
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 
 # Load .env file
@@ -33,6 +34,58 @@ HISTORICAL_CONGRESS_ENDPOINT = f"{QUIVERQUANT_BASE}/historical/congresstrading"
 LIVE_HOUSE_ENDPOINT = f"{QUIVERQUANT_BASE}/live/housetrading"
 LIVE_SENATE_ENDPOINT = f"{QUIVERQUANT_BASE}/live/senatetrading"
 LIVE_CONGRESS_ENDPOINT = f"{QUIVERQUANT_BASE}/live/congresstrading"
+
+# Backoff schedule for HTTP 429 / transient 5xx responses (seconds).
+_RETRY_BACKOFF_SECONDS = (1, 2, 4, 8)
+
+# Maps the single-letter Party codes QuiverQuant returns to our Party enum.
+# Falls back to OTHER for anything unrecognized.
+_PARTY_BY_LETTER = {
+    "D": Party.DEMOCRAT,
+    "R": Party.REPUBLICAN,
+    "I": Party.INDEPENDENT,
+    "O": Party.OTHER,
+}
+
+# Match "$1,001 - $15,000" (with optional whitespace, optional $ on either side).
+_AMOUNT_RANGE_RE = re.compile(r"\$?\s*([\d,]+(?:\.\d+)?)\s*-\s*\$?\s*([\d,]+(?:\.\d+)?)")
+
+
+def parse_amount_range(amount_str: str | None) -> tuple[float | None, float | None]:
+    """Parse QuiverQuant `Amount` strings into (min, max).
+
+    Handles three shapes:
+    * Range:  "$1,001 - $15,000"        -> (1001.0, 15000.0)
+    * Single: "50000" or "$50,000"      -> (50000.0, 50000.0)
+    * Empty/garbage:                    -> (None, None)
+
+    Critical: the previous implementation tried `float()` directly on the
+    raw value, so range-format strings (the dominant House-PTR shape) hit
+    a ``ValueError`` and both bounds ended up ``None``. That silently broke
+    the ``large_trade`` and ``late_filing`` detectors for QuiverQuant
+    data — they both branch on ``amount_min`` / ``amount_max``.
+    """
+    if not amount_str:
+        return None, None
+
+    s = str(amount_str).strip()
+    if not s:
+        return None, None
+
+    m = _AMOUNT_RANGE_RE.search(s)
+    if m:
+        try:
+            return float(m.group(1).replace(",", "")), float(m.group(2).replace(",", ""))
+        except (ValueError, TypeError):
+            return None, None
+
+    # Single value (possibly with $ and commas).
+    cleaned = s.replace("$", "").replace(",", "").strip()
+    try:
+        v = float(cleaned)
+        return v, v
+    except (ValueError, TypeError):
+        return None, None
 
 
 class QuiverQuantClient:
@@ -112,32 +165,69 @@ class QuiverQuantClient:
     # =========================================================================
 
     def _fetch_trades(self, endpoint: str, limit: int | None) -> List[Dict[str, Any]]:
-        """Fetch trades from an endpoint."""
-        try:
-            logger.info(f"Fetching trades from {endpoint}")
-            response = self.session.get(endpoint, timeout=60)
-            response.raise_for_status()
+        """Fetch trades from an endpoint, retrying on 429 / transient 5xx.
 
-            data = response.json()
-            if not isinstance(data, list):
-                logger.warning(f"Unexpected response format: {type(data)}")
+        Previously a 429 just logged and returned an empty list, so the
+        daily cron would silently succeed with zero rows. Now we honor a
+        ``Retry-After`` header when present, otherwise fall back to a
+        small exponential backoff, before giving up.
+        """
+        for attempt, wait_default in enumerate(_RETRY_BACKOFF_SECONDS, start=1):
+            try:
+                logger.info("Fetching trades from %s (attempt %d)", endpoint, attempt)
+                response = self.session.get(endpoint, timeout=60)
+            except requests.RequestException as e:
+                logger.warning("Network error fetching %s: %s", endpoint, e)
+                if attempt < len(_RETRY_BACKOFF_SECONDS):
+                    time.sleep(wait_default)
+                    continue
                 return []
 
-            trades = data[:limit] if limit else data
-            logger.info(f"Fetched {len(trades)} trades")
-            return trades
+            status = response.status_code
+            if status == 200:
+                try:
+                    data = response.json()
+                except ValueError as e:
+                    logger.error("Non-JSON response from %s: %s", endpoint, e)
+                    return []
+                if not isinstance(data, list):
+                    logger.warning("Unexpected response shape from %s: %s", endpoint, type(data))
+                    return []
+                trades = data[:limit] if limit else data
+                logger.info("Fetched %d trades from %s", len(trades), endpoint)
+                return trades
 
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                logger.error("Invalid API key - got 401 Unauthorized")
-            elif e.response.status_code == 429:
-                logger.error("Rate limited - got 429 Too Many Requests")
-            else:
-                logger.error(f"HTTP error {e.response.status_code}: {e}")
+            if status == 401:
+                logger.error("QuiverQuant rejected the API key (401). Not retrying.")
+                return []
+
+            if status == 429 or 500 <= status < 600:
+                wait = wait_default
+                ra = response.headers.get("Retry-After")
+                if ra:
+                    try:
+                        wait = max(wait, int(ra))
+                    except (TypeError, ValueError):
+                        pass
+                if attempt < len(_RETRY_BACKOFF_SECONDS):
+                    logger.warning(
+                        "%s returned %d; retrying in %ds (attempt %d)",
+                        endpoint,
+                        status,
+                        wait,
+                        attempt,
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.error(
+                    "%s returned %d after %d attempts; giving up", endpoint, status, attempt
+                )
+                return []
+
+            logger.error("Unexpected HTTP %d from %s", status, endpoint)
             return []
-        except Exception as e:
-            logger.error(f"Error fetching trades: {e}")
-            return []
+
+        return []
 
     def ingest_trades(
         self,
@@ -268,21 +358,29 @@ class QuiverQuantClient:
             safe_transaction_date = choose_transaction_date(transaction_date, filed_date)
             safe_filed_date = choose_filing_date(filed_date, safe_transaction_date.year)
 
-            # Find member by BioGuideID or name
+            # Find member, preferring the stable BioGuideID over name match.
+            # Auto-creation is only allowed when we have a BioGuideID — name-
+            # only matches risk creating duplicate members for the same person
+            # under different naming conventions ("Bob Smith" vs "Robert Smith Jr.").
             bioguide_id = trade_data.get("BioGuideID")
             member = None
 
             if bioguide_id:
                 member = db.query(Member).filter(Member.bioguide_id == bioguide_id).first()
-
-            if not member:
-                member = self._find_member(db, member_name)
-
-            if not member:
-                # Auto-create member from trade data if not found
-                member = self._create_member_from_trade(db, trade_data)
                 if not member:
+                    member = self._create_member_from_trade(db, trade_data)
+            else:
+                member = self._find_member(db, member_name)
+                if not member:
+                    logger.warning(
+                        "Skipping unmatched trade: name=%r ticker=%s (no BioGuideID and no DB match)",
+                        member_name,
+                        ticker,
+                    )
                     return "error"
+
+            if not member:
+                return "error"
 
             # Check for duplicates
             existing = (
@@ -324,16 +422,12 @@ class QuiverQuantClient:
                 db.add(disclosure)
                 db.flush()
 
-            # Parse amount
-            amount_min = None
-            amount_max = None
-            if amount_str:
-                try:
-                    amount_val = float(amount_str)
-                    amount_min = amount_val
-                    amount_max = amount_val
-                except (ValueError, TypeError):
-                    pass
+            # Parse amount — handles range, single, and empty cases. The
+            # House PTR `Amount` is virtually always a range string like
+            # "$1,001 - $15,000"; the previous direct float() cast would
+            # raise ValueError and leave both bounds None, which silently
+            # broke downstream detectors keyed on amount.
+            amount_min, amount_max = parse_amount_range(amount_str)
 
             # Create transaction
             transaction = Transaction(
@@ -354,17 +448,27 @@ class QuiverQuantClient:
             return "error"
 
     def _create_member_from_trade(self, db: Session, trade_data: Dict[str, Any]) -> Member | None:
-        """Auto-create a member from trade data if they don't exist."""
+        """Auto-create a member from trade data if they don't exist.
+
+        Only called when we have a stable ``BioGuideID``. The previous
+        version assigned raw strings to the ``party`` and ``chamber``
+        columns, which silently coerced under SQLite but breaks under
+        Postgres' strict enum types. Now we map to the proper enums and
+        skip cleanly when the values aren't recognized.
+        """
         try:
+            bioguide_id = trade_data.get("BioGuideID")
+            if not bioguide_id:
+                # Caller should have routed name-only trades to _find_member;
+                # this is a safety net.
+                return None
+
             name = (
                 trade_data.get("Name")
                 or trade_data.get("Representative")
                 or trade_data.get("Senator")
-            )
-            if not name:
-                return None
-
-            name = name.strip()
+                or ""
+            ).strip()
             parts = name.replace(",", "").strip().split()
             if len(parts) < 2:
                 return None
@@ -372,34 +476,37 @@ class QuiverQuantClient:
             first_name = parts[0]
             last_name = parts[-1]
 
-            # Get other fields from trade data
-            bioguide_id = trade_data.get("BioGuideID")
-            party = trade_data.get("Party", "")
-            state = trade_data.get("State", "")
-            chamber = trade_data.get("Chamber", "")
+            chamber_raw = (trade_data.get("Chamber") or "").strip().lower()
+            chamber = Chamber.SENATE if chamber_raw == "senate" else Chamber.HOUSE
 
-            # Determine chamber type
-            if chamber.lower() == "senate":
-                chamber_type = "senate"
-            else:
-                chamber_type = "house"
+            party_raw = (trade_data.get("Party") or "").strip().upper()
+            party = _PARTY_BY_LETTER.get(party_raw, Party.OTHER)
+
+            state = (trade_data.get("State") or "").strip().upper() or "??"
 
             member = Member(
                 bioguide_id=bioguide_id,
                 first_name=first_name,
                 last_name=last_name,
-                party=party.upper() if party else None,
-                state=state.upper() if state else None,
-                chamber=chamber_type,
-                in_office=False,  # Assume not in office, can be updated later
+                party=party,
+                state=state,
+                chamber=chamber,
+                in_office=False,  # Conservative default; refresh from /api/members later.
             )
             db.add(member)
             db.flush()
-            logger.info(f"Auto-created member: {first_name} {last_name} ({bioguide_id})")
+            logger.info(
+                "Auto-created member: %s %s (%s, %s, %s)",
+                first_name,
+                last_name,
+                bioguide_id,
+                party.value,
+                chamber.value,
+            )
             return member
 
-        except Exception as e:
-            logger.error(f"Error creating member: {e}")
+        except Exception:
+            logger.exception("Failed to auto-create member from trade")
             return None
 
     def _find_member(self, db: Session, name: str) -> Member | None:
@@ -447,11 +554,26 @@ class QuiverQuantClient:
         return None
 
 
-def ingest_quiverquant_trades(db: Session, chamber: str = "both") -> Dict[str, int]:
-    """Convenience function to ingest QuiverQuant trades using bulk endpoint."""
+def ingest_quiverquant_trades(
+    db: Session,
+    chamber: str = "both",
+    mode: str = "live",
+) -> Dict[str, int]:
+    """Ingest QuiverQuant trades into the database.
+
+    ``mode``:
+        ``live`` (default) — `/live/congresstrading`, recent trades only.
+            Use this for the daily cron and any incremental sync. The
+            bulk endpoint returns the *entire* history (~MB of duplicates
+            on every call) which is wasteful for routine refreshes.
+        ``bulk`` — `/bulk/congresstrading`, full history. Use only for
+            initial seed or an explicit "regenerate from scratch" admin
+            action.
+        ``historical`` — per-chamber historical endpoints; rarely needed.
+    """
     try:
         client = QuiverQuantClient()
-        return client.ingest_trades(db, chamber, mode="bulk")
+        return client.ingest_trades(db, chamber, mode=mode)
     except ValueError as e:
-        logger.error(f"QuiverQuant configuration error: {e}")
+        logger.error("QuiverQuant configuration error: %s", e)
         return {"imported": 0, "duplicates": 0, "errors": 0}

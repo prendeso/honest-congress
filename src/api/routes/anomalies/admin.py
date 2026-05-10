@@ -218,7 +218,10 @@ async def full_data_refresh(
                     sync_status["message"] = "Step 2/3: Syncing trades from QuiverQuant..."
                     sync_status["progress"] = 35
 
-                results["trades"] = ingest_quiverquant_trades(sync_db, chamber="both")
+                # Full refresh = explicit "rebuild from scratch", so pull the
+                # entire history. The default daily path uses the live
+                # endpoint instead — see ingest_quiverquant_trades docstring.
+                results["trades"] = ingest_quiverquant_trades(sync_db, chamber="both", mode="bulk")
 
                 with sync_lock:
                     sync_status["message"] = (

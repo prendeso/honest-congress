@@ -163,6 +163,15 @@ The $5 trial credit covers most of the first month.
 
 ## Troubleshooting
 
+### `Invalid value for '--port': '$PORT' is not a valid integer`
+
+This was a real bug in an earlier `railway.toml` and is fixed in current
+versions. If you see it: `railway.toml` had a `startCommand` line that
+Railway ran in exec form, so `$PORT` reached `uvicorn` as a literal string.
+The fix is to **delete** the `startCommand` line entirely and let the
+Dockerfile's `CMD ["sh", "-c", "exec uvicorn ... --port ${PORT}"]` handle
+startup — the shell wrapper expands `$PORT` correctly.
+
 ### Build fails with `pip install` errors
 
 Most often `lxml` or `pdfplumber` failing because system libs are missing. The `Dockerfile` already installs `libxml2-dev`, `libxslt1-dev`, `libpq-dev` in the build stage, so this shouldn't happen — but if you've forked and changed the Dockerfile, restore those `apt-get install` lines.

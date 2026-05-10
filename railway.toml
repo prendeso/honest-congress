@@ -18,7 +18,6 @@ dockerfilePath = "Dockerfile"
 # Run schema migrations before each deploy — keeps the prod schema in lock
 # step with the code that's about to start serving traffic.
 preDeployCommand = "alembic upgrade head"
-startCommand = "uvicorn src.api.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"

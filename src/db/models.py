@@ -269,3 +269,82 @@ class Anomaly(Base):
 
     def __repr__(self) -> str:
         return f"<Anomaly {self.anomaly_type}: {self.title[:30]}...>"
+
+
+# ---------------------------------------------------------------------------
+# QuiverQuant Tier-2 datasets — driving "donor conflict", "lobbying overlap",
+# and "contract front-run" detectors. Each row is a TRIGGER EVENT we cross-
+# reference against transactions to detect conflict-of-interest patterns.
+# ---------------------------------------------------------------------------
+
+
+class CampaignDonation(Base):
+    """A campaign donation from a public company to a member.
+
+    Sourced from QuiverQuant ``/bulk/corporatedonors``. The detector flags
+    transactions in `ticker` made by `member_id` within ``donor_window_days``
+    of `donation_date`.
+    """
+
+    __tablename__ = "campaign_donations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), index=True)
+
+    ticker: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    donor_name: Mapped[str] = mapped_column(String(255))
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
+    cycle: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    transaction_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    donation_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+    source: Mapped[str] = mapped_column(String(50), default="quiverquant")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (Index("ix_donations_member_ticker", "member_id", "ticker"),)
+
+
+class LobbyingDisclosure(Base):
+    """A lobbying disclosure filed by a public company.
+
+    Sourced from QuiverQuant ``/historical/lobbying/{ticker}``. The detector
+    flags transactions in `ticker` made within ``lobbying_window_days`` of
+    `filed_date` regardless of which member traded — it's a market-wide
+    signal that the issuer is actively trying to shape policy.
+    """
+
+    __tablename__ = "lobbying_disclosures"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(20), index=True)
+    registrant: Mapped[str] = mapped_column(String(255))
+    client: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
+    filed_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    issue_codes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    source: Mapped[str] = mapped_column(String(50), default="quiverquant")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class GovernmentContract(Base):
+    """A federal contract awarded to a public company.
+
+    Sourced from QuiverQuant ``/historical/govcontractsall/{ticker}``. The
+    detector flags PURCHASE transactions in `ticker` made within
+    ``contract_window_days`` *before* `awarded_date` — front-running an
+    award is the clearest insider signal in this dataset.
+    """
+
+    __tablename__ = "government_contracts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    ticker: Mapped[str] = mapped_column(String(20), index=True)
+    agency: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
+    awarded_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    source: Mapped[str] = mapped_column(String(50), default="quiverquant")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

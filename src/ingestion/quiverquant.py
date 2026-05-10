@@ -35,6 +35,20 @@ LIVE_HOUSE_ENDPOINT = f"{QUIVERQUANT_BASE}/live/housetrading"
 LIVE_SENATE_ENDPOINT = f"{QUIVERQUANT_BASE}/live/senatetrading"
 LIVE_CONGRESS_ENDPOINT = f"{QUIVERQUANT_BASE}/live/congresstrading"
 
+# Tier-2 datasets (drive new detectors)
+BULK_DONORS_ENDPOINT = f"{QUIVERQUANT_BASE}/bulk/corporatedonors"
+HISTORICAL_LOBBYING_ENDPOINT = f"{QUIVERQUANT_BASE}/historical/lobbying"  # /{ticker}
+LIVE_LOBBYING_ENDPOINT = f"{QUIVERQUANT_BASE}/live/lobbying"
+HISTORICAL_CONTRACTS_ENDPOINT = f"{QUIVERQUANT_BASE}/historical/govcontractsall"  # /{ticker}
+LIVE_CONTRACTS_ENDPOINT = f"{QUIVERQUANT_BASE}/live/govcontractsall"
+
+# Tier-3 context endpoints (no DB persistence — used to enrich existing detectors)
+LIVE_INSIDERS_ENDPOINT = f"{QUIVERQUANT_BASE}/live/insiders"
+LIVE_SEC13F_ENDPOINT = f"{QUIVERQUANT_BASE}/live/sec13f"
+LIVE_SEC13F_CHANGES_ENDPOINT = f"{QUIVERQUANT_BASE}/live/sec13fchanges"
+LIVE_TOP_SHAREHOLDERS_ENDPOINT = f"{QUIVERQUANT_BASE}/live/topshareholders"  # /{ticker}
+LIVE_NEWS_ENDPOINT = f"{QUIVERQUANT_BASE}/live/quivernews"
+
 # Backoff schedule for HTTP 429 / transient 5xx responses (seconds).
 _RETRY_BACKOFF_SECONDS = (1, 2, 4, 8)
 
@@ -161,10 +175,115 @@ class QuiverQuantClient:
         return self.get_historical_senate_trades(limit)
 
     # =========================================================================
+    # TIER 2 ENDPOINTS — corporate donors, lobbying, government contracts
+    # =========================================================================
+
+    def get_corporate_donors(
+        self,
+        bioguide_id: str | None = None,
+        ticker: str | None = None,
+        cycle: str | None = None,
+        limit: int | None = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch corporate-to-member campaign donations.
+
+        At least one of ``bioguide_id`` or ``ticker`` should be provided —
+        without filters this returns the entire dataset which is large.
+        """
+        params: Dict[str, str] = {}
+        if bioguide_id:
+            params["bioguide_id"] = bioguide_id
+        if ticker:
+            params["ticker"] = ticker
+        if cycle:
+            params["cycle"] = cycle
+        return self._fetch_trades(BULK_DONORS_ENDPOINT, limit, params=params or None)
+
+    def get_lobbying(
+        self, ticker: str | None = None, limit: int | None = None
+    ) -> List[Dict[str, Any]]:
+        """Fetch lobbying disclosures.
+
+        With ``ticker`` set, fetches the per-ticker historical endpoint;
+        without, fetches the live (recent only) feed.
+        """
+        endpoint = f"{HISTORICAL_LOBBYING_ENDPOINT}/{ticker}" if ticker else LIVE_LOBBYING_ENDPOINT
+        return self._fetch_trades(endpoint, limit)
+
+    def get_government_contracts(
+        self, ticker: str | None = None, limit: int | None = None
+    ) -> List[Dict[str, Any]]:
+        """Fetch federal contract awards.
+
+        With ``ticker`` set, fetches per-ticker historical; without, live.
+        """
+        endpoint = (
+            f"{HISTORICAL_CONTRACTS_ENDPOINT}/{ticker}" if ticker else LIVE_CONTRACTS_ENDPOINT
+        )
+        return self._fetch_trades(endpoint, limit)
+
+    # =========================================================================
+    # TIER 3 ENDPOINTS — context-only, no DB persistence by default. Use
+    # these from detectors / scripts when you need supplementary data on a
+    # specific ticker or holding.
+    # =========================================================================
+
+    def get_insiders(
+        self, ticker: str | None = None, limit: int | None = None
+    ) -> List[Dict[str, Any]]:
+        """SEC Form 4 insider transactions. Optional ?ticker= filter."""
+        params = {"ticker": ticker} if ticker else None
+        return self._fetch_trades(LIVE_INSIDERS_ENDPOINT, limit, params=params)
+
+    def get_sec13f(
+        self, ticker: str | None = None, owner: str | None = None, limit: int | None = None
+    ) -> List[Dict[str, Any]]:
+        """Hedge fund 13F holdings. Filterable by ticker or fund owner."""
+        params: Dict[str, str] = {}
+        if ticker:
+            params["ticker"] = ticker
+        if owner:
+            params["owner"] = owner
+        return self._fetch_trades(LIVE_SEC13F_ENDPOINT, limit, params=params or None)
+
+    def get_sec13f_changes(
+        self, ticker: str | None = None, owner: str | None = None, limit: int | None = None
+    ) -> List[Dict[str, Any]]:
+        """Quarter-over-quarter changes in hedge fund 13F holdings."""
+        params: Dict[str, str] = {}
+        if ticker:
+            params["ticker"] = ticker
+        if owner:
+            params["owner"] = owner
+        return self._fetch_trades(LIVE_SEC13F_CHANGES_ENDPOINT, limit, params=params or None)
+
+    def get_top_shareholders(self, ticker: str, limit: int | None = None) -> List[Dict[str, Any]]:
+        """Top shareholders of a ticker (by reported holdings)."""
+        return self._fetch_trades(f"{LIVE_TOP_SHAREHOLDERS_ENDPOINT}/{ticker}", limit)
+
+    def get_news(
+        self, ticker: str | None = None, page: int | None = None, page_size: int | None = None
+    ) -> List[Dict[str, Any]]:
+        """Stock news feed with timestamps. Useful for trade-timing analysis."""
+        params: Dict[str, str] = {}
+        if ticker:
+            params["ticker"] = ticker
+        if page is not None:
+            params["page"] = str(page)
+        if page_size is not None:
+            params["page_size"] = str(page_size)
+        return self._fetch_trades(LIVE_NEWS_ENDPOINT, None, params=params or None)
+
+    # =========================================================================
     # INTERNAL METHODS
     # =========================================================================
 
-    def _fetch_trades(self, endpoint: str, limit: int | None) -> List[Dict[str, Any]]:
+    def _fetch_trades(
+        self,
+        endpoint: str,
+        limit: int | None,
+        params: Dict[str, str] | None = None,
+    ) -> List[Dict[str, Any]]:
         """Fetch trades from an endpoint, retrying on 429 / transient 5xx.
 
         Previously a 429 just logged and returned an empty list, so the
@@ -175,7 +294,7 @@ class QuiverQuantClient:
         for attempt, wait_default in enumerate(_RETRY_BACKOFF_SECONDS, start=1):
             try:
                 logger.info("Fetching trades from %s (attempt %d)", endpoint, attempt)
-                response = self.session.get(endpoint, timeout=60)
+                response = self.session.get(endpoint, timeout=60, params=params)
             except requests.RequestException as e:
                 logger.warning("Network error fetching %s: %s", endpoint, e)
                 if attempt < len(_RETRY_BACKOFF_SECONDS):

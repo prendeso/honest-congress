@@ -12,6 +12,7 @@ from src.analysis import (
     analyze_wealth,
     run_advanced_anomaly_detection,
     run_extended_anomaly_detection,
+    run_tier2_detection,
 )
 from src.api.auth import require_admin
 from src.db import Anomaly, get_db_session
@@ -34,13 +35,15 @@ async def run_analysis(
     wealth_result = analyze_wealth(db, member_id)
     trade_result = analyze_trades(db, member_id)
 
-    # Advanced + extended detectors don't currently support per-member
-    # filtering — only run them when no member filter is set.
+    # Advanced + extended + tier-2 detectors don't currently support
+    # per-member filtering — only run them when no member filter is set.
     advanced_result: Dict[str, Any] = {}
     extended_result: Dict[str, Any] = {}
+    tier2_result: Dict[str, Any] = {}
     if member_id is None:
         advanced_result = run_advanced_anomaly_detection(db)
         extended_result = run_extended_anomaly_detection(db, advanced_result)
+        tier2_result = run_tier2_detection(db)
 
     return {
         "status": "success",
@@ -49,6 +52,7 @@ async def run_analysis(
         "trades": trade_result,
         "advanced": advanced_result,
         "extended": extended_result,
+        "tier2": tier2_result,
     }
 
 
@@ -68,6 +72,7 @@ async def regenerate_anomalies(
     wealth_result = WealthAnalyzer().analyze_all_members(db)
     advanced_result = run_advanced_anomaly_detection(db)
     extended_result = run_extended_anomaly_detection(db, advanced_result)
+    tier2_result = run_tier2_detection(db)
 
     return {
         "status": "success",
@@ -77,4 +82,5 @@ async def regenerate_anomalies(
         "wealth_anomalies": wealth_result.get("total_anomalies", 0),
         "advanced_anomalies": advanced_result.get("total", 0),
         "extended_anomalies": extended_result.get("total", 0),
+        "tier2_anomalies": tier2_result.get("total", 0),
     }

@@ -75,7 +75,7 @@ class TestFetchTrades:
         with patch.object(client.session, "get", return_value=_mock_response(payload)) as mock_get:
             trades = client.get_bulk_congress_trades()
 
-        mock_get.assert_called_once_with(BULK_CONGRESS_ENDPOINT, timeout=60)
+        mock_get.assert_called_once_with(BULK_CONGRESS_ENDPOINT, timeout=60, params=None)
         assert len(trades) == 2
         assert trades[0]["Ticker"] == "AAPL"
 

@@ -8,7 +8,11 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from src.analysis import run_advanced_anomaly_detection, run_extended_anomaly_detection
+from src.analysis import (
+    run_advanced_anomaly_detection,
+    run_extended_anomaly_detection,
+    run_tier2_detection,
+)
 from src.api.auth import issue_admin_token, require_admin, revoke_admin_token
 from src.api.routes.anomalies._shared import sync_lock, sync_status
 from src.config import get_settings
@@ -183,6 +187,67 @@ async def sync_trades(
     }
 
 
+@router.post("/sync-tier2")
+async def sync_tier2(
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db_session),
+    _: str = Depends(require_admin),
+):
+    """Ingest the Tier-2 QuiverQuant datasets: donors, lobbying, contracts.
+
+    Slow — lobbying and contracts each iterate over every distinct ticker
+    in the transactions table, one HTTP request per ticker. Hundreds of
+    requests for a fully-populated DB. Worth it for the new conflict-of-
+    interest detectors but kept off the default Full Refresh path so the
+    happy-path daily flow stays fast.
+    """
+    _start_sync("sync-tier2", "Starting Tier-2 ingestion...")
+
+    def run_sync():
+        try:
+            from src.db.database import SessionLocal
+            from src.ingestion.quiverquant_extras import (
+                ingest_corporate_donors,
+                ingest_government_contracts,
+                ingest_lobbying,
+            )
+
+            sync_db = SessionLocal()
+            results: dict = {}
+            try:
+                with sync_lock:
+                    sync_status["message"] = "Step 1/3: Donations..."
+                    sync_status["progress"] = 5
+                results["donations"] = ingest_corporate_donors(sync_db)
+
+                with sync_lock:
+                    sync_status["message"] = "Step 2/3: Lobbying..."
+                    sync_status["progress"] = 40
+                results["lobbying"] = ingest_lobbying(sync_db)
+
+                with sync_lock:
+                    sync_status["message"] = "Step 3/3: Government contracts..."
+                    sync_status["progress"] = 75
+                results["contracts"] = ingest_government_contracts(sync_db)
+
+                summary = (
+                    f"Donors: {results['donations'].get('imported', 0)} "
+                    f"| Lobbying: {results['lobbying'].get('imported', 0)} "
+                    f"| Contracts: {results['contracts'].get('imported', 0)}"
+                )
+                _finish_sync(True, summary, results)
+            finally:
+                sync_db.close()
+        except Exception as e:
+            _finish_sync(False, f"Error: {e}")
+
+    background_tasks.add_task(run_sync)
+    return {
+        "status": "started",
+        "message": "Tier-2 ingestion started in background. Check /sync-status for progress.",
+    }
+
+
 @router.post("/full-refresh")
 async def full_data_refresh(
     background_tasks: BackgroundTasks,
@@ -252,6 +317,12 @@ async def full_data_refresh(
 
                 advanced_result = run_advanced_anomaly_detection(sync_db)
                 extended_result = run_extended_anomaly_detection(sync_db, advanced_result)
+                # Tier-2 detectors are no-ops when their tables are empty,
+                # so it's safe to run unconditionally. Run /sync-tier2
+                # separately to populate the donor / lobbying / contracts
+                # tables (it's slow — fetches per-ticker — and not worth
+                # auto-running on every full refresh).
+                tier2_result = run_tier2_detection(sync_db)
 
                 results["anomalies"] = {
                     "deleted": deleted_count,
@@ -259,6 +330,7 @@ async def full_data_refresh(
                     "wealth_anomalies": wealth_result.get("total_anomalies", 0),
                     "advanced_anomalies": advanced_result.get("total", 0),
                     "extended_anomalies": extended_result.get("total", 0),
+                    "tier2_anomalies": tier2_result.get("total", 0),
                 }
 
                 _finish_sync(True, "Full refresh complete!", results)

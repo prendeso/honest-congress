@@ -13,6 +13,12 @@ from src.analysis.extended_anomaly_detector import (
     run_extended_anomaly_detection,
 )
 from src.analysis.performance_analyzer import PerformanceAnalyzer, analyze_performance
+from src.analysis.tier2_detectors import (
+    detect_contract_front_runs,
+    detect_donor_conflicts,
+    detect_lobbying_overlaps,
+    run_tier2_detection,
+)
 from src.analysis.trade_analyzer import TradeAnalyzer, analyze_trades
 from src.analysis.wealth_analyzer import WealthAnalyzer, analyze_wealth
 from src.db.models import Anomaly, Transaction
@@ -150,6 +156,10 @@ __all__ = [
     "run_advanced_anomaly_detection",
     "ExtendedAnomalyDetector",
     "run_extended_anomaly_detection",
+    "detect_donor_conflicts",
+    "detect_lobbying_overlaps",
+    "detect_contract_front_runs",
+    "run_tier2_detection",
     "transaction_amount",
     "persist_anomalies",
 ]

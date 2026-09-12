@@ -19,6 +19,8 @@ inconsistencies in reported wealth or trading activity.
   members, disclosures, trades, parsed data, and anomalies.
 - **STOCK Act compliance scoring** — per-member late-filing rates computed
   purely from filing dates. No inference, no thresholds to argue with.
+- **Disclosure opacity index** — how legible each member's filings are, which
+  bounds what every other detector can see.
 - **REST API** — FastAPI; OpenAPI docs at `/docs`.
 
 ## Quickstart (local)
@@ -147,6 +149,7 @@ POST /api/anomalies/regenerate     wipe + recompute all anomalies
 GET  /api/insights                 dashboard hero stats
 GET  /api/compliance/              members ranked by STOCK Act filing punctuality
 GET  /api/compliance/{member_id}   one member's filing record
+GET  /api/compliance/opacity/      members ranked by disclosure legibility
 GET  /docs                         Swagger UI
 ```
 

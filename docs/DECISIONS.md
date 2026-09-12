@@ -194,6 +194,26 @@ Findings state that filing dates are not trade dates and that disclosure lags
 vary, so this is co-movement in *reported* activity, not evidence of
 coordination.
 
+## D9. Publish how legible the filings are
+
+`src/analysis/opacity.py` scores each member on what share of their filings are
+missing a ticker, describe a holding as "various", carry an unreadable amount,
+or failed to parse at all. `GET /api/compliance/opacity/`.
+
+It measures the filings, not the filer. House and Senate systems accept free
+text, scanned documents and handwriting, so a high score often reflects the
+filing system rather than any choice by the member, and the response says so.
+
+It earns its place because it **bounds every other number here**. A member whose
+filings cannot be read will show few findings for reasons that have nothing to
+do with their trading, and a reader who sees an empty flag list should know
+whether that means "nothing found" or "nothing readable". Publishing the second
+number alongside the first is the difference between a transparency tool and a
+scoreboard.
+
+This is D5 turned on the project itself: honest about the limits of its own
+inputs.
+
 ---
 
 ## Superseded

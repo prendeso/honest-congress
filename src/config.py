@@ -42,6 +42,36 @@ class Settings(BaseSettings):
     late_filing_min_days: int = Field(default=60, alias="LATE_FILING_MIN_DAYS")
     late_filing_min_amount_usd: int = Field(default=50000, alias="LATE_FILING_MIN_AMOUNT_USD")
 
+    # Detectors whose output is not currently defensible and must not be
+    # written or served. See docs/DECISIONS.md.
+    #   outperforming_trades - benchmarks against a hardcoded flat 10%, and
+    #     computes "return" as (sells - buys)/buys with no position matching.
+    #   perfect_timing       - counts buy/sell date pairs without ever reading a
+    #     price; the O(n^2) numerator over a linear denominator yields rates >100%.
+    #   loss_avoidance       - increments numerator and denominator on the same
+    #     branch, so its rate is always exactly 100%.
+    # Re-enabling requires real price history; see the plan's "Price data" note.
+    disabled_anomaly_types: str = Field(
+        default="outperforming_trades,perfect_timing,loss_avoidance",
+        alias="DISABLED_ANOMALY_TYPES",
+    )
+
+    # detect_committee_conflicts() uses no committee data at all
+    # (SAMPLE_COMMITTEE_ASSIGNMENTS is an empty dict) and substring-matches
+    # tickers, so "ba" matches "Alibaba". It also emits its findings as
+    # `sector_concentration`, colliding with TradeAnalyzer's detector of the
+    # same name -- so it cannot be switched off by anomaly type alone.
+    committee_conflict_detector_enabled: bool = Field(
+        default=False, alias="COMMITTEE_CONFLICT_DETECTOR_ENABLED"
+    )
+
+    @property
+    def disabled_anomaly_types_set(self) -> set[str]:
+        raw = (self.disabled_anomaly_types or "").strip()
+        if not raw:
+            return set()
+        return {t.strip() for t in raw.split(",") if t.strip()}
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() in {"production", "prod"}

@@ -505,6 +505,7 @@ def run_extended_anomaly_detection(
     When `persist` is true, detected anomalies are written to the database.
     """
     from src.analysis import persist_anomalies
+    from src.config import get_settings
 
     detector = ExtendedAnomalyDetector()
 
@@ -516,9 +517,15 @@ def run_extended_anomaly_detection(
     timing_anomalies = detector.detect_trade_timing_anomalies(db)
     logger.info(f"   Found {len(timing_anomalies)} anomalies\n")
 
-    logger.info("2. Detecting committee-based conflicts...")
-    conflict_anomalies = detector.detect_committee_conflicts(db)
-    logger.info(f"   Found {len(conflict_anomalies)} anomalies\n")
+    if get_settings().committee_conflict_detector_enabled:
+        logger.info("2. Detecting committee-based conflicts...")
+        conflict_anomalies = detector.detect_committee_conflicts(db)
+        logger.info(f"   Found {len(conflict_anomalies)} anomalies\n")
+    else:
+        # Disabled by default: the detector has no committee data to work from
+        # and substring-matches tickers. See Settings.committee_conflict_detector_enabled.
+        logger.info("2. Committee-based conflict detection is disabled; skipping.\n")
+        conflict_anomalies = []
 
     logger.info("3. Detecting loss avoidance patterns...")
     loss_anomalies = detector.detect_loss_avoidance(db)

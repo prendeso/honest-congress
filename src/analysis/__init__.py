@@ -1,5 +1,6 @@
 """Analysis package: anomaly detectors and shared helpers."""
 
+import logging
 from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
@@ -22,6 +23,8 @@ from src.analysis.tier2_detectors import (
 from src.analysis.trade_analyzer import TradeAnalyzer, analyze_trades
 from src.analysis.wealth_analyzer import WealthAnalyzer, analyze_wealth
 from src.db.models import Anomaly, Transaction
+
+logger = logging.getLogger(__name__)
 
 
 def transaction_amount(txn: Transaction) -> float:
@@ -102,11 +105,23 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
     Deduplicates by (member_id, anomaly_type, title). Commits at the end.
     Returns the number of newly inserted rows.
     """
+    from src.config import get_settings
+
+    disabled = get_settings().disabled_anomaly_types_set
+
     inserted = 0
+    skipped_disabled = 0
     for a in anomalies:
         member_id = a.get("member_id")
         anomaly_type = a.get("anomaly_type")
         if not member_id or not anomaly_type:
+            continue
+
+        # Backstop for detectors whose output is not defensible. Gating here as
+        # well as at the call sites means a disabled type cannot reach the
+        # database even if a new caller forgets to check.
+        if anomaly_type in disabled:
+            skipped_disabled += 1
             continue
 
         title = a.get("title") or _build_title(a)
@@ -139,6 +154,13 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
             )
         )
         inserted += 1
+
+    if skipped_disabled:
+        logger.info(
+            "Skipped %d anomalies of disabled types (%s)",
+            skipped_disabled,
+            ", ".join(sorted(disabled)),
+        )
 
     if inserted:
         db.commit()

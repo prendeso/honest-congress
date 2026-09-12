@@ -330,6 +330,53 @@ def cmd_fix_urls(args):
                 print(f"  ... and {len(issues) - 5} more")
 
 
+def cmd_purge_disabled(args):
+    """Delete persisted anomalies whose detector has since been disabled.
+
+    Disabling a detector stops new rows, but rows written before it was
+    disabled stay in the database and keep being served by the API. This
+    removes them.
+    """
+    from src.config import get_settings
+    from src.db.models import Anomaly
+
+    disabled = sorted(get_settings().disabled_anomaly_types_set)
+    if not disabled:
+        print("No anomaly types are disabled; nothing to purge.")
+        return
+
+    print(f"Disabled anomaly types: {', '.join(disabled)}")
+
+    with get_db() as db:
+        rows = db.query(Anomaly).filter(Anomaly.anomaly_type.in_(disabled)).all()
+
+        if not rows:
+            print("No persisted anomalies of disabled types found.")
+            return
+
+        counts: dict[str, int] = {}
+        for row in rows:
+            counts[row.anomaly_type] = counts.get(row.anomaly_type, 0) + 1
+
+        for atype, count in sorted(counts.items()):
+            print(f"  {atype}: {count}")
+
+        if args.dry_run:
+            print(
+                f"\nDry run - {len(rows)} anomalies would be deleted. "
+                f"Re-run without --dry-run to apply."
+            )
+            return
+
+        deleted = (
+            db.query(Anomaly)
+            .filter(Anomaly.anomaly_type.in_(disabled))
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        print(f"\nDeleted {deleted} anomalies of disabled types.")
+
+
 def cmd_serve(args):
     """Start the API server."""
     import os
@@ -479,6 +526,16 @@ def main():
         "-l", "--limit", type=int, default=10, help="Number of top performers to show (default: 10)"
     )
     perf_parser.set_defaults(func=cmd_performance)
+
+    # Purge disabled anomaly types
+    purge_parser = subparsers.add_parser(
+        "purge-disabled",
+        help="Delete persisted anomalies whose detector is now disabled",
+    )
+    purge_parser.add_argument(
+        "--dry-run", action="store_true", help="Preview deletions without applying them"
+    )
+    purge_parser.set_defaults(func=cmd_purge_disabled)
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start API server")

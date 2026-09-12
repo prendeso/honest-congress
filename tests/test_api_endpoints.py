@@ -229,3 +229,62 @@ class TestInsights:
         # count insight (id=4) and the most-flagged-member insight (id=1).
         ids = {item["id"] for item in body}
         assert 4 in ids
+
+
+# ---------------- admin auth ----------------
+
+
+class TestAdminAuth:
+    """Regression tests for the production auth bypass.
+
+    `require_admin` used to accept the literal string "local-dev-token"
+    unconditionally, before it read settings at all — so anyone sending that
+    header got admin on every mutating endpoint of a deployed instance. The
+    dev shortcut must now be gated on `not settings.is_production`.
+    """
+
+    @staticmethod
+    def _settings(env: str):
+        from src.config import Settings
+
+        return Settings(ENV=env, ADMIN_PASSWORD="unit-test-password")
+
+    def test_dev_token_rejected_in_production(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from src.api import auth
+
+        monkeypatch.setattr(auth, "get_settings", lambda: self._settings("production"))
+
+        with pytest.raises(HTTPException) as exc:
+            auth.require_admin(auth.DEV_TOKEN)
+        assert exc.value.status_code == 401
+
+    def test_dev_token_accepted_outside_production(self, monkeypatch):
+        from src.api import auth
+
+        monkeypatch.setattr(auth, "get_settings", lambda: self._settings("dev"))
+
+        assert auth.require_admin(auth.DEV_TOKEN) == auth.DEV_TOKEN
+
+    def test_issued_token_still_works_in_production(self, monkeypatch):
+        from src.api import auth
+
+        monkeypatch.setattr(auth, "get_settings", lambda: self._settings("production"))
+
+        token = auth.issue_admin_token()
+        try:
+            assert auth.require_admin(token) == token
+        finally:
+            auth.revoke_admin_token(token)
+
+    def test_unknown_token_rejected_in_production(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from src.api import auth
+
+        monkeypatch.setattr(auth, "get_settings", lambda: self._settings("production"))
+
+        with pytest.raises(HTTPException) as exc:
+            auth.require_admin("not-a-real-token")
+        assert exc.value.status_code == 401

@@ -341,6 +341,8 @@ class IngestionOrchestrator:
 
         disclosures = self.senate.search_all_disclosures(year)
         synced = 0
+        unmatched = 0
+        ambiguous = 0
 
         for d in disclosures:
             try:
@@ -352,35 +354,66 @@ class IngestionOrchestrator:
                 if existing:
                     continue
 
-                # For Senate, we may need to match member differently
-                # since the search results may not include full name
-                # This is simplified - real implementation would parse
-                # the disclosure page to get member name
+                # Disclosure.member_id is non-nullable, so an unmatched filing
+                # cannot be stored. Senate search rows carry no state, so we
+                # match on name + chamber and require a unique hit rather than
+                # silently attaching a filing to the wrong senator.
+                last_name = (d.get("last_name") or "").strip()
+                first_name = (d.get("first_name") or "").strip()
+                if not last_name:
+                    unmatched += 1
+                    logger.warning(
+                        f"Senate disclosure {d.get('document_id')} has no filer name; skipping"
+                    )
+                    continue
 
-                # Create disclosure without member link for now
-                # Will be linked during parsing.
-                # NOTE: not currently persisted (db.add commented out below).
-                _disclosure = Disclosure(
-                    member_id=None,  # Will be linked later
-                    filing_year=d["filing_year"],
-                    filing_type=d.get("filing_type", "Unknown"),
-                    filing_date=choose_filing_date(d.get("filing_date"), d.get("filing_year")),
-                    document_id=d["document_id"],
-                    document_url=d["document_url"],
-                    parsed=False,
+                matches = (
+                    db.query(Member)
+                    .filter(
+                        Member.last_name.ilike(last_name),
+                        Member.first_name.ilike(f"{first_name}%"),
+                        Member.chamber == Chamber.SENATE,
+                    )
+                    .limit(2)
+                    .all()
                 )
 
-                # Only add if we can link to a member
-                # For now, skip unlinked disclosures
-                # db.add(disclosure)
+                if not matches:
+                    unmatched += 1
+                    logger.warning(
+                        f"Member not found for Senate disclosure: {first_name} {last_name}"
+                    )
+                    continue
 
+                if len(matches) > 1:
+                    ambiguous += 1
+                    logger.warning(
+                        f"Ambiguous member match for Senate disclosure: "
+                        f"{first_name} {last_name} matched {len(matches)} senators; skipping"
+                    )
+                    continue
+
+                db.add(
+                    Disclosure(
+                        member_id=matches[0].id,
+                        filing_year=d["filing_year"],
+                        filing_type=d.get("filing_type", "Unknown"),
+                        filing_date=choose_filing_date(d.get("filing_date"), d.get("filing_year")),
+                        document_id=d["document_id"],
+                        document_url=d["document_url"],
+                        parsed=False,
+                    )
+                )
                 synced += 1
 
             except Exception as e:
                 logger.error(f"Error syncing Senate disclosure {d.get('document_id')}: {e}")
 
         db.commit()
-        logger.info(f"Synced {synced} Senate disclosures for {year}")
+        logger.info(
+            f"Synced {synced} Senate disclosures for {year} "
+            f"({unmatched} unmatched, {ambiguous} ambiguous, skipped)"
+        )
         return synced
 
     def download_disclosure_pdf(self, disclosure: Disclosure, force: bool = False) -> Path | None:

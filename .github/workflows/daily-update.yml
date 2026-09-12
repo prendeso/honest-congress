@@ -28,6 +28,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Every scheduled run from at least 2026-09-05 to 2026-09-12 failed here
+      # with "Could not parse SQLAlchemy URL", because RAILWAY_DATABASE_URL is
+      # not configured and DATABASE_URL arrived empty. A stack trace twenty
+      # frames deep is a bad way to learn that a secret is missing, so this
+      # says it in one line instead.
+      - name: Check the database secret is configured
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::RAILWAY_DATABASE_URL is not set. Add it under Settings -> Secrets and variables -> Actions. Until then this workflow cannot reach the database and every run fails."
+            exit 1
+          fi
+          echo "DATABASE_URL is set (${#DATABASE_URL} characters)."
+
       # We point at Railway's external Postgres URL so each daily run
       # ingests into the *same* database the deployed app reads from.
       # Configure the secret in repo settings → Secrets → Actions.

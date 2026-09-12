@@ -140,7 +140,7 @@ def ingest_government_contracts(
     imported = 0
     unresolved = 0
     duplicates = 0
-    seen: set[tuple[str, str, Any]] = set()
+    seen: set[str] = set()
 
     for award in awards:
         recipient = award.get("Recipient Name") or ""
@@ -154,17 +154,27 @@ def ingest_government_contracts(
         awarded = _parse_date(award.get("Action Date"))
         description = award.get("Transaction Description") or award.get("Award ID") or ""
 
-        # The same award can appear across pages when amounts tie; and reruns
-        # must not duplicate. There is no unique index on this table, so the
-        # check is done here.
-        key = (ticker, str(description)[:120], awarded)
-        if key in seen:
+        # `internal_id` is USASpending's own identifier for the award ACTION.
+        # It is returned whether or not it is listed in `fields`, and it is what
+        # makes reruns idempotent. The natural key cannot do this
+        # job: one contract is routinely modified several times on the same day
+        # for the same amount, and collapsing those loses real award activity.
+        external_id = str(award.get("internal_id") or "") or None
+        if external_id and external_id in seen:
             duplicates += 1
             continue
-        seen.add(key)
+        if external_id:
+            seen.add(external_id)
 
         exists = (
             db.query(GovernmentContract)
+            .filter(
+                GovernmentContract.source == SOURCE,
+                GovernmentContract.external_id == external_id,
+            )
+            .first()
+            if external_id
+            else db.query(GovernmentContract)
             .filter(
                 GovernmentContract.ticker == ticker,
                 GovernmentContract.awarded_date == awarded,
@@ -184,6 +194,7 @@ def ingest_government_contracts(
                 amount=_parse_amount(award.get("Transaction Amount")),
                 awarded_date=awarded,
                 source=SOURCE,
+                external_id=external_id,
             )
         )
         imported += 1

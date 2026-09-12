@@ -1,0 +1,35 @@
+- id:
+    bioguide: C000127
+    fec:
+    - H2WA01054
+    - S8WA00194
+  name:
+    first: Maria
+    last: Cantwell
+- id:
+    bioguide: G000555
+    fec:
+    - H6NY20167
+    - S0NY00410
+  name:
+    first: Kirsten
+    last: Gillibrand
+- id:
+    bioguide: D000629
+    fec:
+    - H8KS03155
+  name:
+    first: Sharice
+    last: Davids
+- id:
+    bioguide: Z999999
+  name:
+    first: 'No'
+    last: Feccid
+- id:
+    bioguide: X000001
+    fec:
+    - H0XX00001
+  name:
+    first: Not
+    last: Ingested

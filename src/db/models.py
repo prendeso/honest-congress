@@ -378,16 +378,22 @@ class CommitteeAssignment(Base):
 
 
 # ---------------------------------------------------------------------------
-# QuiverQuant Tier-2 datasets — driving "donor conflict", "lobbying overlap",
-# and "contract front-run" detectors. Each row is a TRIGGER EVENT we cross-
+# Tier-2 datasets — driving "donor conflict", "lobbying overlap", and
+# "contract front-run" detectors. Each row is a TRIGGER EVENT we cross-
 # reference against transactions to detect conflict-of-interest patterns.
+#
+# All three carry `external_id`: the source's own identifier for the record
+# (FEC sub_id, LDA filing_uuid, USASpending award id). It exists because the
+# natural key is not unique in the real data -- Boeing's PAC gave Rick Larsen's
+# committee $5,000 twice on 2024-12-31, primary and general, and deduplicating
+# on (member, ticker, date, amount) silently merges them into one donation.
 # ---------------------------------------------------------------------------
 
 
 class CampaignDonation(Base):
     """A campaign donation from a public company to a member.
 
-    Sourced from QuiverQuant ``/bulk/corporatedonors``. The detector flags
+    Sourced from the FEC (`src.ingestion.fec`). The detector flags
     transactions in `ticker` made by `member_id` within ``donor_window_days``
     of `donation_date`.
     """
@@ -405,15 +411,19 @@ class CampaignDonation(Base):
     donation_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     source: Mapped[str] = mapped_column(String(50), default="unknown")
+    external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
-    __table_args__ = (Index("ix_donations_member_ticker", "member_id", "ticker"),)
+    __table_args__ = (
+        Index("ix_donations_member_ticker", "member_id", "ticker"),
+        Index("ix_donations_source_external", "source", "external_id", unique=True),
+    )
 
 
 class LobbyingDisclosure(Base):
     """A lobbying disclosure filed by a public company.
 
-    Sourced from QuiverQuant ``/historical/lobbying/{ticker}``. The detector
+    Sourced from the Senate LDA (`src.ingestion.lda`). The detector
     flags transactions in `ticker` made within ``lobbying_window_days`` of
     `filed_date` regardless of which member traded — it's a market-wide
     signal that the issuer is actively trying to shape policy.
@@ -430,13 +440,16 @@ class LobbyingDisclosure(Base):
     issue_codes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     source: Mapped[str] = mapped_column(String(50), default="unknown")
+    external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (Index("ix_lobbying_source_external", "source", "external_id", unique=True),)
 
 
 class GovernmentContract(Base):
     """A federal contract awarded to a public company.
 
-    Sourced from QuiverQuant ``/historical/govcontractsall/{ticker}``. The
+    Sourced from USASpending (`src.ingestion.usaspending`). The
     detector flags PURCHASE transactions in `ticker` made within
     ``contract_window_days`` *before* `awarded_date` — front-running an
     award is the clearest insider signal in this dataset.
@@ -453,4 +466,7 @@ class GovernmentContract(Base):
     end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     source: Mapped[str] = mapped_column(String(50), default="unknown")
+    external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (Index("ix_contracts_source_external", "source", "external_id", unique=True),)

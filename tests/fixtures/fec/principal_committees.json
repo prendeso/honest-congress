@@ -1,0 +1,30 @@
+{
+ "results": [
+  {
+   "committee_id": "C00349506",
+   "name": "FRIENDS OF MARIA",
+   "candidate_ids": [
+    "S8WA00194"
+   ]
+  },
+  {
+   "committee_id": "C00413914",
+   "name": "GILLIBRAND FOR SENATE",
+   "candidate_ids": [
+    "H6NY20167",
+    "S0NY00410"
+   ]
+  },
+  {
+   "committee_id": "C00670034",
+   "name": "SHARICE FOR CONGRESS",
+   "candidate_ids": [
+    "H8KS03155"
+   ]
+  }
+ ],
+ "pagination": {
+  "pages": 1,
+  "count": 3
+ }
+}

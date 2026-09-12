@@ -433,6 +433,47 @@ def cmd_ingest_contracts(args):
     )
 
 
+def cmd_ingest_donations(args):
+    """Ingest corporate PAC donations from the FEC."""
+    from src.config import get_settings
+    from src.ingestion.fec import ingest_campaign_donations
+
+    api_key = get_settings().fec_api_key
+    if not api_key:
+        print("FEC_API_KEY is not set. Get a free key at https://api.data.gov/signup/")
+        sys.exit(1)
+
+    print(f"Ingesting corporate PAC donations for the {args.cycle} cycle...")
+    if args.all_pacs:
+        print("  (scanning every corporate PAC, not just those members have traded)")
+
+    with get_db() as db:
+        result = ingest_campaign_donations(
+            db,
+            api_key,
+            cycle=args.cycle,
+            max_requests=args.max_requests,
+            restrict_to_traded=not args.all_pacs,
+            resume=not args.no_resume,
+        )
+
+    print("\nDonation ingestion complete:")
+    print(f"  PACs queried: {result['pacs_queried']}")
+    if result["pacs_already_ingested"]:
+        print(f"  PACs already ingested (skipped): {result['pacs_already_ingested']}")
+    print(f"  Imported: {result['imported']}")
+    print(f"  Already present: {result['duplicates']}")
+    print(
+        f"  Receipts to committees with no sitting member: {result['skipped_unmapped_recipient']}"
+    )
+    print(f"  FEC requests used: {result['requests_made']}")
+    if result["stopped_early"]:
+        print(
+            "\n  Stopped at the request cap. Nothing is lost - rerun the same "
+            "command and it resumes from the PACs it has not reached yet."
+        )
+
+
 def cmd_compliance(args):
     """Rank members by STOCK Act filing punctuality."""
     from src.analysis.compliance import compliance_leaderboard
@@ -805,6 +846,31 @@ def main():
         help="Pages of 100 award actions, largest first (default: 3)",
     )
     contracts_parser.set_defaults(func=cmd_ingest_contracts)
+
+    donations_parser = subparsers.add_parser(
+        "ingest-donations",
+        help="Ingest corporate PAC donations from the FEC (free key required)",
+    )
+    donations_parser.add_argument(
+        "--cycle", type=int, default=2024, help="Two-year election cycle (default: 2024)"
+    )
+    donations_parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="Stop after this many FEC requests; rerun to resume (quota is 1,000/hour)",
+    )
+    donations_parser.add_argument(
+        "--all-pacs",
+        action="store_true",
+        help="Scan every corporate PAC, not just companies members have traded (much slower)",
+    )
+    donations_parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Re-scan PACs already stored for this cycle (use after filings are amended)",
+    )
+    donations_parser.set_defaults(func=cmd_ingest_donations)
 
     # Compliance command
     compliance_parser = subparsers.add_parser(

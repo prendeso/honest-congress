@@ -1,0 +1,195 @@
+{
+ "page1": {
+  "results": [
+   {
+    "committee_id": "C00576173",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 5000.0,
+    "contribution_receipt_date": "2024-12-31",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4021320251172871793"
+   },
+   {
+    "committee_id": "C00576173",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 5000.0,
+    "contribution_receipt_date": "2024-12-31",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4021320251172871792"
+   },
+   {
+    "committee_id": "C00296640",
+    "contributor_name": "BOEING COMPANY PAC",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 1500.0,
+    "contribution_receipt_date": "2024-12-31",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER",
+    "memo_code": null,
+    "sub_id": "4012820251137799332"
+   },
+   {
+    "committee_id": "C00570994",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 2500.0,
+    "contribution_receipt_date": "2024-12-31",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4012320251134471144"
+   },
+   {
+    "committee_id": "C00257337",
+    "contributor_name": "BOEING COMPANY POLITICAL ACTION COMMITTEE (BPAC)",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 1000.0,
+    "contribution_receipt_date": "2024-12-28",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4013020251138561365"
+   },
+   {
+    "committee_id": "C00851998",
+    "contributor_name": "BOEING COMPANY PAC",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 5000.0,
+    "contribution_receipt_date": "2024-12-24",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER",
+    "memo_code": null,
+    "sub_id": "4021020251166916864"
+   },
+   {
+    "committee_id": "C00390724",
+    "contributor_name": "THE BOEING COMPANY PAC",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 1000.0,
+    "contribution_receipt_date": "2024-12-23",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4021320251172513966"
+   },
+   {
+    "committee_id": "C00670034",
+    "contributor_name": "THE BOEING CO PAC",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 1000.0,
+    "contribution_receipt_date": "2024-12-20",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4021220251172371806"
+   }
+  ],
+  "pagination": {
+   "last_indexes": {
+    "last_contribution_receipt_date": "2024-12-20",
+    "last_index": "4021220251172371806"
+   }
+  }
+ },
+ "page2": {
+  "results": [
+   {
+    "committee_id": "C00458828",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 5000.0,
+    "contribution_receipt_date": "2024-12-18",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4020620251144170677"
+   },
+   {
+    "committee_id": "C00458828",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 5000.0,
+    "contribution_receipt_date": "2024-12-18",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4020620251144170676"
+   },
+   {
+    "committee_id": "C00576975",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 5000.0,
+    "contribution_receipt_date": "2024-12-17",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER",
+    "memo_code": null,
+    "sub_id": "4021120251167128709"
+   },
+   {
+    "committee_id": "C00543983",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 1000.0,
+    "contribution_receipt_date": "2024-12-16",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": null,
+    "sub_id": "4021220251172323183"
+   },
+   {
+    "committee_id": "C00570770",
+    "contributor_name": "BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 2500.0,
+    "contribution_receipt_date": "2024-12-16",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER",
+    "memo_code": null,
+    "sub_id": "4020520251142655179"
+   },
+   {
+    "committee_id": "C00442368",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 1500.0,
+    "contribution_receipt_date": "2024-12-16",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER",
+    "memo_code": null,
+    "sub_id": "4012920251138158570"
+   },
+   {
+    "committee_id": "C00577288",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": 2500.0,
+    "contribution_receipt_date": "2024-12-11",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER",
+    "memo_code": null,
+    "sub_id": "4012920251138037944"
+   },
+   {
+    "committee_id": "C00837484",
+    "contributor_name": "THE BOEING COMPANY POLITICAL ACTION COMMITTEE",
+    "contributor_id": "C00142711",
+    "contribution_receipt_amount": -5000.0,
+    "contribution_receipt_date": "2024-12-10",
+    "entity_type": "PAC",
+    "receipt_type_desc": "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)",
+    "memo_code": "X",
+    "sub_id": "4062420251207087152"
+   }
+  ],
+  "pagination": {
+   "last_indexes": null
+  }
+ }
+}

@@ -27,7 +27,15 @@ class Settings(BaseSettings):
     # Congress.gov API key (optional - get free key at https://api.congress.gov/sign-up/)
     congress_gov_api_key: str = Field(default="", alias="CONGRESS_GOV_API_KEY")
 
-    # QuiverQuant API key (for congressional trading data)
+    # FEC API key, for corporate PAC donations. Free from
+    # https://api.data.gov/signup/ and allows 1,000 requests/hour, which is the
+    # binding constraint on `ingest-donations` -- see src/ingestion/fec.py.
+    fec_api_key: str = Field(default="", alias="FEC_API_KEY")
+
+    # Senate LDA key, for lobbying disclosures. OPTIONAL: the API serves
+    # anonymous callers at roughly 15 requests/minute and keyed callers at 120.
+    # Registration is free at https://lda.senate.gov/api/register/
+    lda_api_key: str = Field(default="", alias="LDA_API_KEY")
 
     wealth_growth_threshold_percent: float = Field(
         default=200.0, alias="WEALTH_GROWTH_THRESHOLD_PERCENT"

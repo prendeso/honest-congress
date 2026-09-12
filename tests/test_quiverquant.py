@@ -1,7 +1,7 @@
 """QuiverQuant client tests with mocked HTTP.
 
 Patterns demonstrated here apply to the other scraper modules
-(`congress_gov.py`, `house.py`, `senate_efd_api.py`, etc.):
+(`congress_gov.py`, `house.py`, `senate.py`, etc.):
 
 * Use `unittest.mock.patch.object` on `requests.Session.get` to intercept
   outbound HTTP without touching the network.

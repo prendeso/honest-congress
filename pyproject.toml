@@ -59,9 +59,6 @@ line-length = 100
 target-version = "py311"
 extend-exclude = [
     "alembic/versions",
-    "docs/archive",
-    "scripts",
-    "verify_retired_fix.py",
 ]
 
 [tool.ruff.lint]
@@ -93,8 +90,6 @@ warn_redundant_casts = true
 ignore_missing_imports = true
 exclude = [
     "alembic/versions",
-    "docs/archive",
-    "scripts",
     "tests",
 ]
 

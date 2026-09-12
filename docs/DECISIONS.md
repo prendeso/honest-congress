@@ -1,0 +1,141 @@
+# Decisions
+
+Standing decisions about data sources, detectors, and architecture. This file
+replaces the `PHASE_7_*` / `PHASE_8_*` / `PHASE_9_*` set and the four
+overlapping source-inventory documents, which were conversation transcripts
+rather than documentation — several ended by asking the reader to choose an
+option, and the choice was never recorded.
+
+---
+
+## D1. Data must be redistributable
+
+**Decision:** every source must be public domain or carry explicit
+redistribution rights.
+
+The project is intended as a public site and a paid API endpoint. That makes
+licensing a blocking constraint rather than a cost question, and it settles the
+fork that `PHASE_9_DECISION.md` left open. That fork was always framed as
+build-vs-buy — $10/month against five hours of scraping — and re-litigated
+across four documents on that axis. It was the wrong axis. For a commercial
+product the official path is not a cost optimization; it is the only viable
+architecture.
+
+US federal government data is public domain with no redistribution limit, so
+the official sources are also strictly better for this purpose than the vendor
+feeds they replace.
+
+**Status:** accepted. Migration in progress — see D2.
+
+## D2. Replace vendor feeds with official sources
+
+| Need | Current | Replacement | Status |
+|---|---|---|---|
+| House trades | House Clerk PTR XML | — already official | done |
+| Member roster | unitedstates.io congress-legislators | — already official | done |
+| Committee assignments | none (detector had an empty table) | congress-legislators `committee-membership-current.yaml` | in progress |
+| Senate trades | QuiverQuant | Senate eFD | not started |
+| Campaign donations | QuiverQuant `/bulk/corporatedonors` | FEC API | not started |
+| Lobbying | QuiverQuant `/live/lobbying` | Senate LDA API | not started |
+| Gov contracts | QuiverQuant `/live/govcontractsall` | USASpending API | not started |
+| Benchmark prices | `yfinance` | licensed vendor, or drop — see D4 | deferred |
+
+The Tier-2 detector logic in `src/analysis/tier2_detectors.py` does not change;
+only its feed does.
+
+**QuiverQuant** is currently the only working Senate path, the only trade
+source, and the sole feed for the Tier-2 detectors. Its terms appear to limit
+use to personal, non-commercial purposes and to prohibit redistribution without
+an executed agreement — confirm directly before shipping anything paid.
+
+**`yfinance`** scrapes Yahoo Finance through an unofficial library against
+Yahoo's terms. Acceptable for a hobby project, not for a paid endpoint.
+
+## D3. Three detectors are disabled, not merely untuned
+
+Disabled by default via `DISABLED_ANOMALY_TYPES`, enforced in
+`persist_anomalies()` so no write path can bypass it:
+
+| Detector | Why |
+|---|---|
+| `loss_avoidance` | Increments numerator and denominator on the same branch, so its rate is always exactly 1.0 and the `> 0.8` gate is always true. Every member with more than five buy-before-sell pairs was labelled HIGH severity. |
+| `perfect_timing` | Never reads a price. Counts `(buy, sell)` date pairs in a nested loop and divides by `len(buys)`, so rates exceed 100%. Its description asserted a `<1%` chance probability that was never computed. |
+| `outperforming_trades` | Calls `(sells - buys) / buys` a "return" with no position matching, against a hardcoded flat 10% benchmark. |
+
+`committee_conflicts` is gated separately by
+`COMMITTEE_CONFLICT_DETECTOR_ENABLED`, because it emits its findings as
+`sector_concentration` — colliding with `TradeAnalyzer`'s detector of the same
+name — and so cannot be switched off by anomaly type. It used no committee data
+at all (`SAMPLE_COMMITTEE_ASSIGNMENTS` was an empty dict) and substring-matched
+tickers, so `"ba"` matched "Alibaba".
+
+These attached ethics-investigation language to named public officials and ran
+nightly.
+
+Rows written before the gate existed are removed by `python -m src.cli
+purge-disabled`.
+
+## D4. Price data is deferred, not required
+
+Only 3 of 16 anomaly types need prices, and they are the three in D3. Everything
+else — including all three Tier-2 conflict detectors, STOCK Act late-filing,
+large-trade, volume-spike, clustering, and the wealth-growth detectors, which
+use the member's own disclosed asset values — runs on disclosure metadata alone.
+
+Shipping without price data means shipping what no competitor sells
+(conflict-of-interest event windows, compliance tracking) and skipping what
+several already give away free (return calculations).
+
+When it is wanted, this is end-of-day closes rather than real-time quotes — the
+cheapest and least restricted category of market data, roughly $20–30/month.
+
+**A constraint that does not go away with better data:** disclosures report
+amount *bands* and no share counts. Per-trade percentage return is computable
+cleanly, since percentage return does not depend on position size. Any
+portfolio-level "beat the market by X%" claim needs position weights that do not
+exist in the filings — resting on band midpoints with up to 15x uncertainty on
+the smallest band ($1,001–$15,000). Scope any rebuild to per-trade analysis.
+
+## D5. Report ranges, not invented precision
+
+Disclosures report value bands. Any point estimate derived from them is
+fabricated precision, and every detector should publish the bounds it reasoned
+over.
+
+This was decided once already, in what is now
+`docs/archive/2026-pre-modernization/VAGUE_LANGUAGE_IMPLEMENTATION.md`:
+
+> **Before:** `Wealth growth of 234.5% exceeds salary-based expectation`
+> **After:** `Wealth growth dramatically (200-500%) exceeds salary-based expectation`
+> **Rationale:** Net worth calculations use min/max ranges, so exact figures are misleading
+
+It is the only thing in the project that earns the word *honest*, and it is the
+one position competitors do not occupy. It belongs at the centre of the product,
+not in an archive folder.
+
+## D6. Thresholds should be base rates, not assertions
+
+Every threshold in the codebase is currently asserted rather than calibrated:
+`>100%` appreciation, `>50%` sector concentration, `5+` consecutive trades, `3σ`
+volume, the `90/30/30`-day Tier-2 windows.
+
+Computing the distribution across all members and flagging percentile outliers
+requires no new data and converts "arbitrary threshold" into "top 1% of
+members". Related: 16 detectors across ~550 members is roughly 8,800 tests, with
+no multiple-comparisons control — so some members are flagged spuriously by
+construction.
+
+**Status:** accepted, not yet implemented.
+
+---
+
+## Superseded
+
+`PHASE_7_COMPLETION.md`, the eight `PHASE_8_*` files, `PHASE_9_DECISION.md`,
+`COMPLETE_RECAP.md`, `THREE_QUESTIONS_ANSWERED.md`,
+`ANNUAL_DISCLOSURE_SOURCES.md`, `COMPLETE_FD_GUIDE.md`,
+`FD_IMPLEMENTATION_ROADMAP.md`, `RESOURCE_INDEX.md` and
+`QUIVERQUANT_VS_ALTERNATIVES.md` are superseded by this file and available in
+git history. `PHASE_8_IMPLEMENTATION.md` and `PHASE_8_READY.md` differed by 12
+lines; `PHASE_8_ACTION_ITEMS.md` and `PHASE_8_USER_CHECKLIST.md` were the same
+checklist twice.

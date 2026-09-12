@@ -353,6 +353,33 @@ def cmd_fix_urls(args):
                 print(f"  ... and {len(issues) - 5} more")
 
 
+def cmd_parse_fd(args):
+    """Parse assets and income sources out of annual FD filings.
+
+    These parsers were previously reachable only from a one-off script in
+    scripts/, which is why neither had a documented entry point.
+    """
+    from src.parsing.fd_asset_parser import FDAssetParser
+    from src.parsing.fd_income_parser import FDIncomeParser
+
+    if args.income_only and args.assets_only:
+        print("--assets-only and --income-only are mutually exclusive.")
+        sys.exit(1)
+
+    if not args.income_only:
+        print("Parsing FD assets...")
+        FDAssetParser().parse_all_disclosures()
+
+    if not args.assets_only:
+        print("Parsing FD income sources...")
+        FDIncomeParser().parse_all_disclosures()
+
+    with get_db() as db:
+        recalculate_member_counts(db)
+
+    print("FD parsing complete.")
+
+
 def cmd_recount(args):
     """Recalculate the materialized count columns on members."""
     print("Recalculating member counts...")
@@ -563,6 +590,16 @@ def main():
         "-l", "--limit", type=int, default=10, help="Number of top performers to show (default: 10)"
     )
     perf_parser.set_defaults(func=cmd_performance)
+
+    # Parse FD assets / income
+    parse_fd_parser = subparsers.add_parser(
+        "parse-fd", help="Parse assets and income sources from annual FD filings"
+    )
+    parse_fd_parser.add_argument("--assets-only", action="store_true", help="Parse assets only")
+    parse_fd_parser.add_argument(
+        "--income-only", action="store_true", help="Parse income sources only"
+    )
+    parse_fd_parser.set_defaults(func=cmd_parse_fd)
 
     # Recount command
     recount_parser = subparsers.add_parser(

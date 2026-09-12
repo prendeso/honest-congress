@@ -96,6 +96,18 @@ jobs:
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
         run: python -m src.cli ingest-lobbying --year 2024
 
+      # The join to legislative action. `--sponsored-only` because cosponsorship
+      # is ~20x more voluminous (one member: 71 sponsored, 1,562 cosponsored)
+      # and no detector reads it yet -- fetching it nightly would spend roughly
+      # ten thousand requests on data nothing looks at. Drop the flag for a
+      # backfill when a cosponsorship detector exists.
+      - name: Ingest bill sponsorship and committee referrals
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
+        run: python -m src.cli ingest-bills --sponsored-only
+
       - name: Run anomaly analysis
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}

@@ -52,7 +52,12 @@ from src.db.models import CampaignDonation, Member
 from src.ingestion._helpers import traded_tickers
 from src.ingestion.committees import BASE_URL as LEGISLATORS_BASE_URL
 from src.ingestion.committees import _fetch_yaml
-from src.ingestion.rate_limit import HOUR, RateLimiter
+from src.ingestion.rate_limit import (
+    DEFAULT_BACKOFF_SECONDS,
+    HOUR,
+    RequestBudgetExhausted,
+    ThrottledClient,
+)
 from src.ingestion.sec_tickers import TickerResolver
 
 logger = logging.getLogger(__name__)
@@ -73,20 +78,12 @@ DEFAULT_REQUESTS_PER_HOUR = 900
 # repeated, which collapses ~800 lookups into ~16.
 CANDIDATE_IDS_PER_REQUEST = 50
 
-MAX_RETRIES = 4
-DEFAULT_BACKOFF_SECONDS = (2, 4, 8, 16)
 
+class FECClient(ThrottledClient):
+    """FEC API client. Identifies itself with an `api_key` query parameter."""
 
-class RequestBudgetExhausted(RuntimeError):
-    """Raised when a run hits its own `max_requests` cap.
-
-    Not an error condition: a capped run is expected to stop early and be
-    resumed. The caller catches this and reports what it managed to ingest.
-    """
-
-
-class FECClient:
-    """Thin FEC API client with a request budget and 429 handling."""
+    base_url = FEC_BASE_URL
+    name = "FEC"
 
     def __init__(
         self,
@@ -104,50 +101,20 @@ class FECClient:
                 "FEC_API_KEY is not set. Get a free key at https://api.data.gov/signup/"
             )
         self.api_key = api_key
-        self.session = session or requests.Session()
-        self.max_requests = max_requests
-        self.requests_made = 0
-        self._sleeper = sleeper
-        self._backoff = backoff_seconds
-        self._limiter = RateLimiter(
-            requests_per_hour, HOUR, name="FEC", clock=clock, sleeper=sleeper
+        super().__init__(
+            limit=requests_per_hour,
+            window_seconds=HOUR,
+            session=session,
+            timeout=REQUEST_TIMEOUT,
+            max_requests=max_requests,
+            sleeper=sleeper,
+            clock=clock,
+            backoff_seconds=backoff_seconds,
         )
 
-    def get(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        if self.max_requests is not None and self.requests_made >= self.max_requests:
-            raise RequestBudgetExhausted(
-                f"stopped after {self.requests_made} requests (--max-requests)"
-            )
-
-        query = dict(params)
-        query["api_key"] = self.api_key
-
-        for attempt in range(MAX_RETRIES):
-            self._limiter.acquire()
-            self.requests_made += 1
-            response = self.session.get(
-                f"{FEC_BASE_URL}{path}", params=query, timeout=REQUEST_TIMEOUT
-            )
-
-            if response.status_code == 429:
-                # api.data.gov sends Retry-After on throttle. Honour it when
-                # present; the table is only a fallback for when it is not.
-                retry_after = response.headers.get("Retry-After")
-                delay = self._backoff[min(attempt, len(self._backoff) - 1)]
-                if retry_after:
-                    try:
-                        delay = int(retry_after)
-                    except ValueError:
-                        pass
-                logger.warning("FEC throttled (429); retrying in %ss", delay)
-                self._sleeper(delay)
-                continue
-
-            response.raise_for_status()
-            payload: Dict[str, Any] = response.json()
-            return payload
-
-        raise requests.exceptions.RetryError(f"FEC still throttling after {MAX_RETRIES} attempts")
+    def _auth_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        params["api_key"] = self.api_key
+        return params
 
     def paginate(self, path: str, params: Dict[str, Any]) -> Iterator[Dict[str, Any]]:
         """Page through an endpoint that uses ordinary page numbers."""

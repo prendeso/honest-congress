@@ -470,3 +470,147 @@ class GovernmentContract(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (Index("ix_contracts_source_external", "source", "external_id", unique=True),)
+
+
+# ---------------------------------------------------------------------------
+# Legislative action — joining trades to what a member did in office.
+#
+# Every other table in this file describes trading. These three describe the
+# member's official conduct, and the join between them is the thing no
+# competitor sells: Capitol Trades, Unusual Whales and Quiver all publish the
+# raw trade listings for free.
+#
+# Sourced from the Congress.gov API (`src.ingestion.bills`), which is official
+# and public domain.
+# ---------------------------------------------------------------------------
+
+
+class Bill(Base):
+    """A bill or resolution, with the policy area CRS assigned it.
+
+    `policy_area` is the join key to a sector. It is nullable because CRS did
+    not classify bills systematically until around the 111th Congress: measured
+    on the live API, 67 of Pelosi's 199 sponsored bills lack one and all of them
+    predate 2020, while only 1 of 9,896 bills across three sitting members' full
+    histories is unclassified. For the 2024-25 window this project analyses the
+    rate is effectively zero, but the column stays nullable so historical rows
+    can be stored rather than dropped.
+    """
+
+    __tablename__ = "bills"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    congress: Mapped[int] = mapped_column(Integer, index=True)
+    bill_type: Mapped[str] = mapped_column(String(10))  # hr, s, hres, sjres, ...
+    number: Mapped[str] = mapped_column(String(20))
+
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+    policy_area: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    origin_chamber: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    introduced_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+    latest_action_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    latest_action_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Set once the bill's committee referrals have been fetched. They cost one
+    # request each and are only worth spending on bills that already passed the
+    # sector-and-trade filter, so "no committees" and "not looked up yet" have
+    # to be distinguishable.
+    committees_fetched: Mapped[bool] = mapped_column(default=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    sponsorships: Mapped[List["BillSponsorship"]] = relationship(
+        "BillSponsorship", back_populates="bill", cascade="all, delete-orphan"
+    )
+    committees: Mapped[List["BillCommittee"]] = relationship(
+        "BillCommittee", back_populates="bill", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (Index("uq_bill_identity", "congress", "bill_type", "number", unique=True),)
+
+    @property
+    def citation(self) -> str:
+        """The form a reader can look up on congress.gov, e.g. "H.R. 4644"."""
+        return f"{self.bill_type.upper()} {self.number}"
+
+    def __repr__(self) -> str:
+        return f"<Bill {self.congress} {self.citation}>"
+
+
+class BillSponsorship(Base):
+    """A member sponsoring or cosponsoring a bill.
+
+    `is_sponsor` is not a detail. Measured on real data, Sharice Davids has
+    sponsored 71 bills and cosponsored 1,562 -- cosponsoring is 22x more common
+    and very nearly costless, so the two are different acts carrying very
+    different weight. Both are stored; only sponsorship is currently allowed to
+    produce a finding.
+    """
+
+    __tablename__ = "bill_sponsorships"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bill_id: Mapped[int] = mapped_column(ForeignKey("bills.id"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), index=True)
+
+    is_sponsor: Mapped[bool] = mapped_column(default=False, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    bill: Mapped["Bill"] = relationship("Bill", back_populates="sponsorships")
+    member: Mapped["Member"] = relationship("Member")
+
+    __table_args__ = (
+        Index("uq_bill_sponsorship", "bill_id", "member_id", "is_sponsor", unique=True),
+    )
+
+
+class BillCommittee(Base):
+    """A committee a bill was referred to.
+
+    `committee_id` is stored in congress-legislators' thomas_id form -- "HSWM",
+    or "HSBA16" for a subcommittee -- so it joins directly to
+    `CommitteeAssignment.committee_id`. Congress.gov publishes it as a
+    `systemCode` ("hswm00", "hsba16"); the conversion is uppercase, then drop a
+    trailing "00". Verified against both sources rather than assumed.
+    """
+
+    __tablename__ = "bill_committees"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    bill_id: Mapped[int] = mapped_column(ForeignKey("bills.id"), index=True)
+
+    committee_id: Mapped[str] = mapped_column(String(20), index=True)
+    committee_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    chamber: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # "Referred To", "Markup By", "Reported By" -- and when. The date is what
+    # makes this a dated event rather than a standing overlap.
+    activity: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    activity_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    bill: Mapped["Bill"] = relationship("Bill", back_populates="committees")
+
+    # The date is part of the key, not decoration: a committee can be
+    # "Referred to" a bill in one session and again in the next. Two activities
+    # of the same name on the SAME day (Natural Resources logged "Unknown"
+    # twice, seven minutes apart, on H.R. 1 of the 118th) collapse into one
+    # here, which is correct -- a detector working in 60-day windows learns
+    # nothing from the seven minutes.
+    __table_args__ = (
+        Index(
+            "uq_bill_committee",
+            "bill_id",
+            "committee_id",
+            "activity",
+            "activity_date",
+            unique=True,
+        ),
+    )

@@ -1,0 +1,112 @@
+{
+ "sponsoredLegislation": [
+  {
+   "congress": 116,
+   "type": "HR",
+   "number": "1548",
+   "title": "For the relief of Maria Carmen Castro Ramirez and J. Refugio Carreno Rojas.",
+   "policyArea": {
+    "name": null
+   },
+   "introducedDate": "2019-03-05",
+   "latestAction": {
+    "actionDate": "2020-06-11",
+    "text": "Received in the Senate and Read twice and referred to the Committee on the Judiciary."
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 113,
+   "type": "HR",
+   "number": "19",
+   "title": "Reserved for the Minority Leader.",
+   "policyArea": {
+    "name": null
+   },
+   "introducedDate": "2013-01-03",
+   "latestAction": {
+    "actionDate": "2013-01-03",
+    "text": "Introduced in House"
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 111,
+   "type": "HR",
+   "number": "3426",
+   "title": "Coordinated Environmental Public Health Network Act of 2009",
+   "policyArea": {
+    "name": "Health"
+   },
+   "introducedDate": "2009-07-30",
+   "latestAction": {
+    "actionDate": "2009-07-31",
+    "text": "Referred to the Subcommittee on Energy and Environment."
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 110,
+   "type": "HR",
+   "number": "3643",
+   "title": "Coordinated Environmental Public Health Network Act of 2007",
+   "policyArea": {
+    "name": "Health"
+   },
+   "introducedDate": "2007-09-24",
+   "latestAction": {
+    "actionDate": "2007-11-08",
+    "text": "Referred to the Subcommittee on Health."
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 108,
+   "type": "HR",
+   "number": "5335",
+   "title": "Coordinated Environmental Health Network Act of 2004",
+   "policyArea": {
+    "name": "Health"
+   },
+   "introducedDate": "2004-10-08",
+   "latestAction": {
+    "actionDate": "2004-10-11",
+    "text": "Sponsor introductory remarks on measure. (CR E1902-1903)"
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 107,
+   "type": "HR",
+   "number": "1504",
+   "title": "Vaccines for the New Millennium Act of 2001",
+   "policyArea": {
+    "name": "Taxation"
+   },
+   "introducedDate": "2001-04-04",
+   "latestAction": {
+    "actionDate": "2001-04-25",
+    "text": "Referred to the Subcommittee on Health, for a period to be subsequently determined by the Chairman."
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 106,
+   "type": "HR",
+   "number": "5219",
+   "title": "Vaccines for the New Millennium Act of 2000",
+   "policyArea": {
+    "name": "Taxation"
+   },
+   "introducedDate": "2000-09-20",
+   "latestAction": {
+    "actionDate": "2000-09-20",
+    "text": "Referred to the House Committee on Ways and Means."
+   },
+   "originChamber": null
+  }
+ ],
+ "pagination": {
+  "count": 7
+ }
+}

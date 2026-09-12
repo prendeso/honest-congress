@@ -51,7 +51,11 @@ from sqlalchemy.orm import Session
 
 from src.db.models import LobbyingDisclosure
 from src.ingestion._helpers import traded_tickers
-from src.ingestion.rate_limit import MINUTE, RateLimiter
+from src.ingestion.rate_limit import (
+    DEFAULT_BACKOFF_SECONDS,
+    MINUTE,
+    ThrottledClient,
+)
 from src.ingestion.sec_tickers import TickerResolver
 
 logger = logging.getLogger(__name__)
@@ -75,12 +79,12 @@ AUTHENTICATED_REQUESTS_PER_MINUTE = 100
 # The API caps page size at 25 regardless of what is asked for.
 PAGE_SIZE = 25
 
-MAX_RETRIES = 4
-DEFAULT_BACKOFF_SECONDS = (2, 4, 8, 16)
 
-
-class LDAClient:
+class LDAClient(ThrottledClient):
     """Senate LDA client. The API key is optional and only changes the pace."""
+
+    base_url = LDA_BASE_URL
+    name = "Senate LDA"
 
     def __init__(
         self,
@@ -93,17 +97,19 @@ class LDAClient:
         backoff_seconds: tuple[int, ...] = DEFAULT_BACKOFF_SECONDS,
     ):
         self.api_key = api_key or ""
-        self.session = session or requests.Session()
-        self.requests_made = 0
-        self._sleeper = sleeper
-        self._backoff = backoff_seconds
 
         if requests_per_minute is None:
             requests_per_minute = (
                 AUTHENTICATED_REQUESTS_PER_MINUTE if self.api_key else ANONYMOUS_REQUESTS_PER_MINUTE
             )
-        self._limiter = RateLimiter(
-            requests_per_minute, MINUTE, name="Senate LDA", clock=clock, sleeper=sleeper
+        super().__init__(
+            limit=requests_per_minute,
+            window_seconds=MINUTE,
+            session=session,
+            timeout=REQUEST_TIMEOUT,
+            sleeper=sleeper,
+            clock=clock,
+            backoff_seconds=backoff_seconds,
         )
         logger.info(
             "Senate LDA: %s, pacing at %d requests/minute",
@@ -111,41 +117,10 @@ class LDAClient:
             requests_per_minute,
         )
 
-    def _headers(self) -> Dict[str, str]:
+    def _auth_headers(self) -> Dict[str, str]:
         if self.api_key:
             return {"Authorization": f"Token {self.api_key}"}
         return {}
-
-    def get(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
-        for attempt in range(MAX_RETRIES):
-            self._limiter.acquire()
-            self.requests_made += 1
-            response = self.session.get(
-                f"{LDA_BASE_URL}{path}",
-                params=params,
-                headers=self._headers(),
-                timeout=REQUEST_TIMEOUT,
-            )
-
-            if response.status_code == 429:
-                retry_after = response.headers.get("Retry-After")
-                delay = self._backoff[min(attempt, len(self._backoff) - 1)]
-                if retry_after:
-                    try:
-                        delay = int(retry_after)
-                    except ValueError:
-                        pass
-                logger.warning("Senate LDA throttled (429); retrying in %ss", delay)
-                self._sleeper(delay)
-                continue
-
-            response.raise_for_status()
-            payload: Dict[str, Any] = response.json()
-            return payload
-
-        raise requests.exceptions.RetryError(
-            f"Senate LDA still throttling after {MAX_RETRIES} attempts"
-        )
 
     def filings(self, client_name: str, filing_year: int) -> Iterator[Dict[str, Any]]:
         """Every filing whose client name contains `client_name`, paged."""

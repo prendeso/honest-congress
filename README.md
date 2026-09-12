@@ -50,6 +50,7 @@ python -m src.cli sync-committees    # committee assignments (free, no key)
 python -m src.cli ingest-contracts   # USASpending (free, no key)
 python -m src.cli ingest-donations   # FEC (free key: api.data.gov/signup)
 python -m src.cli ingest-lobbying    # Senate LDA (key optional)
+python -m src.cli ingest-bills       # Congress.gov (free key: api.congress.gov/sign-up)
 
 python -m src.cli analyze
 python -m src.cli stats              # what ran, and against how much data
@@ -69,10 +70,19 @@ anywhere in the pipeline, which is what makes the output redistributable.
 | USASpending | `government_contracts` | none |
 | FEC | `campaign_donations` | free, [api.data.gov](https://api.data.gov/signup/) — 1,000 requests/hour |
 | Senate LDA | `lobbying_disclosures` | optional, [lda.senate.gov](https://lda.senate.gov/api/register/) — raises ~15 req/min to ~120 |
+| Congress.gov | `bills`, `bill_sponsorships`, `bill_committees` | free, [api.congress.gov](https://api.congress.gov/sign-up/) — 20,000 requests/hour |
 
 `ingest-donations` costs more requests than one FEC hour allows, so it caps
 itself and resumes: rerunning skips the PACs already stored. Pass
 `--max-requests` to cap it explicitly.
+
+`ingest-bills` is what lets the analysis ask whether a member acted on an
+issuer's industry in office, not just whether they traded it. Sponsorship costs
+about one page per member; cosponsorship is roughly twenty times larger and no
+detector reads it yet, so `--sponsored-only` is what the nightly job runs.
+Committee referrals cost one request per bill, so they are fetched only for
+bills that already matched a member's trading — on real data that narrowed
+10,980 bills to 26.
 
 `/health` returns 503 if the database is unreachable; `/health/live`
 always returns 200 and is intended for liveness probes.

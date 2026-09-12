@@ -71,6 +71,7 @@ def cmd_analyze(args):
         run_extended_anomaly_detection,
         run_tier2_detection,
     )
+    from src.analysis.legislation import run_legislation_detection
 
     analysis_types = []
 
@@ -132,6 +133,16 @@ def cmd_analyze(args):
         # workflow -- which runs this command -- never ran them at all. Their
         # three source tables are fed by `ingest-contracts`, `ingest-donations`
         # and `ingest-lobbying`; `stats` reports any that are still empty.
+        # The join to legislative action -- what the member did in office, not
+        # just what they traded. Reads bills/sponsorships/referrals from
+        # `ingest-bills`; `stats` reports if those tables are empty.
+        print("\nRunning legislative action detection...")
+        with get_db() as db:
+            legislation = run_legislation_detection(db)
+        print(f"  Sponsorship conflicts: {len(legislation['sponsorship_conflicts'])}")
+        print(f"  Bill jurisdiction conflicts: {len(legislation['bill_jurisdiction_conflicts'])}")
+        total_anomalies += legislation["total"]
+
         print("\nRunning donor / lobbying / contract detection...")
         with get_db() as db:
             tier2 = run_tier2_detection(db)
@@ -472,6 +483,67 @@ def cmd_ingest_donations(args):
             "\n  Stopped at the request cap. Nothing is lost - rerun the same "
             "command and it resumes from the PACs it has not reached yet."
         )
+
+
+def cmd_ingest_bills(args):
+    """Ingest bill sponsorship and committee referrals from Congress.gov."""
+    from src.analysis.legislation import bills_worth_committee_lookup, coverage_report
+    from src.config import get_settings
+    from src.ingestion.bills import fetch_bill_committees, ingest_member_bills
+
+    api_key = get_settings().congress_gov_api_key
+    if not api_key:
+        print(
+            "CONGRESS_GOV_API_KEY is not set. Get a free key at https://api.congress.gov/sign-up/"
+        )
+        sys.exit(1)
+
+    print("Ingesting bill sponsorship from Congress.gov...")
+
+    with get_db() as db:
+        result = ingest_member_bills(
+            db,
+            api_key,
+            max_requests=args.max_requests,
+            include_cosponsored=not args.sponsored_only,
+        )
+
+    print("\nSponsorship ingestion complete:")
+    print(f"  Members queried: {result['members_queried']}")
+    print(f"  Bills stored: {result['bills']}")
+    print(f"  Sponsorships: {result['sponsorships']}")
+    print(f"  Cosponsorships: {result['cosponsorships']}")
+    print(f"  Congress.gov requests used: {result['requests_made']}")
+
+    if not args.skip_committees:
+        # One request per bill, so only for bills that could actually produce a
+        # finding: a sector-mapped policy area and a trade by a member who
+        # touched the bill. On real data this is a ~99% reduction.
+        print("\nFetching committee referrals for bills that matched a member's trading...")
+        with get_db() as db:
+            candidates = bills_worth_committee_lookup(db)
+            referrals = fetch_bill_committees(db, api_key, bills=candidates)
+        print(f"  Bills looked up: {referrals['bills_looked_up']}")
+        print(f"  Referrals stored: {referrals['referrals']}")
+        print(f"  Congress.gov requests used: {referrals['requests_made']}")
+
+    with get_db() as db:
+        coverage = coverage_report(db)
+
+    print("\nWhat the legislative detectors can see:")
+    print(
+        f"  Bills in a sector-mapped policy area: {coverage['bills_mapped_to_a_sector']}"
+        f" of {coverage['bills']}"
+    )
+    print(
+        f"  Traded tickers with a known sector: "
+        f"{coverage['traded_tickers_with_a_known_sector']}"
+        f" of {coverage['distinct_traded_tickers']}"
+        "  - this is the binding constraint; see src/analysis/sectors.py"
+    )
+
+    if result["stopped_early"]:
+        print("\n  Stopped at the request cap. Rerun to continue.")
 
 
 def cmd_ingest_lobbying(args):
@@ -902,6 +974,28 @@ def main():
         help="Re-scan PACs already stored for this cycle (use after filings are amended)",
     )
     donations_parser.set_defaults(func=cmd_ingest_donations)
+
+    bills_parser = subparsers.add_parser(
+        "ingest-bills",
+        help="Ingest bill sponsorship and committee referrals from Congress.gov (free key)",
+    )
+    bills_parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="Stop after this many requests; rerun to continue (quota is 20,000/hour)",
+    )
+    bills_parser.add_argument(
+        "--sponsored-only",
+        action="store_true",
+        help="Skip cosponsorship, which is ~20x more voluminous and produces no findings yet",
+    )
+    bills_parser.add_argument(
+        "--skip-committees",
+        action="store_true",
+        help="Skip the committee-referral pass (one request per matching bill)",
+    )
+    bills_parser.set_defaults(func=cmd_ingest_bills)
 
     lobbying_parser = subparsers.add_parser(
         "ingest-lobbying",

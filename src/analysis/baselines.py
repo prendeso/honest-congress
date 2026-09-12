@@ -25,6 +25,8 @@ from sqlalchemy.orm import Session
 
 from src.db.models import (
     Anomaly,
+    BillCommittee,
+    BillSponsorship,
     CampaignDonation,
     CommitteeAssignment,
     GovernmentContract,
@@ -50,6 +52,8 @@ DETECTOR_SOURCE_TABLES: Dict[str, Any] = {
     "lobbying_overlap": LobbyingDisclosure,
     "contract_front_run": GovernmentContract,
     "committee_jurisdiction_conflict": CommitteeAssignment,
+    "sponsorship_conflict": BillSponsorship,
+    "bill_jurisdiction_conflict": BillCommittee,
     "cross_member_cluster": Transaction,
     "large_trade": Transaction,
     "late_filing": Transaction,

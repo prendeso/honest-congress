@@ -1,0 +1,158 @@
+{
+ "committees": [
+  {
+   "activities": [
+    {
+     "date": "2023-03-30T15:40:22Z",
+     "name": "Unknown"
+    },
+    {
+     "date": "2023-03-30T15:33:36Z",
+     "name": "Unknown"
+    },
+    {
+     "date": "2023-03-14T20:00:05Z",
+     "name": "Referred To"
+    }
+   ],
+   "chamber": "House",
+   "name": "Natural Resources Committee",
+   "systemCode": "hsii00",
+   "type": "Standing",
+   "url": "https://api.congress.gov/v3/committee/house/hsii00?format=json"
+  },
+  {
+   "activities": [
+    {
+     "date": "2023-03-14T20:00:10Z",
+     "name": "Referred To"
+    }
+   ],
+   "chamber": "House",
+   "name": "Energy and Commerce Committee",
+   "subcommittees": [
+    {
+     "activities": [
+      {
+       "date": "2023-03-24T15:25:08Z",
+       "name": "Referred to"
+      }
+     ],
+     "name": "Energy Subcommittee",
+     "systemCode": "hsif03",
+     "url": "https://api.congress.gov/v3/committee/house/hsif03?format=json"
+    }
+   ],
+   "systemCode": "hsif00",
+   "type": "Standing",
+   "url": "https://api.congress.gov/v3/committee/house/hsif00?format=json"
+  },
+  {
+   "activities": [
+    {
+     "date": "2023-03-14T20:00:20Z",
+     "name": "Referred To"
+    }
+   ],
+   "chamber": "House",
+   "name": "Transportation and Infrastructure Committee",
+   "subcommittees": [
+    {
+     "activities": [
+      {
+       "date": "2023-03-15T14:10:39Z",
+       "name": "Referred to"
+      }
+     ],
+     "name": "Water Resources and Environment Subcommittee",
+     "systemCode": "hspw02",
+     "url": "https://api.congress.gov/v3/committee/house/hspw02?format=json"
+    },
+    {
+     "activities": [
+      {
+       "date": "2023-03-15T14:10:28Z",
+       "name": "Referred to"
+      }
+     ],
+     "name": "Railroads, Pipelines, and Hazardous Materials Subcommittee",
+     "systemCode": "hspw14",
+     "url": "https://api.congress.gov/v3/committee/house/hspw14?format=json"
+    },
+    {
+     "activities": [
+      {
+       "date": "2023-03-15T14:10:17Z",
+       "name": "Referred to"
+      }
+     ],
+     "name": "Highways and Transit Subcommittee",
+     "systemCode": "hspw12",
+     "url": "https://api.congress.gov/v3/committee/house/hspw12?format=json"
+    },
+    {
+     "activities": [
+      {
+       "date": "2023-03-15T14:10:05Z",
+       "name": "Referred to"
+      }
+     ],
+     "name": "Economic Development, Public Buildings, and Emergency Management Subcommittee",
+     "systemCode": "hspw13",
+     "url": "https://api.congress.gov/v3/committee/house/hspw13?format=json"
+    },
+    {
+     "activities": [
+      {
+       "date": "2023-03-15T14:09:58Z",
+       "name": "Referred to"
+      }
+     ],
+     "name": "Coast Guard and Maritime Transportation Subcommittee",
+     "systemCode": "hspw07",
+     "url": "https://api.congress.gov/v3/committee/house/hspw07?format=json"
+    }
+   ],
+   "systemCode": "hspw00",
+   "type": "Standing",
+   "url": "https://api.congress.gov/v3/committee/house/hspw00?format=json"
+  },
+  {
+   "activities": [
+    {
+     "date": "2023-03-14T20:00:25Z",
+     "name": "Referred To"
+    }
+   ],
+   "chamber": "House",
+   "name": "Budget Committee",
+   "systemCode": "hsbu00",
+   "type": "Standing",
+   "url": "https://api.congress.gov/v3/committee/house/hsbu00?format=json"
+  },
+  {
+   "activities": [
+    {
+     "date": "2023-03-14T20:00:15Z",
+     "name": "Referred To"
+    }
+   ],
+   "chamber": "House",
+   "name": "Agriculture Committee",
+   "systemCode": "hsag00",
+   "type": "Standing",
+   "url": "https://api.congress.gov/v3/committee/house/hsag00?format=json"
+  }
+ ],
+ "pagination": {
+  "count": 5
+ },
+ "request": {
+  "billNumber": "1",
+  "billType": "hr",
+  "billUrl": "https://api.congress.gov/v3/bill/118/hr/1?format=json",
+  "congress": "118",
+  "contentType": "application/json",
+  "format": "json"
+ }
+}

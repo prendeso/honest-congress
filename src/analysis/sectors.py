@@ -79,6 +79,30 @@ COMMITTEE_SECTOR_JURISDICTION: Dict[str, FrozenSet[str]] = {
     "SSFI": frozenset({"finance", "healthcare"}),  # Finance
 }
 
+# CRS policy area -> sectors. Congress.gov assigns each bill exactly one policy
+# area from a fixed vocabulary; sampling 1,770 real bills returned 34 distinct
+# values, and these are the seven that identify an industry rather than a theme.
+#
+# The omissions are the point. "Taxation", "Commerce", "Environmental
+# Protection" and "Economics and Public Finance" all appear frequently and all
+# touch every issuer in the market, so routing them to a sector would let the
+# detector claim a specific company link it cannot support. They stay unmapped
+# deliberately, and a test pins that so a later edit cannot quietly widen the
+# claim.
+#
+# Coverage, measured on 9,896 real bills: about 35% fall in one of these seven.
+# That ceiling is real and the ingester reports it.
+POLICY_AREA_SECTORS: Dict[str, FrozenSet[str]] = {
+    "Armed Forces and National Security": frozenset({"defense"}),
+    "Health": frozenset({"healthcare"}),
+    "Energy": frozenset({"energy"}),
+    "Finance and Financial Sector": frozenset({"finance"}),
+    "Science, Technology, Communications": frozenset({"technology", "telecom"}),
+    "Transportation and Public Works": frozenset({"transportation"}),
+    "Agriculture and Food": frozenset({"agriculture"}),
+}
+
+
 _WORD_PATTERNS: Dict[str, re.Pattern[str]] = {
     sector: re.compile(r"\b(?:" + "|".join(sorted(words)) + r")\b", re.IGNORECASE)
     for sector, words in SECTOR_KEYWORDS.items()
@@ -124,3 +148,15 @@ def committee_sectors(committee_id: str | None) -> FrozenSet[str]:
             return sectors
 
     return frozenset()
+
+
+def policy_area_sectors(policy_area: str | None) -> FrozenSet[str]:
+    """Sectors a bill's CRS policy area identifies, or empty.
+
+    Empty is the common case and not a failure: most policy areas name a theme
+    ("Government Operations and Politics") rather than an industry, and a bill
+    that has not been classified yet has no policy area at all.
+    """
+    if not policy_area:
+        return frozenset()
+    return POLICY_AREA_SECTORS.get(policy_area.strip(), frozenset())

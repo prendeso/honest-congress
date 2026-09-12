@@ -69,6 +69,7 @@ def cmd_analyze(args):
         run_cluster_detection,
         run_committee_conflict_detection,
         run_extended_anomaly_detection,
+        run_tier2_detection,
     )
 
     analysis_types = []
@@ -126,6 +127,18 @@ def cmd_analyze(args):
             clusters = run_cluster_detection(db)
         print(f"  Cross-member clusters: {clusters['total']}")
         total_anomalies += clusters["total"]
+
+        # The Tier-2 detectors were reachable only from the API, so the nightly
+        # workflow -- which runs this command -- never ran them at all. Their
+        # three source tables are fed by `ingest-contracts`, `ingest-donations`
+        # and `ingest-lobbying`; `stats` reports any that are still empty.
+        print("\nRunning donor / lobbying / contract detection...")
+        with get_db() as db:
+            tier2 = run_tier2_detection(db)
+        print(f"  Donor conflicts: {len(tier2.get('donor_anomalies', []))}")
+        print(f"  Lobbying overlaps: {len(tier2.get('lobbying_anomalies', []))}")
+        print(f"  Contract front-runs: {len(tier2.get('contract_anomalies', []))}")
+        total_anomalies += tier2.get("total", 0)
 
         print("\nExtended Analysis Results:")
         print(f"  Trade Timing: {len(extended.get('timing_anomalies', []))}")
@@ -397,6 +410,27 @@ def cmd_sync_committees(args):
         )
     if result["skipped_unknown_committee"]:
         print(f"  Skipped (committee not in metadata): {result['skipped_unknown_committee']}")
+
+
+def cmd_ingest_contracts(args):
+    """Ingest federal contract awards from USASpending."""
+    from src.ingestion.usaspending import ingest_government_contracts
+
+    print(f"Ingesting federal contract awards ({args.start} to {args.end or 'today'})...")
+
+    with get_db() as db:
+        result = ingest_government_contracts(
+            db, start_date=args.start, end_date=args.end, pages=args.pages
+        )
+
+    print("\nContract ingestion complete:")
+    print(f"  Award actions fetched: {result['fetched']}")
+    print(f"  Imported: {result['imported']}")
+    print(f"  Already present: {result['duplicates']}")
+    print(
+        f"  Recipients not publicly traded: {result['unresolved_recipients']}"
+        "  - expected; labs, universities and private firms have no ticker to trade"
+    )
 
 
 def cmd_compliance(args):
@@ -755,6 +789,22 @@ def main():
         help="Fetch committee assignments from congress-legislators (free, no key)",
     )
     committees_parser.set_defaults(func=cmd_sync_committees)
+
+    contracts_parser = subparsers.add_parser(
+        "ingest-contracts",
+        help="Ingest federal contract awards from USASpending (free, no key)",
+    )
+    contracts_parser.add_argument(
+        "--start", default="2023-01-01", help="Earliest action date (default: 2023-01-01)"
+    )
+    contracts_parser.add_argument("--end", default=None, help="Latest action date (default: today)")
+    contracts_parser.add_argument(
+        "--pages",
+        type=int,
+        default=3,
+        help="Pages of 100 award actions, largest first (default: 3)",
+    )
+    contracts_parser.set_defaults(func=cmd_ingest_contracts)
 
     # Compliance command
     compliance_parser = subparsers.add_parser(

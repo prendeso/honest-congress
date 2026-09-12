@@ -62,6 +62,12 @@ class Settings(BaseSettings):
             return set()
         return {t.strip() for t in raw.split(",") if t.strip()}
 
+    # SEC refuses requests whose User-Agent does not carry a contact email --
+    # a bare descriptive string gets a 403. Set this to a real address you
+    # monitor before running any SEC-backed ingestion in production; the
+    # default is a placeholder and SEC may rate-limit or block it.
+    sec_contact_email: str = Field(default="contact@example.com", alias="SEC_CONTACT_EMAIL")
+
     @property
     def database_url_display(self) -> str:
         """The database URL with any password redacted.

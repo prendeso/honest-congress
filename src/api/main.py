@@ -15,6 +15,7 @@ from src.api.routes import (
     admin,
     anomalies,
     assets,
+    compliance,
     dashboard_v2,
     disclosures,
     health,
@@ -169,3 +170,4 @@ app.include_router(disclosures.router, prefix="/api/disclosures", tags=["Disclos
 app.include_router(anomalies.router, prefix="/api/anomalies", tags=["Anomalies"])
 app.include_router(assets.router, prefix="/api", tags=["Assets"])
 app.include_router(performance.router, prefix="/api", tags=["Performance"])
+app.include_router(compliance.router)  # declares its own /api/compliance prefix

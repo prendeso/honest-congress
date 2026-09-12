@@ -150,6 +150,25 @@ thresholds; percentile rank is currently an annotation on the output, not the
 trigger. Formal FDR control needs per-detector p-values, which none of them
 currently produce.
 
+## D7. Compliance scoring is the flagship
+
+`src/analysis/compliance.py` computes per-member STOCK Act late-filing rates —
+`GET /api/compliance/`, or `python -m src.cli compliance`.
+
+It is the least interpretive thing the project does: subtraction between two
+dates that both appear on the filing. It asserts nothing about intent, timing,
+profit or conflict, so there is no threshold to argue with and no methodology to
+defend. That is the point. Every other detector here can be dismissed as
+speculative; this one cannot.
+
+It also fills a real gap — the existing trackers publish trades, not compliance.
+
+Two deliberate choices. The deadline is 45 days after the transaction, not the
+30-day awareness rule: awareness dates are not disclosed, so 45 is the only
+deadline the public record supports. And unlike the `late_filing` detector —
+which filters to materially large trades to keep the anomaly table readable — a
+compliance *rate* counts every covered transaction, or it is not a rate.
+
 ---
 
 ## Superseded

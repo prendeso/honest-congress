@@ -423,6 +423,41 @@ def cmd_sync_committees(args):
         print(f"  Skipped (committee not in metadata): {result['skipped_unknown_committee']}")
 
 
+def cmd_compliance(args):
+    """Rank members by STOCK Act filing punctuality."""
+    from src.analysis.compliance import compliance_leaderboard
+
+    with get_db() as db:
+        board = compliance_leaderboard(db, min_transactions=args.min_transactions, limit=args.limit)
+
+    print(
+        f"STOCK Act filing compliance "
+        f"({board['deadline_days']}-day deadline, "
+        f"min {board['min_transactions']} transactions)\n"
+    )
+    print(
+        f"{board['total_filed_late']} of {board['total_transactions_checked']} "
+        f"transactions filed late ({board['overall_late_rate_percent']}%) "
+        f"across {board['members_ranked']} members.\n"
+    )
+
+    if not board["members"]:
+        print("No members meet the minimum transaction count.")
+        return
+
+    print(f"{'Member':<28} {'Party':<6} {'Late':>6} {'Checked':>8} {'Rate':>7} {'Worst':>7}")
+    print("-" * 68)
+    for entry in board["members"]:
+        print(
+            f"{entry['member_name'][:27]:<28} "
+            f"{(entry['party'] or '')[:5]:<6} "
+            f"{entry['filed_late']:>6} "
+            f"{entry['transactions_checked']:>8} "
+            f"{entry['late_rate_percent']:>6.1f}% "
+            f"{entry['max_days_late']:>6}d"
+        )
+
+
 def cmd_stats(args):
     """Show detector output in context: how many tests, how many findings."""
     import json
@@ -660,6 +695,21 @@ def main():
         help="Fetch committee assignments from congress-legislators (free, no key)",
     )
     committees_parser.set_defaults(func=cmd_sync_committees)
+
+    # Compliance command
+    compliance_parser = subparsers.add_parser(
+        "compliance", help="Rank members by STOCK Act filing punctuality"
+    )
+    compliance_parser.add_argument(
+        "--min-transactions",
+        type=int,
+        default=5,
+        help="Minimum checkable transactions to be ranked (default: 5)",
+    )
+    compliance_parser.add_argument(
+        "-l", "--limit", type=int, default=25, help="Members to show (default: 25)"
+    )
+    compliance_parser.set_defaults(func=cmd_compliance)
 
     # Stats command
     stats_parser = subparsers.add_parser(

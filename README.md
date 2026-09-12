@@ -17,6 +17,8 @@ inconsistencies in reported wealth or trading activity.
   defensible — see [docs/DECISIONS.md](docs/DECISIONS.md).
 - **Web dashboard** — server-rendered Jinja2 templates + Alpine.js for
   members, disclosures, trades, parsed data, and anomalies.
+- **STOCK Act compliance scoring** — per-member late-filing rates computed
+  purely from filing dates. No inference, no thresholds to argue with.
 - **REST API** — FastAPI; OpenAPI docs at `/docs`.
 
 ## Quickstart (local)
@@ -142,6 +144,8 @@ POST /api/anomalies/admin/login    issue token; required for mutating routes
 POST /api/anomalies/analyze        run full detector suite
 POST /api/anomalies/regenerate     wipe + recompute all anomalies
 GET  /api/insights                 dashboard hero stats
+GET  /api/compliance/              members ranked by STOCK Act filing punctuality
+GET  /api/compliance/{member_id}   one member's filing record
 GET  /docs                         Swagger UI
 ```
 

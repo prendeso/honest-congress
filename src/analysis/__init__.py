@@ -22,7 +22,7 @@ from src.analysis.tier2_detectors import (
 )
 from src.analysis.trade_analyzer import TradeAnalyzer, analyze_trades
 from src.analysis.wealth_analyzer import WealthAnalyzer, analyze_wealth
-from src.db.models import Anomaly, Transaction
+from src.db.models import Anomaly, Transaction, normalize_severity
 
 logger = logging.getLogger(__name__)
 
@@ -42,23 +42,9 @@ def transaction_amount(txn: Transaction) -> float:
     return 0.0
 
 
-_API_SEVERITIES = {"low", "medium", "high"}
-
-
-def _normalize_severity(severity: Any) -> str:
-    """Map any detector's severity into the API vocabulary (low/medium/high)."""
-    if severity is None:
-        return "medium"
-    if isinstance(severity, int):
-        if severity >= 8:
-            return "high"
-        if severity >= 5:
-            return "medium"
-        return "low"
-    s = str(severity).lower()
-    if s == "critical":
-        return "high"
-    return s if s in _API_SEVERITIES else "medium"
+# Severity normalization lives on the model (src/db/models.py) so it applies to
+# every write path, not just this one. Re-exported here for existing callers.
+_normalize_severity = normalize_severity
 
 
 def _build_title(a: Dict[str, Any]) -> str:
@@ -111,6 +97,11 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
 
     inserted = 0
     skipped_disabled = 0
+    # (member_id, anomaly_type, title) is now a unique index. The existence
+    # check below queries the database, which cannot see rows added earlier in
+    # this same batch and not yet flushed -- so track them here too, or a batch
+    # containing the same anomaly twice fails the whole commit.
+    seen: set[tuple[int, str, str]] = set()
     for a in anomalies:
         member_id = a.get("member_id")
         anomaly_type = a.get("anomaly_type")
@@ -128,6 +119,10 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
         severity = _normalize_severity(a.get("severity"))
         description = a.get("description") or title
 
+        key = (member_id, anomaly_type, title[:200])
+        if key in seen:
+            continue
+
         existing = (
             db.query(Anomaly)
             .filter(
@@ -139,6 +134,8 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
         )
         if existing:
             continue
+
+        seen.add(key)
 
         db.add(
             Anomaly(

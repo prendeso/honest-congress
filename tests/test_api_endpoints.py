@@ -288,3 +288,80 @@ class TestAdminAuth:
         with pytest.raises(HTTPException) as exc:
             auth.require_admin("not-a-real-token")
         assert exc.value.status_code == 401
+
+
+# ---------------- anomaly ordering ----------------
+
+
+class TestAnomalyOrdering:
+    """Severity ordering must happen in SQL, before pagination.
+
+    The endpoint used to paginate by `detected_at DESC` and then sort only the
+    rows on the current page by severity in Python, so page 1 was the newest N
+    anomalies re-shuffled -- not the most severe ones. A high-severity anomaly
+    that was older than a page of low-severity ones never surfaced first.
+    """
+
+    @pytest.fixture
+    def graded_db(self):
+        db = SessionLocal()
+        for table in (Anomaly, Transaction, Asset, Disclosure, Member):
+            db.query(table).delete()
+        db.commit()
+
+        member = Member(
+            bioguide_id="G000001",
+            first_name="Grade",
+            last_name="Tester",
+            chamber=Chamber.HOUSE,
+            party=Party.REPUBLICAN,
+            state="TX",
+            in_office=True,
+        )
+        db.add(member)
+        db.commit()
+        db.refresh(member)
+
+        # The single HIGH anomaly is the OLDEST, so any ordering that paginates
+        # by detected_at first will push it off page 1.
+        rows = [("high", datetime(2020, 1, 1))]
+        rows += [("low", datetime(2024, 6, i + 1)) for i in range(5)]
+
+        for severity, detected in rows:
+            db.add(
+                Anomaly(
+                    member_id=member.id,
+                    anomaly_type="large_trade",
+                    severity=severity,
+                    title=f"{severity} @ {detected:%Y-%m-%d}",
+                    description="ordering fixture",
+                    detected_at=detected,
+                )
+            )
+        db.commit()
+        yield db
+        db.close()
+
+    def test_highest_severity_appears_first_even_when_oldest(self, client, graded_db):
+        r = client.get("/api/anomalies/?page_size=3")
+        assert r.status_code == 200
+
+        severities = [a["severity"] for a in r.json()["anomalies"]]
+        assert severities[0] == "high", f"expected high first, got {severities}"
+
+    def test_severity_filter_is_case_insensitive(self, client, graded_db):
+        # Detectors historically wrote "HIGH", "high" and raw integers into the
+        # same column, so an exact-match filter silently missed rows.
+        lower = client.get("/api/anomalies/?severity=high").json()["total"]
+        upper = client.get("/api/anomalies/?severity=HIGH").json()["total"]
+
+        assert lower == upper == 1
+
+    def test_pagination_totals_are_stable(self, client, graded_db):
+        first = client.get("/api/anomalies/?page=1&page_size=2").json()
+        second = client.get("/api/anomalies/?page=2&page_size=2").json()
+
+        assert first["total"] == second["total"] == 6
+        first_ids = {a["id"] for a in first["anomalies"]}
+        second_ids = {a["id"] for a in second["anomalies"]}
+        assert not (first_ids & second_ids), "pages must not overlap"

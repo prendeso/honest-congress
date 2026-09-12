@@ -36,12 +36,23 @@ jobs:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli init
 
+      # `cli ingest` drives IngestionOrchestrator, which covers House Clerk
+      # disclosures and the member roster. It does not touch QuiverQuant, so
+      # no key is passed here.
       - name: Ingest disclosure data
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
-          QUIVERQUANT_API_KEY: ${{ secrets.QUIVERQUANT_API_KEY }}
         run: python -m src.cli ingest
+
+      # Trades live behind a separate command. This step used to be missing
+      # entirely while the key was passed to `ingest` above, which ignores it --
+      # so trade data could never refresh. Skips cleanly when no key is set.
+      - name: Ingest trade data
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          QUIVERQUANT_API_KEY: ${{ secrets.QUIVERQUANT_API_KEY }}
+        run: python -m src.cli ingest-trades
 
       - name: Run anomaly analysis
         env:

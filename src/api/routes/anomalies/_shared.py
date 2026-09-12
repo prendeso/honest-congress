@@ -25,7 +25,9 @@ class AnomalyResponse(BaseModel):
     member_name: str
     member_party: str
     member_state: str
-    member_chamber: str
+    # Both handlers emit None when a member has no chamber recorded, so the
+    # schema has to allow it -- as declared, that raised a validation error.
+    member_chamber: str | None
     member_in_office: bool
     anomaly_type: str
     severity: str

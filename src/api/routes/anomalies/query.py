@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func
+from sqlalchemy.orm import Session, contains_eager
 
 from src.api.routes.anomalies._shared import (
     AnomalyListResponse,
     AnomalyResponse,
     AnomalySummaryResponse,
-    ensure_large_trade_sync,
 )
 from src.db import Anomaly, Disclosure, Member, get_db_session
 
 router = APIRouter()
+
+# Severity is stored as free text, so rank it explicitly and case-insensitively.
+# Anything unrecognised sorts last rather than silently ahead of "high".
+SEVERITY_RANK = case(
+    {"high": 1, "medium": 2, "low": 3},
+    value=func.lower(Anomaly.severity),
+    else_=4,
+)
 
 
 @router.get("/", response_model=AnomalyListResponse)
@@ -28,10 +35,14 @@ async def list_anomalies(
     db: Session = Depends(get_db_session),
 ):
     """List detected anomalies with optional filtering."""
-    ensure_large_trade_sync(db)
-
     query = (
-        db.query(Anomaly).join(Member).outerjoin(Disclosure, Anomaly.disclosure_id == Disclosure.id)
+        db.query(Anomaly, Disclosure.filing_year)
+        # Selecting two entities makes the join ambiguous without an explicit
+        # left side.
+        .select_from(Anomaly)
+        .join(Member)
+        .outerjoin(Disclosure, Anomaly.disclosure_id == Disclosure.id)
+        .options(contains_eager(Anomaly.member))
     )
 
     if member_id:
@@ -39,24 +50,21 @@ async def list_anomalies(
     if anomaly_type:
         query = query.filter(Anomaly.anomaly_type == anomaly_type)
     if severity:
-        query = query.filter(Anomaly.severity == severity.lower())
+        query = query.filter(func.lower(Anomaly.severity) == severity.lower())
     if reviewed is not None:
         query = query.filter(Anomaly.reviewed == reviewed)
 
     total = query.count()
 
-    severity_order = {"high": 1, "medium": 2, "low": 3}
-    anomalies = (
-        query.order_by(Anomaly.detected_at.desc())
+    # Order in SQL, before the limit/offset. This previously paginated by
+    # detected_at and then re-sorted only the current page by severity in
+    # Python, so page 1 was the newest 50 rows rather than the most severe.
+    # (The old comment blamed SQLite; SQLite supports CASE in ORDER BY fine.)
+    rows = (
+        query.order_by(SEVERITY_RANK, Anomaly.detected_at.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()
-    )
-
-    # SQLite doesn't support CASE-based ordering cleanly, so sort in Python.
-    anomalies = sorted(
-        anomalies,
-        key=lambda a: (severity_order.get(a.severity, 4), -a.detected_at.timestamp()),
     )
 
     return AnomalyListResponse(
@@ -82,15 +90,9 @@ async def list_anomalies(
                 reviewed=a.reviewed,
                 disclosure_id=a.disclosure_id,
                 transaction_id=a.transaction_id,
-                filing_year=(
-                    db.query(Disclosure.filing_year)
-                    .filter(Disclosure.id == a.disclosure_id)
-                    .scalar()
-                    if a.disclosure_id
-                    else None
-                ),
+                filing_year=filing_year,
             )
-            for a in anomalies
+            for a, filing_year in rows
         ],
     )
 
@@ -98,8 +100,6 @@ async def list_anomalies(
 @router.get("/summary", response_model=AnomalySummaryResponse)
 async def get_anomaly_summary(db: Session = Depends(get_db_session)):
     """Get summary statistics of all anomalies."""
-    ensure_large_trade_sync(db)
-
     total = db.query(Anomaly).count()
 
     by_type_raw = (
@@ -140,8 +140,6 @@ async def get_anomaly(
     db: Session = Depends(get_db_session),
 ):
     """Get detailed information for a specific anomaly."""
-    ensure_large_trade_sync(db)
-
     anomaly = db.query(Anomaly).filter(Anomaly.id == anomaly_id).first()
     if not anomaly:
         raise HTTPException(status_code=404, detail="Anomaly not found")

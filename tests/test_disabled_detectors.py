@@ -88,3 +88,36 @@ class TestDisabledTypesSetting:
     def test_setting_is_overridable_and_whitespace_tolerant(self):
         s = Settings(DISABLED_ANOMALY_TYPES="large_trade, late_filing ")
         assert s.disabled_anomaly_types_set == {"large_trade", "late_filing"}
+
+
+class TestPersistDeduplication:
+    """(member_id, anomaly_type, title) is a unique index as of c3a7f1d92b04.
+
+    The existence check in persist_anomalies queries the database, which cannot
+    see rows added earlier in the same un-flushed batch -- so duplicates within
+    one call have to be filtered in Python or the whole commit fails.
+    """
+
+    def test_duplicate_within_one_batch_is_collapsed(self, db_session, member):
+        batch = [_anomaly(member.id, "large_trade"), _anomaly(member.id, "large_trade")]
+
+        inserted = persist_anomalies(db_session, batch)
+
+        assert inserted == 1
+        assert db_session.query(Anomaly).count() == 1
+
+    def test_duplicate_across_calls_is_not_reinserted(self, db_session, member):
+        persist_anomalies(db_session, [_anomaly(member.id, "large_trade")])
+        inserted = persist_anomalies(db_session, [_anomaly(member.id, "large_trade")])
+
+        assert inserted == 0
+        assert db_session.query(Anomaly).count() == 1
+
+    def test_distinct_titles_are_both_kept(self, db_session, member):
+        first = _anomaly(member.id, "large_trade")
+        second = _anomaly(member.id, "large_trade")
+        second["title"] = "a different finding"
+
+        inserted = persist_anomalies(db_session, [first, second])
+
+        assert inserted == 2

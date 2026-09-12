@@ -8,6 +8,7 @@ from datetime import datetime
 
 from src.analysis import analyze_wealth
 from src.db import get_db
+from src.db.utils import recalculate_member_counts
 from src.ingestion import run_ingestion
 
 
@@ -47,6 +48,11 @@ def cmd_ingest(args):
 
     summary = run_ingestion(years=years, download_files=args.download, include_ptrs=include_ptrs)
 
+    # Member.disclosure_count is denormalized and the members API sorts and
+    # filters on it, so it has to be refreshed whenever disclosures change.
+    with get_db() as db:
+        recalculate_member_counts(db)
+
     print("\nIngestion complete:")
     print(f"  Members synced: {summary['members']}")
     print(f"  House disclosures: {summary['house_disclosures']}")
@@ -55,13 +61,26 @@ def cmd_ingest(args):
 
 
 def cmd_ingest_trades(args):
-    """Ingest congressional trades from QuiverQuant."""
+    """Ingest congressional trades from QuiverQuant.
+
+    Skips cleanly when no API key is configured rather than raising, so the
+    scheduled workflow can call this unconditionally -- and so it becomes a
+    no-op the moment the key is removed.
+    """
+    from src.config import get_settings
     from src.ingestion.quiverquant import ingest_quiverquant_trades
+
+    if not get_settings().quiverquant_api_key:
+        print("QUIVERQUANT_API_KEY is not set; skipping trade ingestion.")
+        return
 
     print("Importing congressional trades from QuiverQuant...")
 
     with get_db() as db:
         result = ingest_quiverquant_trades(db, chamber=args.chamber)
+
+    with get_db() as db:
+        recalculate_member_counts(db)
 
     print("\nTrade Ingestion Complete:")
     print(f"  Imported: {result['imported']}")
@@ -129,6 +148,10 @@ def cmd_analyze(args):
         print(f"  Multi-Factor Risk: {len(extended.get('combination_anomalies', []))}")
 
         total_anomalies += advanced.get("total", 0) + extended.get("total", 0)
+
+    # Member.anomaly_count is denormalized; refresh it now that anomalies moved.
+    with get_db() as db:
+        recalculate_member_counts(db)
 
     print(f"\nTotal anomalies detected: {total_anomalies}")
 
@@ -330,6 +353,19 @@ def cmd_fix_urls(args):
                 print(f"  ... and {len(issues) - 5} more")
 
 
+def cmd_recount(args):
+    """Recalculate the materialized count columns on members."""
+    print("Recalculating member counts...")
+
+    with get_db() as db:
+        stats = recalculate_member_counts(db)
+
+    print(
+        f"Done. {stats['members']} members, {stats['disclosures']} disclosures, "
+        f"{stats['anomalies']} anomalies."
+    )
+
+
 def cmd_purge_disabled(args):
     """Delete persisted anomalies whose detector has since been disabled.
 
@@ -374,6 +410,7 @@ def cmd_purge_disabled(args):
             .delete(synchronize_session=False)
         )
         db.commit()
+        recalculate_member_counts(db)
         print(f"\nDeleted {deleted} anomalies of disabled types.")
 
 
@@ -526,6 +563,12 @@ def main():
         "-l", "--limit", type=int, default=10, help="Number of top performers to show (default: 10)"
     )
     perf_parser.set_defaults(func=cmd_performance)
+
+    # Recount command
+    recount_parser = subparsers.add_parser(
+        "recount", help="Recalculate materialized member disclosure/anomaly counts"
+    )
+    recount_parser.set_defaults(func=cmd_recount)
 
     # Purge disabled anomaly types
     purge_parser = subparsers.add_parser(

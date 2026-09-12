@@ -13,7 +13,7 @@ from sqlalchemy import (
     Text,
 )
 from sqlalchemy import Enum as SQLEnum
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 
 class Base(DeclarativeBase):
@@ -238,6 +238,37 @@ class Liability(Base):
         return f"<Liability {self.creditor}>"
 
 
+# The severity column is free text, and three detector families historically
+# wrote three different vocabularies into it: "HIGH"/"CRITICAL" (advanced,
+# extended, tier-2), "high"/"medium"/"low" (trade late-filing), and raw ints
+# 4-10 (trade large-trade/frequency). Filtering with `severity == "high"` then
+# silently missed every "HIGH" row. Normalization is enforced on the model so
+# it applies to every write path, including the two analyzers that construct
+# Anomaly() directly instead of going through persist_anomalies().
+SEVERITIES = ("low", "medium", "high")
+
+
+def normalize_severity(severity: object) -> str:
+    """Coerce any detector's severity into the API vocabulary."""
+    if severity is None:
+        return "medium"
+    if isinstance(severity, bool):
+        return "medium"
+    if isinstance(severity, (int, float)):
+        return "high" if severity >= 8 else "medium" if severity >= 5 else "low"
+
+    text = str(severity).strip().lower()
+    if text in SEVERITIES:
+        return text
+    if text == "critical":
+        return "high"
+    # Numeric strings reach here because some detectors stringify their scores.
+    try:
+        return normalize_severity(float(text))
+    except ValueError:
+        return "medium"
+
+
 class Anomaly(Base):
     """Detected anomaly or flag for a member."""
 
@@ -266,6 +297,23 @@ class Anomaly(Base):
 
     # Relationships
     member: Mapped["Member"] = relationship("Member", back_populates="anomalies")
+
+    # Matches the dedupe key persist_anomalies() checks in Python. Declared here
+    # as well as in migration c3a7f1d92b04 so metadata.create_all() (used by the
+    # test suite) builds the same schema alembic does.
+    __table_args__ = (
+        Index(
+            "uq_anomaly_member_type_title",
+            "member_id",
+            "anomaly_type",
+            "title",
+            unique=True,
+        ),
+    )
+
+    @validates("severity")
+    def _validate_severity(self, _key: str, value: object) -> str:
+        return normalize_severity(value)
 
     def __repr__(self) -> str:
         return f"<Anomaly {self.anomaly_type}: {self.title[:30]}...>"

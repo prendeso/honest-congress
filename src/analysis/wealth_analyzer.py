@@ -153,6 +153,10 @@ class WealthAnalyzer:
         Returns:
             Summary of analysis with all detected anomalies
         """
+        from src.config import get_settings
+
+        disabled_types = get_settings().disabled_anomaly_types_set
+
         members = db.query(Member).all()  # Include all members (active + retired)
 
         all_anomalies = []
@@ -179,6 +183,12 @@ class WealthAnalyzer:
 
                     if existing:
                         # Skip duplicate
+                        continue
+
+                    # These two analyzers build Anomaly() directly instead of
+                    # going through persist_anomalies(), so the disabled-type
+                    # gate has to be repeated here.
+                    if anomaly["anomaly_type"] in disabled_types:
                         continue
 
                     # Store anomaly in database

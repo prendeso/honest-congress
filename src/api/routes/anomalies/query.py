@@ -118,12 +118,12 @@ async def get_anomaly_summary(db: Session = Depends(get_db_session)):
     by_type_raw = (
         db.query(Anomaly.anomaly_type, func.count(Anomaly.id)).group_by(Anomaly.anomaly_type).all()
     )
-    by_type = dict(by_type_raw)
+    by_type: dict[str, int] = {row[0]: row[1] for row in by_type_raw}
 
     by_severity_raw = (
         db.query(Anomaly.severity, func.count(Anomaly.id)).group_by(Anomaly.severity).all()
     )
-    by_severity = dict(by_severity_raw)
+    by_severity: dict[str, int] = {row[0]: row[1] for row in by_severity_raw}
 
     by_party_raw = (
         db.query(Member.party, func.count(Anomaly.id)).join(Anomaly).group_by(Member.party).all()

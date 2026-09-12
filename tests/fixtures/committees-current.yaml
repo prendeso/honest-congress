@@ -1,0 +1,57 @@
+- type: house
+  name: House Committee on Financial Services
+  url: https://financialservices.house.gov/
+  minority_url: https://republicans-financialservices.house.gov/
+  thomas_id: HSBA
+  house_committee_id: BA
+  subcommittees:
+  - name: Capital Markets
+    thomas_id: '16'
+    address: 2129 RHOB; Washington, DC 20515
+    phone: (202) 225-7502
+  - name: Housing and Insurance
+    thomas_id: '04'
+    address: 2129 RHOB; Washington, DC 20515
+    phone: (202) 225-7502
+  address: 2129 RHOB; Washington, DC 20515-6050
+  phone: (202) 225-7502
+  jurisdiction: "The House Financial Services Committee has jurisdiction over issues\
+    \ pertaining to the economy, the banking system, housing, insurance, and securities\
+    \ and exchanges. Additionally, the Committee also has jurisdiction over monetary\
+    \ policy, international finance, international monetary organizations, and efforts\
+    \ to combat terrorist financing. The Committee oversees the Nation\u2019s economy\
+    \ through its oversight of the Federal Reserve Board and individual reserve banks,\
+    \ the Treasury, the production and distribution of currency, and the Nation\u2019\
+    s capital markets."
+  jurisdiction_source: https://financialservices.house.gov/about/
+  youtube_id: UCiGw0gRK-daU7Xv4oDMr9Hg
+- type: joint
+  name: Joint Committee on Printing
+  url: https://cha.house.gov/jointcommittees/joint-committee-on-printing
+  thomas_id: JSPR
+  senate_committee_id: JSPR
+  house_committee_id: JP
+  wikipedia: Joint Committee on Printing
+  address: 1309 LHOB; Washington, DC 20515-6446
+  phone: (202) 225-8281
+  subcommittees: []
+- type: senate
+  name: Senate Committee on Agriculture, Nutrition, and Forestry
+  url: http://www.agriculture.senate.gov/
+  thomas_id: SSAF
+  senate_committee_id: SSAF
+  subcommittees:
+  - name: Commodities, Derivatives, Risk Management, and Trade
+    thomas_id: '13'
+    wikipedia: United States Senate Agriculture Subcommittee on Commodities, Markets,
+      Trade and Risk Management
+  - name: Conservation, Forestry, Natural Resources, and Biotechnology
+    thomas_id: '14'
+    wikipedia: United States Senate Agriculture Subcommittee on Conservation, Forestry
+      and Natural Resources
+  rss_url: http://www.ag.senate.gov/rss/feeds/?type=press&amp;groups=democrat
+  minority_rss_url: http://www.ag.senate.gov/rss/feeds/?type=press&amp;groups=republican
+  wikipedia: United States Senate Committee on Agriculture, Nutrition and Forestry
+  jurisdiction: The Senate Committee on Agriculture has legislative jurisdiction over
+    agriculture, food, and nutrition.
+  jurisdiction_source: https://www.agriculture.senate.gov/about/jurisdiction

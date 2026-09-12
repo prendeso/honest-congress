@@ -33,7 +33,7 @@ feeds they replace.
 |---|---|---|---|
 | House trades | House Clerk PTR XML | — already official | done |
 | Member roster | unitedstates.io congress-legislators | — already official | done |
-| Committee assignments | none (detector had an empty table) | congress-legislators `committee-membership-current.yaml` | in progress |
+| Committee assignments | none (detector had an empty table) | congress-legislators `committee-membership-current.yaml` | **done** |
 | Senate trades | QuiverQuant | Senate eFD | not started |
 | Campaign donations | QuiverQuant `/bulk/corporatedonors` | FEC API | not started |
 | Lobbying | QuiverQuant `/live/lobbying` | Senate LDA API | not started |

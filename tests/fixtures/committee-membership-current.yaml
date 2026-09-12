@@ -1,0 +1,213 @@
+SSAF:
+- name: John Boozman
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: B001236
+- name: Mitch McConnell
+  party: majority
+  rank: 2
+  bioguide: M000355
+- name: John Hoeven
+  party: majority
+  rank: 3
+  bioguide: H001061
+SSAF13:
+- name: Cindy Hyde-Smith
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: H001079
+- name: Chuck Grassley
+  party: majority
+  rank: 2
+  bioguide: G000386
+- name: Jerry Moran
+  party: majority
+  rank: 3
+  bioguide: M000934
+SSAF14:
+- name: Roger Marshall
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: M001198
+- name: James C. Justice
+  party: majority
+  rank: 2
+  bioguide: J000312
+- name: John Hoeven
+  party: majority
+  rank: 3
+  bioguide: H001061
+SSAF16:
+- name: Mitch McConnell
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: M000355
+- name: Roger Marshall
+  party: majority
+  rank: 2
+  bioguide: M001198
+- name: John Hoeven
+  party: majority
+  rank: 3
+  bioguide: H001061
+SSAF17:
+- name: John Hoeven
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: H001061
+- name: John Thune
+  party: majority
+  rank: 2
+  bioguide: T000250
+- name: Deb Fischer
+  party: majority
+  rank: 3
+  bioguide: F000463
+SSAF15:
+- name: Joni Ernst
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: E000295
+- name: Tommy Tuberville
+  party: majority
+  rank: 2
+  bioguide: T000278
+- name: Chuck Grassley
+  party: majority
+  rank: 3
+  bioguide: G000386
+JSPR:
+- name: Mitch McConnell
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: M000355
+  chamber: senate
+- name: Bryan Steil
+  party: majority
+  rank: 1
+  title: Vice Chair
+  bioguide: S001213
+  chamber: house
+- name: Deb Fischer
+  party: majority
+  rank: 2
+  bioguide: F000463
+  chamber: senate
+HSBA:
+- name: J. French Hill
+  party: majority
+  rank: 1
+  title: Chair
+  bioguide: H001072
+- name: Maxine Waters
+  party: minority
+  rank: 1
+  title: Ranking Member
+  bioguide: W000187
+- name: Frank D. Lucas
+  party: majority
+  rank: 2
+  bioguide: L000491
+HSBA09:
+- name: Daniel Meuser
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: M001204
+- name: Al Green
+  party: minority
+  rank: 1
+  title: Ranking Member
+  bioguide: G000553
+- name: Tim Moore
+  party: majority
+  rank: 2
+  title: Vice Chairman
+  bioguide: M001236
+HSBA10:
+- name: Warren Davidson
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: D000626
+- name: Joyce Beatty
+  party: minority
+  rank: 1
+  title: Ranking Member
+  bioguide: B001281
+- name: Zachary Nunn
+  party: majority
+  rank: 2
+  title: Vice Chairman
+  bioguide: N000193
+HSBA21:
+- name: Bryan Steil
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: S001213
+- name: Stephen F. Lynch
+  party: minority
+  rank: 1
+  title: Ranking Member
+  bioguide: L000562
+- name: Tom Emmer
+  party: majority
+  rank: 2
+  title: Vice Chairman
+  bioguide: E000294
+HSBA16:
+- name: Ann Wagner
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: W000812
+- name: Brad Sherman
+  party: minority
+  rank: 1
+  title: Ranking Member
+  bioguide: S000344
+- name: Andrew R. Garbarino
+  party: majority
+  rank: 2
+  title: Vice Chairman
+  bioguide: G000597
+HSBA20:
+- name: Andy Barr
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: B001282
+- name: Bill Foster
+  party: minority
+  rank: 1
+  title: Ranking Member
+  bioguide: F000454
+- name: Barry Loudermilk
+  party: majority
+  rank: 2
+  title: Vice Chairman
+  bioguide: L000583
+HSBA04:
+- name: Mike Flood
+  party: majority
+  rank: 1
+  title: Chairman
+  bioguide: F000474
+- name: Emanuel Cleaver
+  party: minority
+  rank: 1
+  title: Ranking Member
+  bioguide: C001061
+- name: Monica De La Cruz
+  party: majority
+  rank: 2
+  title: Vice Chairwoman
+  bioguide: D000594

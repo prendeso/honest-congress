@@ -327,6 +327,56 @@ class Anomaly(Base):
         return f"<Anomaly {self.anomaly_type}: {self.title[:30]}...>"
 
 
+class CommitteeAssignment(Base):
+    """Which committees a member sits on.
+
+    Sourced from unitedstates/congress-legislators, which is public domain and
+    keys its membership file on bioguide IDs -- the same identifier Member
+    already carries.
+
+    This exists because `detect_committee_conflicts` had no committee data at
+    all: its SAMPLE_COMMITTEE_ASSIGNMENTS was an empty dict, so it fell back to
+    substring-matching tickers against sector keywords, where "ba" matched
+    "Alibaba".
+    """
+
+    __tablename__ = "committee_assignments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("members.id"), index=True)
+
+    # thomas_id from the source data, e.g. "HSBA" (House Financial Services).
+    committee_id: Mapped[str] = mapped_column(String(20), index=True)
+    committee_name: Mapped[str] = mapped_column(String(200))
+    chamber: Mapped[Chamber | None] = mapped_column(SQLEnum(Chamber), nullable=True)
+
+    # Subcommittee ids are the parent id plus a numeric suffix; jurisdiction
+    # questions usually want the parent, so keep them distinguishable.
+    is_subcommittee: Mapped[bool] = mapped_column(default=False)
+    parent_committee_id: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+
+    # "Chairman", "Ranking Member", or null for rank-and-file.
+    title: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    party: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    member: Mapped["Member"] = relationship("Member")
+
+    __table_args__ = (
+        Index(
+            "uq_committee_assignment",
+            "member_id",
+            "committee_id",
+            unique=True,
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<CommitteeAssignment {self.committee_id} member={self.member_id}>"
+
+
 # ---------------------------------------------------------------------------
 # QuiverQuant Tier-2 datasets — driving "donor conflict", "lobbying overlap",
 # and "contract front-run" detectors. Each row is a TRIGGER EVENT we cross-

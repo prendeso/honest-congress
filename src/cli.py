@@ -395,6 +395,27 @@ def cmd_parse_fd(args):
     print("FD parsing complete.")
 
 
+def cmd_sync_committees(args):
+    """Fetch current committee assignments from congress-legislators."""
+    from src.ingestion.committees import ingest_committee_assignments
+
+    print("Syncing committee assignments...")
+
+    with get_db() as db:
+        result = ingest_committee_assignments(db)
+
+    print("\nCommittee sync complete:")
+    print(f"  Committees indexed: {result['committees_indexed']}")
+    print(f"  Assignments stored: {result['assignments']}")
+    if result["skipped_unknown_member"]:
+        print(
+            f"  Skipped (member not in database): {result['skipped_unknown_member']}"
+            "  - run `ingest` first to populate the roster"
+        )
+    if result["skipped_unknown_committee"]:
+        print(f"  Skipped (committee not in metadata): {result['skipped_unknown_committee']}")
+
+
 def cmd_stats(args):
     """Show detector output in context: how many tests, how many findings."""
     import json
@@ -625,6 +646,13 @@ def main():
         "--income-only", action="store_true", help="Parse income sources only"
     )
     parse_fd_parser.set_defaults(func=cmd_parse_fd)
+
+    # Committee sync
+    committees_parser = subparsers.add_parser(
+        "sync-committees",
+        help="Fetch committee assignments from congress-legislators (free, no key)",
+    )
+    committees_parser.set_defaults(func=cmd_sync_committees)
 
     # Stats command
     stats_parser = subparsers.add_parser(

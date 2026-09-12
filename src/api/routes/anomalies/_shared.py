@@ -40,6 +40,9 @@ class AnomalyResponse(BaseModel):
     disclosure_id: int | None
     transaction_id: int | None
     filing_year: int | None
+    # Where this finding sits among others of its own type, 0-100.
+    # Null when the population was too small to rank against.
+    percentile_rank: float | None = None
 
     model_config = ConfigDict(from_attributes=True)
 

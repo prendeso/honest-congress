@@ -134,7 +134,8 @@ GET  /health/live                  liveness probe
 GET  /api/members                  paginated list with filters and sort
 GET  /api/members/{id}             member detail + recent disclosures
 GET  /api/disclosures              paginated list with filters
-GET  /api/anomalies/               paginated anomalies (severity-ordered)
+GET  /api/anomalies/               paginated anomalies (severity-ordered);
+                                   ?min_percentile=N for the strongest findings
 GET  /api/anomalies/summary        counts by type / severity / party / chamber
 GET  /api/anomalies/{id}           detail
 POST /api/anomalies/admin/login    issue token; required for mutating routes

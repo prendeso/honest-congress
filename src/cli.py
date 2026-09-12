@@ -7,6 +7,7 @@ import sys
 from datetime import datetime
 
 from src.analysis import analyze_wealth
+from src.analysis.baselines import annotate_percentile_ranks, detection_summary
 from src.db import get_db
 from src.db.utils import recalculate_member_counts
 from src.ingestion import run_ingestion
@@ -150,10 +151,24 @@ def cmd_analyze(args):
         total_anomalies += advanced.get("total", 0) + extended.get("total", 0)
 
     # Member.anomaly_count is denormalized; refresh it now that anomalies moved.
+    # Percentile ranks compare each finding against others of its own type and
+    # must be recomputed whenever the population changes.
     with get_db() as db:
         recalculate_member_counts(db)
+        ranks = annotate_percentile_ranks(db)
+        summary = detection_summary(db)
 
     print(f"\nTotal anomalies detected: {total_anomalies}")
+    print(f"Percentile ranks assigned: {ranks['ranked']}")
+    if ranks["skipped_small_population"]:
+        print(
+            f"  ({ranks['skipped_small_population']} left unranked - "
+            f"too few findings of their type to rank against)"
+        )
+    print(
+        f"\nContext: ~{summary['approximate_tests_run']} detector-member tests produced "
+        f"{summary['total_findings']} findings across {summary['members']} members."
+    )
 
 
 def cmd_performance(args):
@@ -380,6 +395,16 @@ def cmd_parse_fd(args):
     print("FD parsing complete.")
 
 
+def cmd_stats(args):
+    """Show detector output in context: how many tests, how many findings."""
+    import json
+
+    with get_db() as db:
+        summary = detection_summary(db)
+
+    print(json.dumps(summary, indent=2))
+
+
 def cmd_recount(args):
     """Recalculate the materialized count columns on members."""
     print("Recalculating member counts...")
@@ -600,6 +625,12 @@ def main():
         "--income-only", action="store_true", help="Parse income sources only"
     )
     parse_fd_parser.set_defaults(func=cmd_parse_fd)
+
+    # Stats command
+    stats_parser = subparsers.add_parser(
+        "stats", help="Report detector findings with the test count behind them"
+    )
+    stats_parser.set_defaults(func=cmd_stats)
 
     # Recount command
     recount_parser = subparsers.add_parser(

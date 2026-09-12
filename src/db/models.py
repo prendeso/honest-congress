@@ -5,6 +5,7 @@ from typing import List
 
 from sqlalchemy import (
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -290,6 +291,13 @@ class Anomaly(Base):
     # Computed values
     computed_value: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
     threshold_value: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
+
+    # Where this finding sits among others of the same type, 0-100. Thresholds
+    # in this codebase are asserted rather than calibrated, so "top 2% of
+    # findings of this type" is a far more defensible statement than "exceeded
+    # threshold 100". Null when the population is too small to rank against.
+    # Maintained by src.analysis.baselines.annotate_percentile_ranks.
+    percentile_rank: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # Metadata
     detected_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

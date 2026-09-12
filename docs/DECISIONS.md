@@ -125,7 +125,23 @@ members". Related: 16 detectors across ~550 members is roughly 8,800 tests, with
 no multiple-comparisons control — so some members are flagged spuriously by
 construction.
 
-**Status:** accepted, not yet implemented.
+**Status:** partially implemented.
+
+`src/analysis/baselines.py` ranks every finding against others of **its own
+type** — never across types, since dollars and days share no scale — and stores
+the result on `Anomaly.percentile_rank`. `GET /api/anomalies/?min_percentile=95`
+asks for the strongest findings in a way the raw thresholds cannot support.
+Populations under 10 findings are left unranked rather than given a number that
+would make the largest of three "the 100th percentile".
+
+`detection_summary()` (also `python -m src.cli stats`) reports findings
+alongside the number of detector-member tests that produced them, so a long list
+is not mistaken for a long list of wrongdoing.
+
+**Still outstanding:** the detectors continue to *fire* on their asserted
+thresholds; percentile rank is currently an annotation on the output, not the
+trigger. Formal FDR control needs per-detector p-values, which none of them
+currently produce.
 
 ---
 

@@ -365,3 +365,66 @@ class TestAnomalyOrdering:
         first_ids = {a["id"] for a in first["anomalies"]}
         second_ids = {a["id"] for a in second["anomalies"]}
         assert not (first_ids & second_ids), "pages must not overlap"
+
+
+class TestPercentileFilter:
+    """`min_percentile` is the defensible way to ask for the strongest findings.
+
+    Detector thresholds are asserted rather than calibrated, so filtering on
+    "top N% within this anomaly type" says something the raw threshold cannot.
+    """
+
+    @pytest.fixture
+    def ranked_db(self):
+        from src.analysis.baselines import annotate_percentile_ranks
+
+        db = SessionLocal()
+        for table in (Anomaly, Transaction, Asset, Disclosure, Member):
+            db.query(table).delete()
+        db.commit()
+
+        member = Member(
+            bioguide_id="P000002",
+            first_name="Pct",
+            last_name="Filter",
+            chamber=Chamber.HOUSE,
+            party=Party.DEMOCRAT,
+            state="OR",
+            in_office=True,
+        )
+        db.add(member)
+        db.commit()
+        db.refresh(member)
+
+        for value in range(1, 21):
+            db.add(
+                Anomaly(
+                    member_id=member.id,
+                    anomaly_type="large_trade",
+                    severity="medium",
+                    title=f"finding {value}",
+                    description="percentile fixture",
+                    computed_value=Decimal(str(value)),
+                )
+            )
+        db.commit()
+        annotate_percentile_ranks(db)
+        yield db
+        db.close()
+
+    def test_percentile_rank_is_returned(self, client, ranked_db):
+        body = client.get("/api/anomalies/?page_size=100").json()
+        assert all(a["percentile_rank"] is not None for a in body["anomalies"])
+
+    def test_min_percentile_narrows_the_result(self, client, ranked_db):
+        everything = client.get("/api/anomalies/").json()["total"]
+        top_decile = client.get("/api/anomalies/?min_percentile=90").json()
+
+        # Ranks over values 1..20 are v/20*100, so >=90 selects v in {18,19,20}.
+        assert everything == 20
+        assert top_decile["total"] == 3
+        assert all(a["percentile_rank"] >= 90 for a in top_decile["anomalies"])
+
+    def test_out_of_range_percentile_is_rejected(self, client, ranked_db):
+        assert client.get("/api/anomalies/?min_percentile=101").status_code == 422
+        assert client.get("/api/anomalies/?min_percentile=-1").status_code == 422

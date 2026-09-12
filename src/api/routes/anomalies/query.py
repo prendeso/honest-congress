@@ -30,6 +30,16 @@ async def list_anomalies(
     anomaly_type: str | None = Query(None, description="Filter by anomaly type"),
     severity: str | None = Query(None, description="Filter by severity: low, medium, high"),
     reviewed: bool | None = Query(None, description="Filter by reviewed status"),
+    min_percentile: float | None = Query(
+        None,
+        ge=0,
+        le=100,
+        description=(
+            "Only findings at or above this percentile within their own anomaly type. "
+            "Thresholds are asserted rather than calibrated, so this is the more "
+            "defensible way to ask for the strongest findings."
+        ),
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db_session),
@@ -53,6 +63,8 @@ async def list_anomalies(
         query = query.filter(func.lower(Anomaly.severity) == severity.lower())
     if reviewed is not None:
         query = query.filter(Anomaly.reviewed == reviewed)
+    if min_percentile is not None:
+        query = query.filter(Anomaly.percentile_rank >= min_percentile)
 
     total = query.count()
 
@@ -91,6 +103,7 @@ async def list_anomalies(
                 disclosure_id=a.disclosure_id,
                 transaction_id=a.transaction_id,
                 filing_year=filing_year,
+                percentile_rank=a.percentile_rank,
             )
             for a, filing_year in rows
         ],
@@ -169,6 +182,7 @@ async def get_anomaly(
             if anomaly.disclosure_id
             else None
         ),
+        percentile_rank=anomaly.percentile_rank,
     )
 
 

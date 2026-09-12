@@ -22,7 +22,10 @@ def _mock_response(content: bytes, status_code: int = 200) -> MagicMock:
     return response
 
 
-# Synthetic XML matching the House Clerk index format.
+# Mirrors the real House Clerk index, verified against the live 2024 file: a
+# single {year}FD.xml carrying every filing type, with Periodic Transaction
+# Reports marked FilingType "P". There is no separate {year}PTR.xml -- that URL
+# 404s, which is what used to make PTR ingestion silently yield nothing.
 _FD_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <FinancialDisclosure>
   <Member>
@@ -45,19 +48,25 @@ _FD_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
     <FilingDate>05/15/2024</FilingDate>
     <DocID>20012346</DocID>
   </Member>
-</FinancialDisclosure>
-"""
-
-
-_PTR_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
-<FinancialDisclosure>
   <Member>
+    <Prefix></Prefix>
     <First>Charlie</First>
     <Last>Trader</Last>
-    <FilingType></FilingType>
+    <Suffix></Suffix>
+    <FilingType>P</FilingType>
     <StateDst>TX02</StateDst>
     <FilingDate>03/22/2024</FilingDate>
     <DocID>20019999</DocID>
+  </Member>
+  <Member>
+    <Prefix></Prefix>
+    <First>Dana</First>
+    <Last>Annual</Last>
+    <Suffix></Suffix>
+    <FilingType>O</FilingType>
+    <StateDst>OH07</StateDst>
+    <FilingDate>05/15/2024</FilingDate>
+    <DocID>20012347</DocID>
   </Member>
 </FinancialDisclosure>
 """
@@ -69,32 +78,37 @@ def ingester():
 
 
 class TestParseXmlIndex:
-    def test_parses_two_members(self, ingester):
+    def test_skips_ptr_filings(self, ingester):
+        """PTRs belong to the PTR path, which builds the ptr-pdfs URL.
+
+        When both paths claimed the same document_id, whichever inserted first
+        won -- storing PTRs as annual filings pointing at a financial-pdfs URL
+        that 404s for them.
+        """
         results = ingester._parse_xml_index(_FD_XML, year=2024)
-        assert len(results) == 2
+
+        assert len(results) == 2, "the two FilingType P records must be excluded"
+        assert {r["last_name"] for r in results} == {"Test", "Annual"}
 
     def test_state_and_district_split(self, ingester):
-        results = ingester._parse_xml_index(_FD_XML, year=2024)
-        alice = results[0]
-        assert alice["state"] == "CA"
-        assert alice["district"] == "12"
-        assert alice["chamber"] == "house"
+        bob = ingester._parse_xml_index(_FD_XML, year=2024)[0]
+        assert bob["state"] == "NY"
+        assert bob["district"] == "03"
+        assert bob["chamber"] == "house"
         # FD records don't carry an is_ptr key (only PTR parsing sets it).
-        assert "is_ptr" not in alice
+        assert "is_ptr" not in bob
 
     def test_full_name_builds_from_parts(self, ingester):
         results = ingester._parse_xml_index(_FD_XML, year=2024)
-        assert results[0]["full_name"] == "Hon. Alice Example"
-        assert results[1]["full_name"] == "Bob Test Jr."
+        assert results[0]["full_name"] == "Bob Test Jr."
 
     def test_filing_date_parsed(self, ingester):
-        results = ingester._parse_xml_index(_FD_XML, year=2024)
-        d = results[0]["filing_date"]
+        d = ingester._parse_xml_index(_FD_XML, year=2024)[0]["filing_date"]
         assert d.year == 2024 and d.month == 5 and d.day == 15
 
     def test_pdf_url_built_from_year_and_docid(self, ingester):
         results = ingester._parse_xml_index(_FD_XML, year=2024)
-        assert results[0]["document_url"].endswith("/2024/20012345.pdf")
+        assert results[0]["document_url"].endswith("/2024/20012346.pdf")
         assert "financial-pdfs" in results[0]["document_url"]
 
     def test_invalid_xml_returns_empty(self, ingester):
@@ -102,16 +116,27 @@ class TestParseXmlIndex:
 
 
 class TestParsePtrXmlIndex:
-    def test_marks_as_ptr(self, ingester):
-        results = ingester._parse_ptr_xml_index(_PTR_XML, year=2024)
-        assert len(results) == 1
-        assert results[0]["is_ptr"] is True
-        assert results[0]["filing_type"] == "PTR"
+    def test_selects_only_ptr_filings(self, ingester):
+        results = ingester._parse_ptr_xml_index(_FD_XML, year=2024)
+
+        assert len(results) == 2
+        assert {r["last_name"] for r in results} == {"Example", "Trader"}
+        assert all(r["is_ptr"] is True for r in results)
+        assert all(r["filing_type"] == "PTR" for r in results)
 
     def test_pdf_url_uses_ptr_path(self, ingester):
-        results = ingester._parse_ptr_xml_index(_PTR_XML, year=2024)
-        assert "ptr-pdfs" in results[0]["document_url"]
-        assert results[0]["document_url"].endswith("/2024/20019999.pdf")
+        results = ingester._parse_ptr_xml_index(_FD_XML, year=2024)
+        urls = {r["document_url"] for r in results}
+
+        assert all("ptr-pdfs" in u for u in urls)
+        assert any(u.endswith("/2024/20019999.pdf") for u in urls)
+
+    def test_the_two_paths_do_not_overlap(self, ingester):
+        annual = {r["document_id"] for r in ingester._parse_xml_index(_FD_XML, year=2024)}
+        ptr = {r["document_id"] for r in ingester._parse_ptr_xml_index(_FD_XML, year=2024)}
+
+        assert not (annual & ptr)
+        assert len(annual | ptr) == 4, "every filing in the index is claimed exactly once"
 
 
 class TestFetchAnnualXmlIndex:
@@ -131,14 +156,23 @@ class TestFetchAnnualXmlIndex:
         with patch.object(ingester.session, "get", return_value=_mock_response(_FD_XML)):
             results = ingester.fetch_annual_xml_index(2024)
         assert len(results) == 2
-        assert results[0]["last_name"] == "Example"
+        assert results[0]["last_name"] == "Test"
 
 
 class TestFetchPtrXmlIndex:
-    def test_calls_correct_url(self, ingester):
+    def test_reads_the_index_that_exists(self, ingester):
+        """Must fetch {year}FD.xml, not {year}PTR.xml.
+
+        The PTR-specific URL returns 404. fetch_ptr_xml_index caught the error
+        and returned [], so PTR ingestion reported zero rather than failing --
+        and PTRs are the only source of trades.
+        """
         with patch.object(
-            ingester.session, "get", return_value=_mock_response(_PTR_XML)
+            ingester.session, "get", return_value=_mock_response(_FD_XML)
         ) as mock_get:
-            ingester.fetch_ptr_xml_index(2024)
+            results = ingester.fetch_ptr_xml_index(2024)
+
         url = mock_get.call_args.args[0]
-        assert "/2024PTR.xml" in url
+        assert "/2024FD.xml" in url
+        assert "PTR.xml" not in url
+        assert len(results) == 2

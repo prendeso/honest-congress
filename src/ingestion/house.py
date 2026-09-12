@@ -18,6 +18,9 @@ HOUSE_SEARCH_URL = f"{HOUSE_CLERK_BASE_URL}/FinancialDisclosure/Search"
 HOUSE_DOWNLOAD_URL = f"{HOUSE_CLERK_BASE_URL}/public_disc/financial-pdfs"
 HOUSE_PTR_DOWNLOAD_URL = f"{HOUSE_CLERK_BASE_URL}/public_disc/ptr-pdfs"
 
+# FilingType code for a Periodic Transaction Report in the House Clerk index.
+PTR_FILING_TYPE = "P"
+
 
 class HouseIngester(BaseIngester):
     """Ingester for House of Representatives financial disclosures."""
@@ -118,7 +121,14 @@ class HouseIngester(BaseIngester):
         Returns:
             List of PTR records from XML
         """
-        xml_url = f"{HOUSE_CLERK_BASE_URL}/public_disc/ptr-pdfs/{year}PTR.xml"
+        # There is no separate PTR index. `{year}PTR.xml` does not exist and
+        # returns 404, which this method used to swallow and report as zero
+        # PTRs -- so trade ingestion silently produced nothing. Periodic
+        # Transaction Reports live in the same `{year}FD.xml` index as every
+        # other filing, distinguished by FilingType "P". Their PDFs are still
+        # served from ptr-pdfs/{year}/{doc_id}.pdf, which is why the download
+        # URL below differs from the annual filings'.
+        xml_url = f"{HOUSE_CLERK_BASE_URL}/public_disc/financial-pdfs/{year}FD.xml"
 
         try:
             response = self.session.get(xml_url, timeout=60)
@@ -146,6 +156,13 @@ class HouseIngester(BaseIngester):
                 suffix = member.findtext("Suffix", "").strip()
 
                 filing_type = member.findtext("FilingType", "").strip()
+
+                # The index carries every filing type; "P" is the Periodic
+                # Transaction Report. Everything else -- annual filings,
+                # extensions, candidate reports -- belongs to fetch_xml_index
+                # and must not be pulled in here as a trade report.
+                if filing_type.upper() != PTR_FILING_TYPE:
+                    continue
                 state_dst = member.findtext("StateDst", "").strip()
                 filing_date = member.findtext("FilingDate", "").strip()
                 doc_id = member.findtext("DocID", "").strip()
@@ -174,7 +191,7 @@ class HouseIngester(BaseIngester):
                         "full_name": full_name,
                         "state": state,
                         "district": district,
-                        "filing_type": "PTR" if not filing_type else f"PTR-{filing_type}",
+                        "filing_type": "PTR",
                         "filing_date": parsed_date,
                         "filing_year": year,
                         "document_id": doc_id,
@@ -203,6 +220,15 @@ class HouseIngester(BaseIngester):
                 suffix = member.findtext("Suffix", "").strip()
 
                 filing_type = member.findtext("FilingType", "").strip()
+
+                # Periodic Transaction Reports share this index but are handled
+                # by fetch_ptr_xml_index, which flags them is_ptr and builds the
+                # ptr-pdfs URL their documents actually live at. Without this
+                # skip both paths claim the same document_id, and whichever
+                # inserts first wins -- storing PTRs as annual filings pointing
+                # at a financial-pdfs URL that 404s.
+                if filing_type.upper() == PTR_FILING_TYPE:
+                    continue
                 state_dst = member.findtext("StateDst", "").strip()
                 filing_date = member.findtext("FilingDate", "").strip()
                 doc_id = member.findtext("DocID", "").strip()

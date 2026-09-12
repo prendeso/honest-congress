@@ -1,0 +1,312 @@
+{
+ "document_id": "20025777",
+ "source_url": "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2024/20025777.pdf",
+ "tables": [
+  [
+   [
+    "ID",
+    "Owner",
+    "Asset",
+    "Transaction\nType",
+    "Date",
+    "Notification\nDate",
+    "Amount",
+    "Cap.\nGains >\n$200?"
+   ],
+   [
+    "Alphabet Inc. - Class C Capital Stock P 09/03/2024 09/04/2024 $1,001 - $15,000\n(GOOG) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "",
+    "",
+    "Amazon.com, Inc. - Common Stock\n(AMZN) [ST]",
+    "P",
+    "09/03/2024",
+    "09/04/2024",
+    "$1,001 - $15,000",
+    ""
+   ],
+   [
+    "",
+    "",
+    "F\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "Apple Inc. - Common Stock (AAPL) P 09/03/2024 09/04/2024 $1,001 - $15,000\n[ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "",
+    "",
+    "Charles Schwab Corporation (SCHW)\n[ST]",
+    "P",
+    "09/03/2024",
+    "09/04/2024",
+    "$1,001 - $15,000",
+    ""
+   ],
+   [
+    "",
+    "",
+    "F\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "Corning Incorporated Common Stock P 09/03/2024 09/04/2024 $1,001 - $15,000\n(GLW) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "",
+    "",
+    "CrowdStrike Holdings, Inc. - Class A\nCommon Stock (CRWD) [ST]",
+    "P",
+    "09/03/2024",
+    "09/04/2024",
+    "$1,001 - $15,000",
+    ""
+   ],
+   [
+    "",
+    "",
+    "F\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "Digital Realty Trust, Inc. Common P 09/03/2024 09/04/2024 $1,001 - $15,000\nStock (DLR) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "",
+    "",
+    "GSK plc American Depositary Shares",
+    "P",
+    "09/03/2024",
+    "09/04/2024",
+    "$1,001 - $15,000",
+    ""
+   ]
+  ],
+  [
+   [
+    "ID",
+    "Owner",
+    "Asset",
+    "Transaction\nType",
+    "Date",
+    "Notification\nDate",
+    "Amount",
+    "Cap.\nGains >"
+   ],
+   [
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "$200?"
+   ],
+   [
+    "",
+    "",
+    "(GSK) [ST]",
+    "",
+    "",
+    "",
+    "",
+    ""
+   ],
+   [
+    "",
+    "",
+    "F\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "lululemon athletica inc. - Common P 09/03/2024 09/04/2024 $1,001 - $15,000\nStock (LULU) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "",
+    "",
+    "NVIDIA Corporation - Common Stock\n(NVDA) [ST]",
+    "P",
+    "09/03/2024",
+    "09/04/2024",
+    "$1,001 - $15,000",
+    ""
+   ],
+   [
+    "",
+    "",
+    "F\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "Palo Alto Networks, Inc. (PANW) P 09/03/2024 09/04/2024 $1,001 - $15,000\n[ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "",
+    "",
+    "QUALCOMM Incorporated -\nCommon Stock (QCOM) [ST]",
+    "P",
+    "09/03/2024",
+    "09/04/2024",
+    "$1,001 - $15,000",
+    ""
+   ],
+   [
+    "",
+    "",
+    "F\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "Tesla, Inc. - Common Stock (TSLA) P 09/03/2024 09/04/2024 $1,001 - $15,000\n[ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null,
+    null,
+    null
+   ],
+   [
+    "",
+    "",
+    "United Parcel Service, Inc. Common\nStock (UPS) [ST]",
+    "P",
+    "09/03/2024",
+    "09/04/2024",
+    "$1,001 - $15,000",
+    ""
+   ],
+   [
+    "",
+    "",
+    "F\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New",
+    null,
+    null,
+    null,
+    null,
+    null
+   ]
+  ]
+ ],
+ "text": "Filing ID #20025777\nP\u0000\u0000\u0000\u0000\u0000\u0000\u0000 T\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 R\u0000\u0000\u0000\u0000\u0000\nClerk of the House of Representatives \u2022 Legislative Resource Center \u2022 B81 Cannon Building \u2022 Washington, DC 20515\nF\u0000\u0000\u0000\u0000 I\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nName: Hon. Marjorie Taylor Mrs Greene\nStatus: Member\nState/District: GA14\nT\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nID Owner Asset Transaction Date Notification Amount Cap.\nType Date Gains >\n$200?\nAlphabet Inc. - Class C Capital Stock P 09/03/2024 09/04/2024 $1,001 - $15,000\n(GOOG) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nAmazon.com, Inc. - Common Stock P 09/03/2024 09/04/2024 $1,001 - $15,000\n(AMZN) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nApple Inc. - Common Stock (AAPL) P 09/03/2024 09/04/2024 $1,001 - $15,000\n[ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nCharles Schwab Corporation (SCHW) P 09/03/2024 09/04/2024 $1,001 - $15,000\n[ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nCorning Incorporated Common Stock P 09/03/2024 09/04/2024 $1,001 - $15,000\n(GLW) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nCrowdStrike Holdings, Inc. - Class A P 09/03/2024 09/04/2024 $1,001 - $15,000\nCommon Stock (CRWD) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nDigital Realty Trust, Inc. Common P 09/03/2024 09/04/2024 $1,001 - $15,000\nStock (DLR) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nGSK plc American Depositary Shares P 09/03/2024 09/04/2024 $1,001 - $15,000\nID Owner Asset Transaction Date Notification Amount Cap.\nType Date Gains >\n$200?\n(GSK) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nlululemon athletica inc. - Common P 09/03/2024 09/04/2024 $1,001 - $15,000\nStock (LULU) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nNVIDIA Corporation - Common Stock P 09/03/2024 09/04/2024 $1,001 - $15,000\n(NVDA) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nPalo Alto Networks, Inc. (PANW) P 09/03/2024 09/04/2024 $1,001 - $15,000\n[ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nQUALCOMM Incorporated - P 09/03/2024 09/04/2024 $1,001 - $15,000\nCommon Stock (QCOM) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nTesla, Inc. - Common Stock (TSLA) P 09/03/2024 09/04/2024 $1,001 - $15,000\n[ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nUnited Parcel Service, Inc. Common P 09/03/2024 09/04/2024 $1,001 - $15,000\nStock (UPS) [ST]\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\n* For the complete list of asset type abbreviations, please visit https://fd.house.gov/reference/asset-type-codes.aspx.\nI\u0000\u0000\u0000\u0000\u0000\u0000 P\u0000\u0000\u0000\u0000\u0000 O\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nYes No\nC\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 \u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nI CERTIFY that the statements I have made on the attached Periodic Transaction Report are true, complete, and correct to the best of\nmy knowledge and belief. Further, I CERTIFY that I have disclosed all transactions as required by the STOCK Act.\nDigitally Signed: Hon. Marjorie Taylor Mrs Greene , 09/04/2024",
+ "expected_transactions": [
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "Amazon.com, Inc. - Common Stock\n(AMZN) [ST]",
+   "type": "P",
+   "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "Charles Schwab Corporation (SCHW)\n[ST]",
+   "type": "P",
+   "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "CrowdStrike Holdings, Inc. - Class A\nCommon Stock (CRWD) [ST]",
+   "type": "P",
+   "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "GSK plc American Depositary Shares",
+   "type": "P",
+   "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "NVIDIA Corporation - Common Stock\n(NVDA) [ST]",
+   "type": "P",
+   "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "QUALCOMM Incorporated -\nCommon Stock (QCOM) [ST]",
+   "type": "P",
+   "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "United Parcel Service, Inc. Common\nStock (UPS) [ST]",
+   "type": "P",
+   "amount": "$1,001 - $15,000"
+  }
+ ]
+}

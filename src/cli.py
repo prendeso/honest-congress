@@ -61,35 +61,6 @@ def cmd_ingest(args):
     print(f"  Senate disclosures: {summary['senate_disclosures']}")
 
 
-def cmd_ingest_trades(args):
-    """Ingest congressional trades from QuiverQuant.
-
-    Skips cleanly when no API key is configured rather than raising, so the
-    scheduled workflow can call this unconditionally -- and so it becomes a
-    no-op the moment the key is removed.
-    """
-    from src.config import get_settings
-    from src.ingestion.quiverquant import ingest_quiverquant_trades
-
-    if not get_settings().quiverquant_api_key:
-        print("QUIVERQUANT_API_KEY is not set; skipping trade ingestion.")
-        return
-
-    print("Importing congressional trades from QuiverQuant...")
-
-    with get_db() as db:
-        result = ingest_quiverquant_trades(db, chamber=args.chamber)
-
-    with get_db() as db:
-        recalculate_member_counts(db)
-
-    print("\nTrade Ingestion Complete:")
-    print(f"  Imported: {result['imported']}")
-    print(f"  Duplicates: {result['duplicates']}")
-    print(f"  Errors: {result['errors']}")
-    print(f"  Total processed: {result['imported'] + result['duplicates'] + result['errors']}")
-
-
 def cmd_analyze(args):
     """Run anomaly analysis."""
     from src.analysis import (
@@ -349,8 +320,6 @@ def cmd_fix_urls(args):
     BASE_URL = "https://disclosures-clerk.house.gov/public_disc"
 
     def get_correct_url(d):
-        if d.document_id.startswith("QANT_"):
-            return d.document_url or ""
         if d.is_ptr:
             return f"{BASE_URL}/ptr-pdfs/{d.filing_year}/{d.document_id}.pdf"
         return f"{BASE_URL}/financial-pdfs/{d.filing_year}/{d.document_id}.pdf"
@@ -358,7 +327,7 @@ def cmd_fix_urls(args):
     print("Checking disclosure URLs...")
 
     with get_db() as db:
-        disclosures = db.query(Disclosure).filter(~Disclosure.document_id.like("QANT_%")).all()
+        disclosures = db.query(Disclosure).all()
 
         issues = []
         for d in disclosures:
@@ -475,6 +444,103 @@ def cmd_stats(args):
     print(json.dumps(summary, indent=2))
 
 
+def _alembic_config():
+    """Alembic config pointed at this repo's alembic.ini."""
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    return Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+
+
+def cmd_reset(args):
+    """Delete all data and rebuild the schema from scratch.
+
+    Irreversible. Dry run by default -- it reports what exists and exits
+    without touching anything unless --yes is given, and refuses outright in
+    production unless --force-production is also given.
+
+    The schema is dropped and rebuilt (`alembic downgrade base` then `upgrade
+    head`) rather than the tables merely emptied, so nothing survives: no rows,
+    no sequence state, and no drift from schema changes made outside Alembic.
+    """
+    import shutil
+    from pathlib import Path
+
+    from sqlalchemy import func
+
+    from alembic import command
+    from src.config import get_settings
+    from src.db.models import Base
+
+    settings = get_settings()
+
+    # Report before destroying. Ordered as the tables will be dropped, so the
+    # output reads in the same order as the work.
+    tables = list(reversed(Base.metadata.sorted_tables))
+    model_by_table = {
+        m.__tablename__: m
+        for m in Base.registry._class_registry.values()
+        if hasattr(m, "__tablename__")
+    }
+
+    print(f"Target database: {settings.database_url_display}")
+    print(f"Environment:     {settings.env}\n")
+
+    total = 0
+    with get_db() as db:
+        print(f"{'Table':<26} {'Rows':>10}")
+        print("-" * 38)
+        for table in tables:
+            model = model_by_table.get(table.name)
+            if model is None:
+                continue
+            try:
+                count = db.query(func.count()).select_from(table).scalar() or 0
+            except Exception as exc:  # table may not exist yet
+                print(f"{table.name:<26} {'(missing)':>10}  {exc.__class__.__name__}")
+                continue
+            total += count
+            print(f"{table.name:<26} {count:>10,}")
+        print("-" * 38)
+        print(f"{'TOTAL':<26} {total:>10,}\n")
+
+    disclosures_dir = Path(__file__).resolve().parent.parent / "data" / "disclosures"
+    pdf_count = len(list(disclosures_dir.rglob("*.pdf"))) if disclosures_dir.exists() else 0
+    if pdf_count:
+        fate = "DELETED" if args.purge_pdfs else "kept (pass --purge-pdfs to remove)"
+        print(f"Local PDFs: {pdf_count:,} files in {disclosures_dir} -- {fate}\n")
+
+    if not args.yes:
+        print("Dry run. Nothing has been changed.")
+        print("Re-run with --yes to delete all of the above and rebuild the schema.")
+        return
+
+    if settings.is_production and not args.force_production:
+        print("REFUSING: ENV=production.")
+        print("This would destroy the live database. Pass --force-production if that is")
+        print("genuinely what you want.")
+        sys.exit(1)
+
+    print("Dropping schema (alembic downgrade base)...")
+    command.downgrade(_alembic_config(), "base")
+
+    print("Rebuilding schema (alembic upgrade head)...")
+    command.upgrade(_alembic_config(), "head")
+
+    if args.purge_pdfs and disclosures_dir.exists():
+        shutil.rmtree(disclosures_dir)
+        print(f"Deleted {pdf_count:,} local PDFs.")
+
+    print("\nReset complete. The database is empty and at the latest revision.")
+    print("\nRe-ingest with:")
+    print("  python -m src.cli ingest -y 2024 2025")
+    print("  python -m src.cli download-pdfs")
+    print("  python -m src.cli parse")
+    print("  python -m src.cli sync-committees")
+    print("  python -m src.cli analyze")
+
+
 def cmd_recount(args):
     """Recalculate the materialized count columns on members."""
     print("Recalculating member counts...")
@@ -579,19 +645,6 @@ def main():
         "--no-ptr", action="store_true", help="Skip Periodic Transaction Reports (stock trades)"
     )
     ingest_parser.set_defaults(func=cmd_ingest)
-
-    # Ingest trades command
-    ingest_trades_parser = subparsers.add_parser(
-        "ingest-trades", help="Import trades from QuiverQuant"
-    )
-    ingest_trades_parser.add_argument(
-        "-c",
-        "--chamber",
-        choices=["house", "senate", "both"],
-        default="both",
-        help="Which chamber to import (default: both)",
-    )
-    ingest_trades_parser.set_defaults(func=cmd_ingest_trades)
 
     # Analyze command
     analyze_parser = subparsers.add_parser("analyze", help="Run anomaly analysis")
@@ -723,6 +776,28 @@ def main():
         "stats", help="Report detector findings with the test count behind them"
     )
     stats_parser.set_defaults(func=cmd_stats)
+
+    # Reset command
+    reset_parser = subparsers.add_parser(
+        "reset",
+        help="Delete ALL data and rebuild the schema (irreversible; dry run by default)",
+    )
+    reset_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Actually perform the reset. Without this the command only reports.",
+    )
+    reset_parser.add_argument(
+        "--force-production",
+        action="store_true",
+        help="Required in addition to --yes when ENV=production",
+    )
+    reset_parser.add_argument(
+        "--purge-pdfs",
+        action="store_true",
+        help="Also delete downloaded PDFs in data/disclosures/ (kept by default)",
+    )
+    reset_parser.set_defaults(func=cmd_reset)
 
     # Recount command
     recount_parser = subparsers.add_parser(

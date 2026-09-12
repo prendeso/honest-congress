@@ -28,7 +28,6 @@ class Settings(BaseSettings):
     congress_gov_api_key: str = Field(default="", alias="CONGRESS_GOV_API_KEY")
 
     # QuiverQuant API key (for congressional trading data)
-    quiverquant_api_key: str = Field(default="", alias="QUIVERQUANT_API_KEY")
 
     wealth_growth_threshold_percent: float = Field(
         default=200.0, alias="WEALTH_GROWTH_THRESHOLD_PERCENT"
@@ -62,6 +61,28 @@ class Settings(BaseSettings):
         if not raw:
             return set()
         return {t.strip() for t in raw.split(",") if t.strip()}
+
+    @property
+    def database_url_display(self) -> str:
+        """The database URL with any password redacted.
+
+        `reset` prints its target before destroying it, and DATABASE_URL
+        carries credentials -- so this must never reach a terminal or a CI log
+        intact.
+        """
+        raw = self.database_url or ""
+        if "://" not in raw:
+            return raw
+
+        scheme, _, rest = raw.partition("://")
+        if "@" not in rest:
+            return raw
+
+        credentials, _, host = rest.rpartition("@")
+        user, sep, _password = credentials.partition(":")
+        if not sep:
+            return f"{scheme}://{credentials}@{host}"
+        return f"{scheme}://{user}:***@{host}"
 
     @property
     def is_production(self) -> bool:

@@ -18,18 +18,64 @@ anything. `detection_summary` reports both.
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Sequence
+from typing import Any, Dict, List, Sequence
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from src.db.models import Anomaly, Member
+from src.db.models import (
+    Anomaly,
+    CampaignDonation,
+    CommitteeAssignment,
+    GovernmentContract,
+    LobbyingDisclosure,
+    Member,
+    Transaction,
+)
 
 logger = logging.getLogger(__name__)
 
 # Below this many findings of a type, a percentile is noise dressed up as a
 # statistic -- 3 rows would make the largest "the 100th percentile".
 MIN_POPULATION_FOR_PERCENTILE = 10
+
+# Each detector depends on a table that something else has to populate. When
+# that table is empty the detector returns nothing -- which reads identically to
+# "checked, found nothing clean". Reporting the difference matters more since
+# QuiverQuant was dropped: the three Tier-2 tables have no ingester at all until
+# FEC, Senate LDA and USASpending are built.
+DETECTOR_SOURCE_TABLES: Dict[str, Any] = {
+    "donor_conflict": CampaignDonation,
+    "lobbying_overlap": LobbyingDisclosure,
+    "contract_front_run": GovernmentContract,
+    "committee_jurisdiction_conflict": CommitteeAssignment,
+    "cross_member_cluster": Transaction,
+    "large_trade": Transaction,
+    "late_filing": Transaction,
+    "sector_concentration": Transaction,
+    "high_trading_frequency": Transaction,
+    "trade_clustering": Transaction,
+    "volume_spikes": Transaction,
+}
+
+
+def detectors_without_source_data(db: Session) -> List[Dict[str, str]]:
+    """Detectors whose input table is empty, so they cannot produce output.
+
+    Without this, a detector silently returning zero is indistinguishable from
+    one that ran and found nothing.
+    """
+    empty: List[Dict[str, str]] = []
+    counts: Dict[str, int] = {}
+
+    for detector, model in DETECTOR_SOURCE_TABLES.items():
+        name = model.__tablename__
+        if name not in counts:
+            counts[name] = db.query(func.count(model.id)).scalar() or 0
+        if counts[name] == 0:
+            empty.append({"anomaly_type": detector, "empty_source_table": name})
+
+    return sorted(empty, key=lambda e: (e["empty_source_table"], e["anomaly_type"]))
 
 
 def percentile_rank(value: float, population: Sequence[float]) -> float:
@@ -142,6 +188,7 @@ def detection_summary(db: Session) -> Dict[str, object]:
 
     total_findings = sum(findings_by_type)
     detectors_run = len(per_type)
+    starved = detectors_without_source_data(db)
 
     return {
         "members": member_count,
@@ -151,9 +198,14 @@ def detection_summary(db: Session) -> Dict[str, object]:
         "approximate_tests_run": detectors_run * member_count,
         "total_findings": total_findings,
         "by_type": per_type,
+        # Detectors that could not run at all, as distinct from detectors that
+        # ran and found nothing.
+        "detectors_without_source_data": starved,
         "caveat": (
             "Findings are pattern matches over public filings, not determinations "
             "of wrongdoing. Thresholds are asserted rather than calibrated; "
-            "percentile_rank compares a finding against others of its own type."
+            "percentile_rank compares a finding against others of its own type. "
+            "Check detectors_without_source_data before reading an absence of "
+            "findings as a clean result."
         ),
     }

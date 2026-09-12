@@ -6,7 +6,7 @@ Step-by-step guide. Skim the prerequisites, then walk through the steps in order
 
 - A **GitHub** account that owns (or can be granted access to) `prendeso/honest-congress`.
 - A **Railway** account at <https://railway.com>. The free trial gives you $5 of usage credit, which covers a small instance running 24/7 for ~3 weeks.
-- Optionally: a **Congress.gov API key** (free, <https://api.congress.gov/sign-up/>) and a **QuiverQuant API key** ($10/mo, <https://www.quiverquant.com>). Both unlock additional data sources but the app boots fine without them.
+- Optionally: a **Congress.gov API key** (free, <https://api.congress.gov/sign-up/>). Only needed as a fallback for the member roster, which otherwise comes from the public-domain congress-legislators dataset. The app boots fine without it.
 
 ## What's already set up in the repo
 
@@ -52,7 +52,6 @@ Still in **Variables** on the app service, add the following. **Required** ones 
 | Variable | Default | What it does |
 |---|---|---|
 | `CONGRESS_GOV_API_KEY` | empty | Backup data source for member metadata |
-| `QUIVERQUANT_API_KEY` | empty | Live trade data ingestion via `/api/anomalies/sync-trades` |
 | `LATE_FILING_MIN_DAYS` | `60` | Days past the 45-day STOCK Act deadline before a late-PTR anomaly is flagged |
 | `LATE_FILING_MIN_AMOUNT_USD` | `50000` | Minimum transaction size for late-filing flags |
 | `WEALTH_GROWTH_THRESHOLD_PERCENT` | `200.0` | Wealth-vs-salary detector threshold |
@@ -118,7 +117,7 @@ The repo already has `.github/workflows/daily-update.yml` that runs the ingestio
 3. Add:
    - Name: `RAILWAY_DATABASE_URL`
    - Value: the public connection string from step 1
-4. Optionally add `CONGRESS_GOV_API_KEY` and `QUIVERQUANT_API_KEY` as repo secrets too (the workflow references them).
+4. Optionally add `CONGRESS_GOV_API_KEY` as a repo secret too (the workflow references it).
 5. Trigger the workflow manually the first time: **Actions** tab → **Daily Disclosure Update** → **Run workflow**. After that it runs daily.
 
 ## Step 8 — Operational checks
@@ -216,6 +215,5 @@ Expected on Railway. The filesystem is **ephemeral** — locally-stored PDFs don
 | `ALLOWED_ORIGINS` | recommended | manually, after Step 5 |
 | `PORT` | auto-injected by Railway | — |
 | `CONGRESS_GOV_API_KEY` | optional | <https://api.congress.gov/sign-up/> |
-| `QUIVERQUANT_API_KEY` | optional | <https://www.quiverquant.com> |
 
 Full list of tunable knobs lives in `src/config.py`.

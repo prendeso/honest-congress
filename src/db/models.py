@@ -404,7 +404,7 @@ class CampaignDonation(Base):
     transaction_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
     donation_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
-    source: Mapped[str] = mapped_column(String(50), default="quiverquant")
+    source: Mapped[str] = mapped_column(String(50), default="unknown")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (Index("ix_donations_member_ticker", "member_id", "ticker"),)
@@ -429,7 +429,7 @@ class LobbyingDisclosure(Base):
     filed_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     issue_codes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    source: Mapped[str] = mapped_column(String(50), default="quiverquant")
+    source: Mapped[str] = mapped_column(String(50), default="unknown")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -452,5 +452,5 @@ class GovernmentContract(Base):
     awarded_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
     end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
-    source: Mapped[str] = mapped_column(String(50), default="quiverquant")
+    source: Mapped[str] = mapped_column(String(50), default="unknown")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

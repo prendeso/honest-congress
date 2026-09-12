@@ -147,36 +147,15 @@
 
                 <div class="space-y-3">
                     <div class="bg-gray-700 rounded-lg p-4">
-                        <div class="flex justify-between items-start mb-2">
-                            <div>
-                                <h4 class="text-white font-medium">Sync All Trades</h4>
-                                <p class="text-gray-400 text-sm">Fetches from QuiverQuant API</p>
-                            </div>
-                            <button @click="callApi('POST', '/api/anomalies/sync-trades')"
-                                    :disabled="syncStatus?.running"
-                                    class="bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm">
-                                Run
-                            </button>
-                        </div>
-                        <div class="api-badge bg-gray-800 text-green-400 px-2 py-1 rounded inline-block">
-                            POST /api/anomalies/sync-trades
-                        </div>
-                    </div>
-
-                    <div class="bg-gray-700 rounded-lg p-4">
-                        <div class="flex justify-between items-start mb-2">
-                            <div>
-                                <h4 class="text-white font-medium">Sync Tier-2 Data</h4>
-                                <p class="text-gray-400 text-sm">Donors, lobbying, contracts (slow — minutes)</p>
-                            </div>
-                            <button @click="if(confirm('Tier-2 ingestion takes several minutes (per-ticker fan-out). Continue?')) callApi('POST', '/api/anomalies/sync-tier2')"
-                                    :disabled="syncStatus?.running"
-                                    class="bg-pink-600 hover:bg-pink-500 disabled:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm">
-                                Run
-                            </button>
-                        </div>
-                        <div class="api-badge bg-gray-800 text-green-400 px-2 py-1 rounded inline-block">
-                            POST /api/anomalies/sync-tier2
+                        <div class="mb-2">
+                            <h4 class="text-white font-medium">Trade ingestion</h4>
+                            <p class="text-gray-400 text-sm">
+                                There is no trade API to call. Trades come from House Clerk
+                                filings via the CLI:
+                                <code class="text-gray-300">ingest</code> &rarr;
+                                <code class="text-gray-300">download-pdfs</code> &rarr;
+                                <code class="text-gray-300">parse</code>.
+                            </p>
                         </div>
                     </div>
 

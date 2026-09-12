@@ -800,7 +800,6 @@ class IngestionOrchestrator:
         query = db.query(Disclosure).filter(
             Disclosure.document_url.isnot(None),
             Disclosure.document_url != "",
-            ~Disclosure.document_id.like("QANT_%"),  # Skip API-sourced records
         )
 
         if limit:

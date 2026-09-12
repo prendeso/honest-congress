@@ -169,3 +169,77 @@ class TestDetectionSummary:
 
         assert summary["total_findings"] == 0
         assert summary["by_type"] == []
+
+
+class TestDetectorsWithoutSourceData:
+    """A detector with an empty input table cannot run.
+
+    Reporting that separately matters more since QuiverQuant was dropped: the
+    three Tier-2 tables have no ingester at all until FEC, Senate LDA and
+    USASpending are built, so those detectors return nothing for want of data
+    rather than because the data is clean. Without this distinction, an empty
+    findings list reads as a clean bill of health.
+    """
+
+    def test_all_detectors_are_starved_on_an_empty_database(self, db_session):
+        from src.analysis.baselines import DETECTOR_SOURCE_TABLES, detectors_without_source_data
+
+        starved = detectors_without_source_data(db_session)
+
+        assert len(starved) == len(DETECTOR_SOURCE_TABLES)
+        assert {e["anomaly_type"] for e in starved} == set(DETECTOR_SOURCE_TABLES)
+
+    def test_tier2_detectors_are_named_when_their_tables_are_empty(self, db_session):
+        from src.analysis.baselines import detectors_without_source_data
+
+        starved = {
+            e["anomaly_type"]: e["empty_source_table"]
+            for e in detectors_without_source_data(db_session)
+        }
+
+        assert starved["donor_conflict"] == "campaign_donations"
+        assert starved["lobbying_overlap"] == "lobbying_disclosures"
+        assert starved["contract_front_run"] == "government_contracts"
+
+    def test_a_populated_table_clears_its_detectors(self, db_session, member):
+        from datetime import datetime
+        from decimal import Decimal
+
+        from src.analysis.baselines import detectors_without_source_data
+        from src.db.models import Disclosure, Transaction, TransactionType
+
+        d = Disclosure(
+            member_id=member.id,
+            filing_year=2024,
+            filing_type="PTR",
+            filing_date=datetime(2024, 5, 1),
+            document_id="SRC-1",
+            is_ptr=True,
+            parsed=True,
+        )
+        db_session.add(d)
+        db_session.commit()
+        db_session.refresh(d)
+        db_session.add(
+            Transaction(
+                disclosure_id=d.id,
+                transaction_date=datetime(2024, 3, 1),
+                transaction_type=TransactionType.PURCHASE,
+                description="AAPL",
+                ticker="AAPL",
+                amount_min=Decimal("1001"),
+                amount_max=Decimal("15000"),
+            )
+        )
+        db_session.commit()
+
+        starved = {e["anomaly_type"] for e in detectors_without_source_data(db_session)}
+
+        assert "large_trade" not in starved, "transactions exist, so this detector can run"
+        assert "donor_conflict" in starved, "campaign_donations is still empty"
+
+    def test_summary_surfaces_starved_detectors_and_says_why_it_matters(self, db_session):
+        summary = detection_summary(db_session)
+
+        assert summary["detectors_without_source_data"], "empty DB should report starved detectors"
+        assert "detectors_without_source_data" in str(summary["caveat"])

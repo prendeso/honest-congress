@@ -34,19 +34,34 @@ feeds they replace.
 | House trades | House Clerk PTR XML | — already official | done |
 | Member roster | unitedstates.io congress-legislators | — already official | done |
 | Committee assignments | none (detector had an empty table) | congress-legislators `committee-membership-current.yaml` | **done** |
-| Senate trades | QuiverQuant | Senate eFD | not started |
-| Campaign donations | QuiverQuant `/bulk/corporatedonors` | FEC API | not started |
-| Lobbying | QuiverQuant `/live/lobbying` | Senate LDA API | not started |
-| Gov contracts | QuiverQuant `/live/govcontractsall` | USASpending API | not started |
+| Senate trades | — (vendor removed) | Senate eFD | not started |
+| Campaign donations | — (vendor removed) | FEC API | **not started — table empty** |
+| Lobbying | — (vendor removed) | Senate LDA API | **not started — table empty** |
+| Gov contracts | — (vendor removed) | USASpending API | **not started — table empty** |
 | Benchmark prices | `yfinance` | licensed vendor, or drop — see D4 | deferred |
 
 The Tier-2 detector logic in `src/analysis/tier2_detectors.py` does not change;
 only its feed does.
 
-**QuiverQuant** is currently the only working Senate path, the only trade
-source, and the sole feed for the Tier-2 detectors. Its terms appear to limit
+**QuiverQuant has been removed**, and its key rotated. Its terms appear to limit
 use to personal, non-commercial purposes and to prohibit redistribution without
-an executed agreement — confirm directly before shipping anything paid.
+an executed agreement, which is incompatible with a public site or a paid
+endpoint.
+
+Two consequences worth stating plainly, because neither is fixed by deleting
+the client:
+
+- **Senate trade coverage is currently zero.** The House path
+  (Clerk XML → PDF → `ptr_parser`) never used the vendor and is unaffected, but
+  it filters on `Member.chamber == HOUSE`. `senate.py` does search for Senate
+  PTRs and the download/parse path is chamber-agnostic, so Senate is reachable
+  in principle — but nothing has shown the scraper survives eFD's anti-bot
+  protection, or that `ptr_parser` handles the Senate PDF layout.
+- **The three Tier-2 tables have no ingester.** `donor_conflict`,
+  `lobbying_overlap` and `contract_front_run` therefore return nothing until
+  FEC, Senate LDA and USASpending are built. `detection_summary()` — and
+  `cli stats` — names detectors whose source table is empty, so this reads as
+  "no data" rather than "no findings".
 
 **`yfinance`** scrapes Yahoo Finance through an unofficial library against
 Yahoo's terms. Acceptable for a hobby project, not for a paid endpoint.

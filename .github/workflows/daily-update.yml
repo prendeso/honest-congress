@@ -45,14 +45,10 @@ jobs:
           CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
         run: python -m src.cli ingest
 
-      # Trades live behind a separate command. This step used to be missing
-      # entirely while the key was passed to `ingest` above, which ignores it --
-      # so trade data could never refresh. Skips cleanly when no key is set.
-      - name: Ingest trade data
+      - name: Sync committee assignments
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
-          QUIVERQUANT_API_KEY: ${{ secrets.QUIVERQUANT_API_KEY }}
-        run: python -m src.cli ingest-trades
+        run: python -m src.cli sync-committees
 
       - name: Run anomaly analysis
         env:

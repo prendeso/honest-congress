@@ -15,7 +15,7 @@ router = APIRouter()
 def _normalized_document_url(disclosure: Disclosure) -> str | None:
     url = disclosure.document_url
 
-    if not disclosure.document_id or disclosure.document_id.startswith("QANT_"):
+    if not disclosure.document_id:
         return url
 
     base = "https://disclosures-clerk.house.gov/public_disc"

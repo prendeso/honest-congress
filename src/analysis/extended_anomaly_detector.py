@@ -253,123 +253,6 @@ class ExtendedAnomalyDetector:
 
     # ========== ANOMALY 5: COMMITTEE-BASED CONFLICTS ==========
 
-    def detect_committee_conflicts(self, db: Session) -> List[Dict]:
-        """
-        Detect trading that overlaps with committee responsibilities.
-        Requires committee data to be available.
-        """
-        anomalies = []
-
-        try:
-            members = db.query(Member).all()
-
-            for member in members:
-                try:
-                    # Get trades (joined through Disclosure because Transaction
-                    # has no direct member_id column).
-                    trades = (
-                        db.query(Transaction)
-                        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-                        .filter(Disclosure.member_id == member.id)
-                        .all()
-                    )
-
-                    if not trades:
-                        continue
-
-                    # Check for sector overlap (would need committee data in actual implementation)
-                    # For now, flag trading in any heavily regulated sector
-                    regulated_trades = self._check_regulated_sector_trading(trades)
-
-                    if regulated_trades:
-                        sectors = ", ".join(regulated_trades["sectors"][:3]) or "regulated sectors"
-                        anomalies.append(
-                            {
-                                "member_id": member.id,
-                                "member_name": f"{member.first_name} {member.last_name}",
-                                "chamber": member.chamber,
-                                # Was "sector_concentration", colliding with
-                                # TradeAnalyzer's per-disclosure detector of the
-                                # same name but different semantics and a
-                                # different severity scale -- both persisted.
-                                "anomaly_type": "regulated_sector_concentration",
-                                "severity": "MEDIUM",
-                                "title": f"Heavy concentration in {sectors}",
-                                "sectors": regulated_trades["sectors"],
-                                "trade_count": regulated_trades["count"],
-                                "computed_value": Decimal(str(regulated_trades["count"])),
-                                "threshold_value": Decimal(str(int(len(trades) * 0.5))),
-                                "description": (
-                                    f"Member concentrated trading in {len(regulated_trades['sectors'])} "
-                                    f"heavily-regulated sectors: {', '.join(regulated_trades['sectors'])}. "
-                                    f"If member serves on related committee, this represents potential conflict of interest."
-                                ),
-                            }
-                        )
-
-                except Exception as e:
-                    logger.debug(f"Error checking conflicts for {member.first_name}: {str(e)[:50]}")
-
-        except Exception as e:
-            logger.error(f"Error in committee conflict detection: {str(e)[:100]}")
-
-        return anomalies
-
-    def _check_regulated_sector_trading(self, trades: List[Transaction]) -> Dict | None:
-        """Check for concentration in regulated sectors."""
-        REGULATED_SECTORS = {
-            "defense": [
-                "defense",
-                "lockheed",
-                "raytheon",
-                "boeing",
-                "northrop",
-                "lmt",
-                "ba",
-                "rtx",
-            ],
-            "pharma": ["pharma", "pfizer", "moderna", "merck", "johnson", "pfe", "mrna", "mrk"],
-            "tech": [
-                "apple",
-                "microsoft",
-                "google",
-                "amazon",
-                "meta",
-                "aapl",
-                "msft",
-                "googl",
-                "amzn",
-            ],
-            "finance": ["jpmorgan", "wells fargo", "goldman", "bank", "jpm", "wfc", "gs", "visa"],
-            "energy": ["exxon", "chevron", "shell", "xom", "cvx"],
-        }
-
-        sector_counts = defaultdict(int)
-
-        for trade in trades:
-            ticker = (trade.ticker or "").lower()
-            description = (trade.description or "").lower()
-
-            for sector, keywords in REGULATED_SECTORS.items():
-                if any(keyword in ticker or keyword in description for keyword in keywords):
-                    sector_counts[sector] += 1
-                    break
-
-        # Flag if 50%+ of trades in single regulated sector
-        if sector_counts:
-            total_trades = len(trades)
-            max_sector_trades = max(sector_counts.values())
-
-            if max_sector_trades / total_trades >= 0.5:
-                return {
-                    "sectors": [s for s, c in sector_counts.items() if c / total_trades >= 0.3],
-                    "count": max_sector_trades,
-                }
-
-        return None
-
-    # ========== ANOMALY 6: LOSS AVOIDANCE PATTERN ==========
-
     def detect_loss_avoidance(self, db: Session) -> List[Dict]:
         """
         Detect members who consistently sell before losses and hold through gains.
@@ -541,7 +424,6 @@ def run_extended_anomaly_detection(
     When `persist` is true, detected anomalies are written to the database.
     """
     from src.analysis import persist_anomalies
-    from src.config import get_settings
 
     detector = ExtendedAnomalyDetector()
 
@@ -553,15 +435,11 @@ def run_extended_anomaly_detection(
     timing_anomalies = detector.detect_trade_timing_anomalies(db)
     logger.info(f"   Found {len(timing_anomalies)} anomalies\n")
 
-    if get_settings().committee_conflict_detector_enabled:
-        logger.info("2. Detecting committee-based conflicts...")
-        conflict_anomalies = detector.detect_committee_conflicts(db)
-        logger.info(f"   Found {len(conflict_anomalies)} anomalies\n")
-    else:
-        # Disabled by default: the detector has no committee data to work from
-        # and substring-matches tickers. See Settings.committee_conflict_detector_enabled.
-        logger.info("2. Committee-based conflict detection is disabled; skipping.\n")
-        conflict_anomalies = []
+    # Committee conflicts moved to src/analysis/committee_conflicts.py, which
+    # joins real assignments from congress-legislators instead of guessing from
+    # ticker substrings. Kept as an empty list so the result shape is unchanged
+    # for callers reading combined_results.
+    conflict_anomalies: List[Dict] = []
 
     logger.info("3. Detecting loss avoidance patterns...")
     loss_anomalies = detector.detect_loss_avoidance(db)

@@ -5,8 +5,8 @@ hand-written YAML, so the parsing is pinned to the shape the source actually
 publishes -- including the detail that subcommittee keys in the membership file
 are the parent's thomas_id with a numeric suffix appended ("SSAF13").
 
-This replaces `SAMPLE_COMMITTEE_ASSIGNMENTS = {}`, the empty dict that left
-detect_committee_conflicts with no committee data at all.
+This replaces `SAMPLE_COMMITTEE_ASSIGNMENTS = {}`, the empty dict that left the
+old committee-conflict detector with no committee data at all.
 """
 
 from __future__ import annotations

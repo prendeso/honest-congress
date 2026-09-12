@@ -107,6 +107,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the deeper design dive.
 | `donor_conflict` | Trade shortly after a corporate donation |
 | `lobbying_overlap` | Trade overlapping a lobbying filing window |
 | `contract_front_run` | Trade ahead of a government contract award |
+| `committee_jurisdiction_conflict` | Traded a sector overseen by a committee the member sits on |
 
 Thresholds for `late_filing` are tunable via `LATE_FILING_MIN_DAYS` and
 `LATE_FILING_MIN_AMOUNT_USD` in the environment.
@@ -114,8 +115,7 @@ Thresholds for `late_filing` are tunable via `LATE_FILING_MIN_DAYS` and
 ### Disabled detectors
 
 `outperforming_trades`, `perfect_timing` and `loss_avoidance` are disabled by
-default via `DISABLED_ANOMALY_TYPES`; `committee_conflicts` is disabled via
-`COMMITTEE_CONFLICT_DETECTOR_ENABLED`. Their output could not be supported by
+default via `DISABLED_ANOMALY_TYPES`. Their output could not be supported by
 the data available — `loss_avoidance`, for example, was arithmetically incapable
 of returning anything other than 100%. [docs/DECISIONS.md](docs/DECISIONS.md)
 records why each is off and what re-enabling requires. To remove rows written

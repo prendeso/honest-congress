@@ -79,9 +79,6 @@ class TestDisabledTypesSetting:
     def test_defaults_cover_the_three_price_dependent_detectors(self):
         assert Settings().disabled_anomaly_types_set == set(DISABLED)
 
-    def test_committee_conflict_detector_is_off_by_default(self):
-        assert Settings().committee_conflict_detector_enabled is False
-
     def test_empty_setting_disables_nothing(self):
         assert Settings(DISABLED_ANOMALY_TYPES="").disabled_anomaly_types_set == set()
 

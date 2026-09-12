@@ -56,15 +56,6 @@ class Settings(BaseSettings):
         alias="DISABLED_ANOMALY_TYPES",
     )
 
-    # detect_committee_conflicts() uses no committee data at all
-    # (SAMPLE_COMMITTEE_ASSIGNMENTS is an empty dict) and substring-matches
-    # tickers, so "ba" matches "Alibaba". It also emits its findings as
-    # `sector_concentration`, colliding with TradeAnalyzer's detector of the
-    # same name -- so it cannot be switched off by anomaly type alone.
-    committee_conflict_detector_enabled: bool = Field(
-        default=False, alias="COMMITTEE_CONFLICT_DETECTOR_ENABLED"
-    )
-
     @property
     def disabled_anomaly_types_set(self) -> set[str]:
         raw = (self.disabled_anomaly_types or "").strip()

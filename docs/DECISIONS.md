@@ -62,12 +62,19 @@ Disabled by default via `DISABLED_ANOMALY_TYPES`, enforced in
 | `perfect_timing` | Never reads a price. Counts `(buy, sell)` date pairs in a nested loop and divides by `len(buys)`, so rates exceed 100%. Its description asserted a `<1%` chance probability that was never computed. |
 | `outperforming_trades` | Calls `(sells - buys) / buys` a "return" with no position matching, against a hardcoded flat 10% benchmark. |
 
-`committee_conflicts` is gated separately by
-`COMMITTEE_CONFLICT_DETECTOR_ENABLED`, because it emits its findings as
-`sector_concentration` — colliding with `TradeAnalyzer`'s detector of the same
-name — and so cannot be switched off by anomaly type. It used no committee data
-at all (`SAMPLE_COMMITTEE_ASSIGNMENTS` was an empty dict) and substring-matched
-tickers, so `"ba"` matched "Alibaba".
+`committee_conflicts` has been **rebuilt rather than disabled**. The original
+used no committee data at all (`SAMPLE_COMMITTEE_ASSIGNMENTS` was an empty dict)
+and substring-matched tickers, so `"ba"` matched "Alibaba"; it also emitted its
+findings as `sector_concentration`, colliding with `TradeAnalyzer`'s unrelated
+detector of the same name.
+
+`src/analysis/committee_conflicts.py` replaces it, joining real assignments from
+`committee_assignments` to trades classified by `src/analysis/sectors.py`. It
+emits `committee_jurisdiction_conflict`. Tickers are now matched exactly and
+name keywords on word boundaries, so `"ba"` matches Boeing and nothing else.
+
+`src/analysis/sectors.py` is also the single sector taxonomy, replacing four
+tables that had drifted apart on both sector names and membership.
 
 These attached ethics-investigation language to named public officials and ran
 nightly.

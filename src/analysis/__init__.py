@@ -9,6 +9,10 @@ from src.analysis.advanced_anomaly_detector import (
     AdvancedAnomalyDetector,
     run_advanced_anomaly_detection,
 )
+from src.analysis.committee_conflicts import (
+    detect_committee_jurisdiction_conflicts,
+    run_committee_conflict_detection,
+)
 from src.analysis.extended_anomaly_detector import (
     ExtendedAnomalyDetector,
     run_extended_anomaly_detection,
@@ -175,6 +179,8 @@ __all__ = [
     "run_advanced_anomaly_detection",
     "ExtendedAnomalyDetector",
     "run_extended_anomaly_detection",
+    "detect_committee_jurisdiction_conflicts",
+    "run_committee_conflict_detection",
     "detect_donor_conflicts",
     "detect_lobbying_overlaps",
     "detect_contract_front_runs",

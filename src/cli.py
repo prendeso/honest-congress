@@ -95,6 +95,7 @@ def cmd_analyze(args):
     from src.analysis import (
         analyze_trades,
         run_advanced_anomaly_detection,
+        run_committee_conflict_detection,
         run_extended_anomaly_detection,
     )
 
@@ -141,6 +142,12 @@ def cmd_analyze(args):
         print(f"  Wealth/Salary: {len(advanced.get('wealth_anomalies', []))}")
         print(f"  Asset Appreciation: {len(advanced.get('asset_anomalies', []))}")
         print(f"  Stock Outperformance: {len(advanced.get('stock_anomalies', []))}")
+
+        print("\nRunning committee jurisdiction conflict detection...")
+        with get_db() as db:
+            committee = run_committee_conflict_detection(db)
+        print(f"  Committee jurisdiction conflicts: {committee['total']}")
+        total_anomalies += committee["total"]
 
         print("\nExtended Analysis Results:")
         print(f"  Trade Timing: {len(extended.get('timing_anomalies', []))}")

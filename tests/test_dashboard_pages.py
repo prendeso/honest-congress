@@ -62,3 +62,57 @@ def test_home_insights_grid_uses_the_page_scope(client):
     assert "landingPage()" in html
     # Exactly one x-data on the page: the top-level landingPage() scope.
     assert html.count("x-data=") == 1, "the insights grid must not declare a nested scope"
+
+
+def _extract_inline_scripts(html: str) -> list[str]:
+    """Return the bodies of inline <script> blocks (skipping src= includes)."""
+    import re
+
+    return [
+        m.group(1)
+        for m in re.finditer(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.DOTALL)
+    ]
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/", "/members", "/disclosures", "/trades", "/parsed", "/anomalies", "/admin"],
+)
+def test_inline_javascript_parses(client, path):
+    """Every page's inline JavaScript must be syntactically valid.
+
+    The anomalies page shipped `'This member\\\\'s net worth...'` inside a Jinja
+    {% raw %} block -- an escaped backslash followed by a terminating quote,
+    which is a SyntaxError. It killed the whole Alpine component, so the page
+    rendered but never initialized. Like the home page's `{{ insights: [] }}`,
+    it came from the Python f-string to Jinja migration, where `\\\\` was the
+    escape for a literal backslash.
+
+    Server-side render tests cannot catch this, because the template renders
+    fine -- the failure is in the browser.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available to syntax-check inline scripts")
+
+    html = client.get(path, follow_redirects=False).text
+    scripts = _extract_inline_scripts(html)
+    assert scripts, f"{path} has no inline script to check"
+
+    for index, body in enumerate(scripts):
+        if not body.strip():
+            continue
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as fh:
+            fh.write(body)
+            temp_path = fh.name
+
+        result = subprocess.run(
+            [node, "--check", temp_path], capture_output=True, text=True, timeout=30
+        )
+        assert result.returncode == 0, (
+            f"{path} inline script #{index} is not valid JavaScript:\n{result.stderr}"
+        )

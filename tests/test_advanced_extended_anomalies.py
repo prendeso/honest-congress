@@ -305,7 +305,13 @@ class TestCommitteeConflicts:
         detector = ExtendedAnomalyDetector()
         anomalies = detector.detect_committee_conflicts(db_session)
         types = [a["anomaly_type"] for a in anomalies]
-        assert "sector_concentration" in types
+        # This detector emits its own type now. It previously reused
+        # "sector_concentration", which TradeAnalyzer also emits from a
+        # per-disclosure keyword match with a different severity scale -- both
+        # were persisted under one name and the dashboard labelled the pair
+        # "Committee Conflict", which only ever described this one.
+        assert "regulated_sector_concentration" in types
+        assert "sector_concentration" not in types
 
 
 class TestLossAvoidance:

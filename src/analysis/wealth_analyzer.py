@@ -8,7 +8,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.config import get_settings
-from src.db import Anomaly, Asset, Disclosure, Member
+from src.db import Anomaly, Asset, Disclosure, Liability, Member
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -232,13 +232,23 @@ class WealthAnalyzer:
             .first()
         )
 
-        assets_min = assets_result.min or Decimal(0)
-        assets_max = assets_result.max or Decimal(0)
+        assets_min = (assets_result.min if assets_result else None) or Decimal(0)
+        assets_max = (assets_result.max if assets_result else None) or Decimal(0)
 
-        # Sum liabilities (would need to add Liability query here)
-        # For now, assume liabilities are accounted for
-        liabilities_min = Decimal(0)
-        liabilities_max = Decimal(0)
+        # Liabilities were previously hardcoded to zero with a comment saying
+        # they were "accounted for", which made this gross assets rather than
+        # net worth -- inflating every wealth-growth flag derived from it.
+        liabilities_result = (
+            db.query(
+                func.sum(Liability.amount_min).label("min"),
+                func.sum(Liability.amount_max).label("max"),
+            )
+            .filter(Liability.disclosure_id == disclosure_id)
+            .first()
+        )
+
+        liabilities_min = (liabilities_result.min if liabilities_result else None) or Decimal(0)
+        liabilities_max = (liabilities_result.max if liabilities_result else None) or Decimal(0)
 
         net_min = assets_min - liabilities_max
         net_max = assets_max - liabilities_min

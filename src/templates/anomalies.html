@@ -241,7 +241,7 @@
                             <option value="rapid_asset_appreciation">Asset Appreciation</option>
                             <option value="outperforming_trades">Stock Outperformance</option>
                             <option value="trade_timing">Trade Timing</option>
-                            <option value="sector_concentration">Committee Conflict</option>
+                            <option value="sector_concentration">Sector Concentration</option>
                             <option value="loss_avoidance">Loss Avoidance</option>
                             <option value="multi_factor_risk">Multi-Factor Risk</option>
                             <option value="late_filing">Late Filing</option>
@@ -428,7 +428,7 @@
                         'trade_clustering': 'Trade Clustering',
                         'perfect_timing': 'Perfect Timing',
                         'volume_spikes': 'Volume Spikes',
-                        'sector_concentration': 'Committee Conflict',
+                        'sector_concentration': 'Sector Concentration',
                         'loss_avoidance': 'Loss Avoidance',
                         'multi_factor_risk': 'Multi-Factor Risk',
                         'late_filing': 'Late Filing',
@@ -440,14 +440,14 @@
 
                 getAnomalyExplanation(type) {
                     const explanations = {
-                        'excessive_wealth_growth': 'This member\\'s net worth increased significantly more than their Congressional salary could explain. May indicate undisclosed income sources or gains.',
+                        'excessive_wealth_growth': 'Reported net worth grew by more than the Congressional salary alone could explain. Assets and liabilities are disclosed as ranges, so this is an estimate.',
                         'rapid_asset_appreciation': 'A single asset (business, property, or investment) grew in value by more than 100% in one year, which is unusual and warrants investigation.',
-                        'outperforming_trades': 'This member\\'s stock trading returns significantly beat the S&P 500 benchmark, suggesting possible insider information or exceptional timing.',
+                        'outperforming_trades': 'Reported trading returns exceeded a market benchmark. This detector is disabled by default because it benchmarks against a fixed constant rather than real index returns.',
                         'trade_timing': 'The member demonstrated unusually good timing on trades, such as buying before stock rises or selling before drops.',
                         'trade_clustering': 'Multiple consecutive trades in the same direction (all buys or all sells) suggests coordinated trading strategy.',
                         'perfect_timing': 'The member has an abnormally high success rate on trades (80%+), which is statistically improbable without insider information.',
-                        'volume_spikes': 'Unusual trading volume detected - trade size significantly higher than the member\\'s typical trading pattern.',
-                        'sector_concentration': 'The member is heavily trading in sectors that their Congressional committee oversees, creating potential conflict of interest.',
+                        'volume_spikes': 'One or more trades were much larger than this member typically files. Amounts are disclosed as ranges, so sizes are band midpoints.',
+                        'sector_concentration': 'A large share of the trades in one filing fall in a single industry sector, matched on trade descriptions. This does not use committee assignments.',
                         'loss_avoidance': 'This member almost never loses money on trades (80%+ win rate), which is statistically improbable and suggests insider knowledge.',
                         'multi_factor_risk': 'This member shows 3 or more different anomaly patterns, making them a high-priority investigation target.',
                         'late_filing': 'The member reported this trade more than 45 days after it occurred, violating the STOCK Act disclosure requirements.',

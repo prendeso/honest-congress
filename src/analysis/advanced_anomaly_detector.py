@@ -8,15 +8,37 @@ Focuses on three key indicators:
 """
 
 import logging
+import re
 from collections import defaultdict
 from decimal import Decimal
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from src.db.models import Asset, Disclosure, Member, Transaction, TransactionType
+from src.db.models import Asset, Disclosure, Liability, Member, Transaction, TransactionType
 
 logger = logging.getLogger(__name__)
+
+# Assets are matched across filings by description, because disclosures carry no
+# asset identifier. An exact `description.lower().strip()` match meant any
+# wording change between years ("Apple Inc." -> "Apple Inc") read as the old
+# asset vanishing and a new one appearing -- inventing appreciation events.
+_ASSET_NOISE = re.compile(
+    r"\b(inc|inc\.|corp|corporation|co|company|llc|l\.l\.c|ltd|plc|the|common|stock|"
+    r"shares|class [a-c]|series [a-c])\b",
+    re.IGNORECASE,
+)
+_ASSET_PUNCT = re.compile(r"[^a-z0-9 ]+")
+_ASSET_SPACE = re.compile(r"\s+")
+
+
+def normalize_asset_key(description: str) -> str:
+    """Collapse a disclosed asset description to a stable matching key."""
+    text = (description or "").lower()
+    text = _ASSET_PUNCT.sub(" ", text)
+    text = _ASSET_NOISE.sub(" ", text)
+    return _ASSET_SPACE.sub(" ", text).strip()
+
 
 # Congressional salary by year
 CONGRESSIONAL_SALARY_BY_YEAR = {
@@ -160,23 +182,48 @@ class AdvancedAnomalyDetector:
         progression = []
 
         for disclosure in disclosures:
-            # Get all assets for this disclosure
             assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).all()
 
-            # Calculate net worth from assets (use midpoint of value ranges)
+            # Midpoint of each reported band. Disclosures report ranges, so this
+            # is an estimate with real error bars -- the bounds are carried
+            # alongside so callers can report them rather than imply precision.
             total_value = Decimal(0)
+            lower_bound = Decimal(0)
+            upper_bound = Decimal(0)
             for asset in assets:
                 if asset.value_min and asset.value_max:
-                    midpoint = (asset.value_min + asset.value_max) / 2
-                    total_value += midpoint
+                    total_value += (asset.value_min + asset.value_max) / 2
+                    lower_bound += asset.value_min
+                    upper_bound += asset.value_max
                 elif asset.value_max:
                     total_value += asset.value_max
+                    upper_bound += asset.value_max
+
+            # Liabilities were ignored entirely, which made this gross assets
+            # rather than net worth. Subtract the opposite bound of each range
+            # so the interval stays honest.
+            liabilities = db.query(Liability).filter(Liability.disclosure_id == disclosure.id).all()
+            liab_min = Decimal(0)
+            liab_max = Decimal(0)
+            for liability in liabilities:
+                if liability.amount_min and liability.amount_max:
+                    total_value -= (liability.amount_min + liability.amount_max) / 2
+                    liab_min += liability.amount_min
+                    liab_max += liability.amount_max
+                elif liability.amount_max:
+                    total_value -= liability.amount_max
+                    liab_max += liability.amount_max
 
             progression.append(
                 {
                     "year": disclosure.filing_year,
                     "disclosure_id": disclosure.id,
                     "net_worth_estimate": total_value if total_value > 0 else None,
+                    # Widest defensible interval: lowest assets minus highest
+                    # debts, and vice versa.
+                    "net_worth_low": lower_bound - liab_max,
+                    "net_worth_high": upper_bound - liab_min,
+                    "asset_count": len(assets),
                 }
             )
 
@@ -225,21 +272,30 @@ class AdvancedAnomalyDetector:
                     if len(disclosures) < 2:
                         continue
 
-                    # Track assets year-over-year
-                    assets_by_description = defaultdict(list)
+                    # Track assets year-over-year. Annotated because the
+                    # entries are heterogeneous -- without it mypy infers
+                    # Dict[str, object] and every numeric read below fails.
+                    assets_by_description: defaultdict[str, List[Dict[str, Any]]] = defaultdict(
+                        list
+                    )
 
                     for disclosure in disclosures:
                         assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).all()
 
                         for asset in assets:
-                            # Track by description (to match same asset across years)
-                            key = asset.description.lower().strip()
+                            key = normalize_asset_key(asset.description)
 
                             if asset.value_max:
+                                value_min = float(asset.value_min or 0)
+                                value_max = float(asset.value_max)
                                 assets_by_description[key].append(
                                     {
                                         "year": disclosure.filing_year,
-                                        "value": float(asset.value_max),
+                                        # Midpoint for display; the bounds drive
+                                        # the actual decision below.
+                                        "value": (value_min + value_max) / 2,
+                                        "value_min": value_min,
+                                        "value_max": value_max,
                                         "asset_type": asset.asset_type,
                                         "description": asset.description,
                                     }
@@ -258,21 +314,36 @@ class AdvancedAnomalyDetector:
                             curr = values_sorted[i]
 
                             years_diff = curr["year"] - prev["year"]
-                            value_growth = curr["value"] - prev["value"]
+                            prev_value = prev["value"]
+                            curr_value = curr["value"]
+                            prev_max = prev["value_max"]
+                            curr_min = curr["value_min"]
+                            value_growth = curr_value - prev_value
 
-                            if prev["value"] > 0:
-                                growth_percent = (value_growth / prev["value"]) * 100
+                            if prev_value > 0:
+                                # Disclosures report bands, so the smallest
+                                # growth consistent with both filings is
+                                # (this year's floor) vs (last year's ceiling).
+                                # Comparing band edges -- as this did, using
+                                # value_max on both sides -- turns a $1 move
+                                # across a bracket boundary into "233% growth".
+                                # Only flag growth the bands actually guarantee.
+                                guaranteed_growth_percent = (
+                                    (curr_min - prev_max) / prev_max * 100 if prev_max > 0 else 0.0
+                                )
+                                growth_percent = (value_growth / prev_value) * 100
                                 annual_growth = (
-                                    growth_percent / years_diff
+                                    guaranteed_growth_percent / years_diff
                                     if years_diff > 0
-                                    else growth_percent
+                                    else guaranteed_growth_percent
                                 )
 
-                                # Flag if growth is >500% per year or >100% in single year
                                 if annual_growth > 500 or (
-                                    years_diff == 1 and growth_percent > 100
+                                    years_diff == 1 and guaranteed_growth_percent > 100
                                 ):
-                                    severity = "CRITICAL" if growth_percent > 1000 else "HIGH"
+                                    severity = (
+                                        "CRITICAL" if guaranteed_growth_percent > 1000 else "HIGH"
+                                    )
 
                                     anomalies.append(
                                         {
@@ -294,15 +365,22 @@ class AdvancedAnomalyDetector:
                                             "growth_amount": value_growth,
                                             "growth_percent": growth_percent,
                                             "annual_growth_rate": annual_growth,
+                                            "guaranteed_growth_percent": (
+                                                guaranteed_growth_percent
+                                            ),
                                             "computed_value": Decimal(
-                                                str(round(growth_percent, 2))
+                                                str(round(guaranteed_growth_percent, 2))
                                             ),
                                             "threshold_value": Decimal("100"),
                                             "description": (
-                                                f"{asset_desc} grew from ${prev['value']:,.0f} ({prev['year']}) "
-                                                f"to ${curr['value']:,.0f} ({curr['year']}). "
-                                                f"Growth: {growth_percent:.0f}% in {years_diff} year(s) "
-                                                f"({annual_growth:.0f}% annually)."
+                                                f"{asset_desc} rose from the "
+                                                f"${prev['value_min']:,.0f}-${prev['value_max']:,.0f} band "
+                                                f"({prev['year']}) to the "
+                                                f"${curr['value_min']:,.0f}-${curr['value_max']:,.0f} band "
+                                                f"({curr['year']}). Growth is at least "
+                                                f"{guaranteed_growth_percent:.0f}% over {years_diff} year(s) "
+                                                f"({annual_growth:.0f}% annually); disclosures report "
+                                                f"ranges, so the exact figure is not knowable."
                                             ),
                                         }
                                     )
@@ -329,7 +407,8 @@ class AdvancedAnomalyDetector:
         Example:
         - S&P 500 returned 10% in 2022
         - Member's trades returned 45% in same period
-        - Suggests insider trading or exceptional timing
+        - Benchmarked against a hardcoded constant, not real index returns;
+          disabled by default (see docs/DECISIONS.md).
 
         Returns: List of members with suspicious trading performance
         """

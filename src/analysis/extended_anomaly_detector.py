@@ -20,6 +20,21 @@ from src.db.models import Disclosure, Member, Transaction, TransactionType
 
 logger = logging.getLogger(__name__)
 
+# Volume-spike tuning. These remain asserted rather than calibrated -- see D6 in
+# docs/DECISIONS.md, which calls for population base rates instead.
+MIN_TRADES_FOR_VOLUME_SPIKE = 8
+VOLUME_SPIKE_SIGMAS = 3.0
+VOLUME_SPIKE_FLAT_MULTIPLE = 5.0
+
+
+def _median(values: List[float]) -> float:
+    """Median of a non-empty list."""
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
 
 class ExtendedAnomalyDetector:
     """Detect extended anomaly patterns in Congressional finances."""
@@ -77,8 +92,9 @@ class ExtendedAnomalyDetector:
                                 "threshold_value": Decimal("5"),
                                 "description": (
                                     f"Member made {consecutive_same_direction} consecutive trades "
-                                    f"in same direction (all buys or all sells) within short period. "
-                                    f"Could indicate insider information or coordinated strategy."
+                                    f"in the same direction (all buys or all sells) within a short "
+                                    f"period. This describes the sequence only; it does not measure "
+                                    f"timing, profitability, or intent."
                                 ),
                             }
                         )
@@ -110,7 +126,7 @@ class ExtendedAnomalyDetector:
                                     f"Member executed {perfect_timing['count']} trades with exceptional timing. "
                                     f"Success rate: {perfect_timing['rate']:.1f}%. "
                                     f"Probability of this performance by chance: <1%. "
-                                    f"Suggests insider information or exceptional predictive ability."
+                                    f"Timing is not evaluated against prices; see docs/DECISIONS.md."
                                 ),
                             }
                         )
@@ -153,17 +169,31 @@ class ExtendedAnomalyDetector:
 
         anomalies = []
 
-        # Calculate average trade size
         amounts = [transaction_amount(t) for t in trades]
         amounts = [a for a in amounts if a > 0]
-        if len(amounts) < 2:
+
+        # Mean + 3 standard deviations is not meaningful on a handful of
+        # heavy-tailed points, and disclosure amounts cluster hard on a few band
+        # midpoints -- a single large trade drags the mean and the deviation
+        # together, so the outlier hides itself. Median absolute deviation is
+        # resistant to exactly that. It still needs enough points to have a
+        # stable centre, hence the higher floor.
+        if len(amounts) < MIN_TRADES_FOR_VOLUME_SPIKE:
             return anomalies
 
-        avg_amount = sum(amounts) / len(amounts)
-        std_dev = (sum((x - avg_amount) ** 2 for x in amounts) / len(amounts)) ** 0.5
-        threshold = avg_amount + (3 * std_dev)  # 3 standard deviations
+        median_amount = _median(amounts)
+        mad = _median([abs(a - median_amount) for a in amounts])
 
-        # Find spikes
+        if mad > 0:
+            # 0.6745 rescales MAD to a normal-consistent sigma, so the cutoff
+            # stays comparable to the "3 sigma" this replaced.
+            threshold = median_amount + (VOLUME_SPIKE_SIGMAS * mad / 0.6745)
+        else:
+            # More than half the trades share one value (common when amounts
+            # collapse onto the same band). Fall back to a multiple of the
+            # median rather than flagging every non-median trade.
+            threshold = median_amount * VOLUME_SPIKE_FLAT_MULTIPLE
+
         spikes = [t for t in trades if transaction_amount(t) > threshold]
 
         if len(spikes) >= 2:
@@ -173,10 +203,12 @@ class ExtendedAnomalyDetector:
                 "title": f"Unusual trading volume spikes ({len(spikes)})",
                 "spike_count": len(spikes),
                 "computed_value": Decimal(str(round(threshold, 2))),
-                "threshold_value": Decimal(str(round(avg_amount, 2))),
+                "threshold_value": Decimal(str(round(median_amount, 2))),
                 "description": (
-                    f"Identified {len(spikes)} unusual trading volume spikes "
-                    f"(>3 std dev above average). May indicate insider trading activity."
+                    f"{len(spikes)} trades were unusually large relative to this member's "
+                    f"own typical trade size. Disclosures report amount bands, so sizes are "
+                    f"band midpoints; this compares a member against themselves, not a "
+                    f"population baseline."
                 ),
             }
             if member is not None:
@@ -256,7 +288,11 @@ class ExtendedAnomalyDetector:
                                 "member_id": member.id,
                                 "member_name": f"{member.first_name} {member.last_name}",
                                 "chamber": member.chamber,
-                                "anomaly_type": "sector_concentration",
+                                # Was "sector_concentration", colliding with
+                                # TradeAnalyzer's per-disclosure detector of the
+                                # same name but different semantics and a
+                                # different severity scale -- both persisted.
+                                "anomaly_type": "regulated_sector_concentration",
                                 "severity": "MEDIUM",
                                 "title": f"Heavy concentration in {sectors}",
                                 "sectors": regulated_trades["sectors"],
@@ -337,7 +373,7 @@ class ExtendedAnomalyDetector:
     def detect_loss_avoidance(self, db: Session) -> List[Dict]:
         """
         Detect members who consistently sell before losses and hold through gains.
-        Suggests insider information or exceptional market timing.
+        Does not consult prices; disabled by default (see docs/DECISIONS.md).
         """
         anomalies = []
 
@@ -408,7 +444,7 @@ class ExtendedAnomalyDetector:
                                 "description": (
                                     f"Member demonstrates loss-avoidance pattern in {total_patterns} trading instances. "
                                     f"Success rate: {rate:.1f}%. "
-                                    f"Suggests ability to predict stock movements or insider information."
+                                    f"No price data is consulted; see docs/DECISIONS.md."
                                 ),
                             }
                         )
@@ -482,12 +518,12 @@ class ExtendedAnomalyDetector:
                         "computed_value": Decimal(str(total_score)),
                         "threshold_value": Decimal("3"),
                         "description": (
-                            f"MULTI-FACTOR INVESTIGATION REQUIRED: "
-                            f"Member shows {len(anomalies_list)} different anomaly patterns "
-                            f"(risk score: {total_score}/10). "
-                            f"Anomalies: {', '.join(set(a.get('anomaly_type', 'unknown') for a in anomalies_list))}. "
-                            f"Pattern suggests systematic financial misconduct. "
-                            f"Recommend immediate ethics investigation."
+                            f"Member matched {len(anomalies_list)} different detectors "
+                            f"(combined score: {total_score}/10). "
+                            f"Detectors: {', '.join(sorted(set(a.get('anomaly_type', 'unknown') for a in anomalies_list)))}. "
+                            f"This counts how many patterns matched; it does not weight them by "
+                            f"confidence and applies no correction for running many detectors "
+                            f"across many members, so some overlap is expected by chance."
                         ),
                     }
                 )

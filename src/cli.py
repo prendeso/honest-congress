@@ -95,6 +95,7 @@ def cmd_analyze(args):
     from src.analysis import (
         analyze_trades,
         run_advanced_anomaly_detection,
+        run_cluster_detection,
         run_committee_conflict_detection,
         run_extended_anomaly_detection,
     )
@@ -148,6 +149,12 @@ def cmd_analyze(args):
             committee = run_committee_conflict_detection(db)
         print(f"  Committee jurisdiction conflicts: {committee['total']}")
         total_anomalies += committee["total"]
+
+        print("\nRunning cross-member cluster detection...")
+        with get_db() as db:
+            clusters = run_cluster_detection(db)
+        print(f"  Cross-member clusters: {clusters['total']}")
+        total_anomalies += clusters["total"]
 
         print("\nExtended Analysis Results:")
         print(f"  Trade Timing: {len(extended.get('timing_anomalies', []))}")

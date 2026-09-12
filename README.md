@@ -110,6 +110,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the deeper design dive.
 | `lobbying_overlap` | Trade overlapping a lobbying filing window |
 | `contract_front_run` | Trade ahead of a government contract award |
 | `committee_jurisdiction_conflict` | Traded a sector overseen by a committee the member sits on |
+| `cross_member_cluster` | Several members traded the same ticker, same direction, same window |
 
 Thresholds for `late_filing` are tunable via `LATE_FILING_MIN_DAYS` and
 `LATE_FILING_MIN_AMOUNT_USD` in the environment.

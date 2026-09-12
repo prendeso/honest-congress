@@ -169,6 +169,31 @@ deadline the public record supports. And unlike the `late_filing` detector —
 which filters to materially large trades to keep the anomaly table readable — a
 compliance *rate* counts every covered transaction, or it is not a rate.
 
+## D8. Co-movement beats individual timing
+
+`src/analysis/clustering.py` finds tickers that several members traded the same
+way inside a short window, emitting `cross_member_cluster`.
+
+It exists because individual timing is the question this data cannot answer:
+disclosures give amount bands and no share counts, and without price history
+there is no return to measure — which is precisely why `perfect_timing` and
+`loss_avoidance` had to be disabled (D3). Co-movement needs none of that. Dates,
+tickers and directions are all disclosed exactly.
+
+It is also the better question. One member buying a defense stock is
+unremarkable; six buying it the same week is worth showing a reader.
+
+The filter is **concentration**, not popularity: what share of everyone who ever
+traded that ticker did so inside the window. Four of a ticker's forty traders
+overlapping is the base rate; six of its six is a burst. An earlier draft
+suppressed on raw popularity instead and was wrong in an instructive way — in
+any population the largest, most interesting clusters also involve the most
+members, so that rule penalised exactly what it should surface.
+
+Findings state that filing dates are not trade dates and that disclosure lags
+vary, so this is co-movement in *reported* activity, not evidence of
+coordination.
+
 ---
 
 ## Superseded

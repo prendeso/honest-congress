@@ -41,9 +41,10 @@ MIN_POPULATION_FOR_PERCENTILE = 10
 
 # Each detector depends on a table that something else has to populate. When
 # that table is empty the detector returns nothing -- which reads identically to
-# "checked, found nothing clean". Reporting the difference matters more since
-# QuiverQuant was dropped: the three Tier-2 tables have no ingester at all until
-# FEC, Senate LDA and USASpending are built.
+# "checked, found nothing clean". The three Tier-2 tables are the ones this
+# matters most for: their feeds (FEC, Senate LDA, USASpending) are separate
+# rate-limited commands, so it is entirely possible to run `analyze` against
+# tables nothing has filled yet.
 DETECTOR_SOURCE_TABLES: Dict[str, Any] = {
     "donor_conflict": CampaignDonation,
     "lobbying_overlap": LobbyingDisclosure,

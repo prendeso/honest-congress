@@ -39,16 +39,16 @@ import yaml
 
 from src.db.models import CampaignDonation, Chamber, Disclosure, Member, Party, Transaction
 from src.db.models import TransactionType as TT
+from src.ingestion._helpers import traded_tickers
 from src.ingestion.fec import (
     FECClient,
-    RateLimiter,
     RequestBudgetExhausted,
     corporate_pacs,
     ingest_campaign_donations,
     member_index_by_fec_id,
     principal_committees,
-    traded_tickers,
 )
+from src.ingestion.rate_limit import RateLimiter
 from src.ingestion.sec_tickers import TickerResolver
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -164,7 +164,7 @@ def test_rate_limiter_allows_a_burst_then_waits():
     # over 13 minutes just because the hourly limit is 900.
     now = [0.0]
     slept: list[float] = []
-    limiter = RateLimiter(3, clock=lambda: now[0], sleeper=slept.append)
+    limiter = RateLimiter(3, 3600, clock=lambda: now[0], sleeper=slept.append)
 
     for _ in range(3):
         limiter.acquire()
@@ -177,7 +177,7 @@ def test_rate_limiter_allows_a_burst_then_waits():
 def test_rate_limiter_forgets_requests_older_than_an_hour():
     now = [0.0]
     slept: list[float] = []
-    limiter = RateLimiter(2, clock=lambda: now[0], sleeper=slept.append)
+    limiter = RateLimiter(2, 3600, clock=lambda: now[0], sleeper=slept.append)
 
     limiter.acquire()
     limiter.acquire()

@@ -2,8 +2,8 @@
 
 Every Tier-2 table keys on `ticker`, but the official sources publish names:
 FEC gives PAC names, the Senate LDA gives registrants and clients, USASpending
-gives recipient names. QuiverQuant did this resolution for us; this is how it
-gets done without a vendor.
+gives recipient names. The vendor this project used to depend on did that
+resolution for us; this is how it gets done from public sources instead.
 
 SEC publishes `company_tickers.json` -- roughly 10,400 CIK/ticker/name triples,
 public domain, no key. SEC's access policy requires a declared User-Agent, and
@@ -24,7 +24,15 @@ What it must not skip is a listed parent hiding behind a subsidiary name. That
 is the rest of SUBSIDIARY_OVERRIDES, and it is worth real money: Electric Boat
 is General Dynamics ($2.6bn in one 2024 action), Optum Public Sector Solutions
 is UnitedHealth (33 separate actions), Health Net Federal Services is Centene.
-Adding those thirteen entries moved contract-dollar coverage from 56% to 70%.
+Writing those down moved contract-dollar coverage from 56% to 70%.
+
+They are written down rather than inferred on purpose. An earlier version let a
+single registered word claim anything starting with it, which did catch these --
+and also gave Fermi Research Alliance (a DOE laboratory consortium) to an
+Estonian nuclear startup and Universal Synaptics to a Virginia tobacco company.
+For a project whose findings name real people, a silent misattribution is worse
+than a silent miss, so the loose rule went and the true positives became
+explicit, reviewable entries.
 """
 
 from __future__ import annotations
@@ -70,6 +78,12 @@ _PAC_NOISE = re.compile(
 
 _PUNCT = re.compile(r"[^a-z0-9 ]+")
 
+# PAC names carry their own abbreviation as a trailing parenthetical --
+# "AFLAC POLITICAL ACTION COMMITTEE (AFLAC PAC)", "ADEIA INC POLITICAL ACTION
+# COMMITTEE (ADEIA PAC)". Left in, the company name appears twice and matches
+# nothing. Stripping it recovers 84 of the 1,675 corporate PACs on its own.
+_TRAILING_ALIAS = re.compile(r"\s*\([^()]*\)\s*$")
+
 # SEC titles carry the state or country of incorporation as a slashed suffix --
 # "NORTHROP GRUMMAN CORP /DE/", "PROGRESSIVE CORP/OH/", "BANK OF MONTREAL /CAN/".
 # 287 of the 10,400 registered titles do. Stripped before punctuation, because
@@ -95,6 +109,19 @@ SUBSIDIARY_OVERRIDES: Dict[str, str] = {
     "humana government business": "HUM",
     "united launch alliance": "BA",
     "optum": "UNH",
+    # Operating subsidiaries of listed parents, each verified against a real
+    # 2024 federal award. These used to be caught by a one-word prefix, which
+    # also caught Fermi Research Alliance and Universal Synaptics -- so the loose
+    # rule went and the true positives were written down instead.
+    "amentum": "AMTM",
+    "fluor marine propulsion": "FLR",
+    "kbr services": "KBR",
+    "leidos": "LDOS",
+    "maximus federal": "MMS",
+    "olin winchester": "OLN",
+    "oracle health": "ORCL",
+    "textron": "TXT",
+    "v2x": "VVX",
     "health net federal services": "CNC",
     "honeywell federal manufacturing": "HON",
     # Privately held, recorded so nobody adds a guess later. These are the
@@ -115,6 +142,11 @@ SUBSIDIARY_OVERRIDES: Dict[str, str] = {
 def _normalize(name: str, *, political: bool = False) -> str:
     """Reduce a company name to a comparable key."""
     text = _STATE_MARKER.sub(" ", name or "")
+    if political:
+        previous = None
+        while previous != text:
+            previous = text
+            text = _TRAILING_ALIAS.sub("", text).strip()
     text = _PUNCT.sub(" ", text.lower())
     if political:
         text = _PAC_NOISE.sub(" ", text)
@@ -188,13 +220,13 @@ class TickerResolver:
         for key in keys:
             if not key:
                 continue
-            ticker = self._lookup(key)
+            ticker = self._lookup(key, min_prefix_words=1 if political else 2)
             if ticker is not None:
                 return ticker or None
 
         return None
 
-    def _lookup(self, key: str) -> str | None:
+    def _lookup(self, key: str, *, min_prefix_words: int = 2) -> str | None:
         """Resolve one normalized key. Returns "" for a known-private match.
 
         The empty string and None are different answers: "" means an override
@@ -212,11 +244,39 @@ class TickerResolver:
         # other way round: "Archer Aviation" vs "Archer Aviation Inc.". Anchored
         # on a space so this stays a word-boundary rule -- an unanchored
         # substring test would resolve "Catering Services" to Caterpillar.
+        #
+        # How long a prefix has to be before it counts as identification rather
+        # than coincidence depends on what is being matched, and the difference
+        # is structural rather than a tuning knob.
+        #
+        # A *company* name is the whole identity, so extra words mean a
+        # different company: "UNIVERSAL CORP" indexes as "universal", and a
+        # one-word rule hands Universal Synaptics and Fermi Research Alliance to
+        # unrelated issuers. Two words is the line -- which still keeps
+        # "northrop grumman" -> Northrop Grumman Systems, the case this rule
+        # exists for. Operating subsidiaries that a one-word prefix would have
+        # caught are listed in SUBSIDIARY_OVERRIDES instead, where each is a
+        # reviewable assertion rather than a guess.
+        #
+        # A *PAC* name is the company name plus committee boilerplate by
+        # construction, so the trailing words are noise and one word is enough.
+        # Requiring two costs 187 of 1,675 corporate PACs -- Aflac, Airbnb,
+        # Altria, Broadcom -- for no correctness gain.
+        #
+        # The longest match wins rather than the first, so a more specific
+        # registered name is never shadowed by a shorter one it contains.
+        best: str | None = None
+        best_length = 0
         for indexed, ticker in self._index.items():
-            if key.startswith(f"{indexed} ") or indexed.startswith(f"{key} "):
-                return ticker
+            length = len(indexed)
+            if length <= best_length:
+                continue
+            if min_prefix_words <= indexed.count(" ") + 1 and key.startswith(f"{indexed} "):
+                best, best_length = ticker, length
+            elif min_prefix_words <= key.count(" ") + 1 and indexed.startswith(f"{key} "):
+                best, best_length = ticker, length
 
-        return None
+        return best
 
     def name_for(self, ticker: str) -> str | None:
         """The registered company name for a ticker, or None.

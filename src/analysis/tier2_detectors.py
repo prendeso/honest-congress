@@ -1,4 +1,4 @@
-"""Tier-2 detectors driven by QuiverQuant donors / lobbying / contracts data.
+"""Tier-2 detectors driven by donor / lobbying / contract trigger events.
 
 Three independent detectors, each scanning the ``transactions`` table for
 trades that fall inside a suspicious time window relative to a *trigger
@@ -12,6 +12,12 @@ event* (a donation, a lobbying filing, or a federal contract award).
 * **Contract front-run**: member purchased a stock within
   ``contract_window_days`` *before* the company was awarded a federal
   contract — the directional case is the strongest insider signal.
+
+Their feeds are :mod:`src.ingestion.fec`, :mod:`src.ingestion.lda` and
+:mod:`src.ingestion.usaspending` -- all official, public-domain sources. All
+three publish company *names*, so the tickers these detectors join on come from
+:mod:`src.ingestion.sec_tickers`, and coverage there bounds what any of this can
+find. `detectors_without_source_data` reports a table nothing has filled.
 
 All three return list-of-dict anomalies in the same shape as the existing
 detectors so :func:`src.analysis.persist_anomalies` handles persistence.

@@ -43,9 +43,36 @@ python -m src.cli ingest -y 2024 2025
 python -m src.cli download-pdfs      # fetch filing PDFs
 python -m src.cli parse              # PDFs -> transactions / assets
 python -m src.cli sync-committees    # committee assignments (free, no key)
+
+# Tier-2 trigger events. Run these AFTER `parse`: the FEC and LDA ingesters
+# start from the tickers members have actually traded, so with an empty
+# transactions table they have nothing to look up.
+python -m src.cli ingest-contracts   # USASpending (free, no key)
+python -m src.cli ingest-donations   # FEC (free key: api.data.gov/signup)
+python -m src.cli ingest-lobbying    # Senate LDA (key optional)
+
 python -m src.cli analyze
+python -m src.cli stats              # what ran, and against how much data
 python -m src.cli serve              # http://localhost:8000
 ```
+
+### Data sources
+
+Everything is an official, public-domain source. There is no licensed vendor
+anywhere in the pipeline, which is what makes the output redistributable.
+
+| Source | Feeds | Key |
+|---|---|---|
+| House Clerk bulk XML + PDFs | disclosures, transactions | none |
+| `unitedstates/congress-legislators` | roster, committees, FEC candidate IDs | none |
+| SEC `company_tickers.json` | company name -> ticker | none, but a contact email in `SEC_CONTACT_EMAIL` (SEC returns 403 without one) |
+| USASpending | `government_contracts` | none |
+| FEC | `campaign_donations` | free, [api.data.gov](https://api.data.gov/signup/) — 1,000 requests/hour |
+| Senate LDA | `lobbying_disclosures` | optional, [lda.senate.gov](https://lda.senate.gov/api/register/) — raises ~15 req/min to ~120 |
+
+`ingest-donations` costs more requests than one FEC hour allows, so it caps
+itself and resumes: rerunning skips the PACs already stored. Pass
+`--max-requests` to cap it explicitly.
 
 `/health` returns 503 if the database is unreachable; `/health/live`
 always returns 200 and is intended for liveness probes.
@@ -173,7 +200,12 @@ python -m src.cli reset --yes --purge-pdfs   # also delete data/disclosures/
 
 Downloaded PDFs are kept by default — re-fetching thousands of files is slow
 and hard on House Clerk. After a reset, rebuild with the Quickstart sequence
-above.
+above, in that order: the Tier-2 ingesters read the transactions table to
+decide what to fetch, so running them before `parse` fetches nothing.
+
+`stats` is the check that the rebuild worked. It names any detector whose
+source table is empty, which is the difference between "found nothing" and
+"never ran".
 
 ## Development
 

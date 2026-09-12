@@ -191,7 +191,7 @@ async def full_data_refresh(
                 # Trades are not fetched here. They arrive through
                 # `cli ingest` -> `cli download-pdfs` -> `cli parse`, which
                 # reads House Clerk filings directly; there is no trade API to
-                # call since QuiverQuant was dropped.
+                # call.
                 results["committees"] = ingest_committee_assignments(sync_db)
 
                 with sync_lock:
@@ -225,11 +225,11 @@ async def full_data_refresh(
                 advanced_result = run_advanced_anomaly_detection(sync_db)
                 extended_result = run_extended_anomaly_detection(sync_db, advanced_result)
                 # Tier-2 detectors are no-ops while their tables are empty.
-                # Nothing populates them since QuiverQuant was dropped; the
-                # FEC, Senate LDA and USASpending ingesters that will feed them
-                # are not built yet. `cli stats` reports which detectors have no
-                # source data, so an empty result is distinguishable from a
-                # clean one.
+                # Their feeds are separate commands -- `cli ingest-contracts`,
+                # `ingest-donations`, `ingest-lobbying` -- because each is rate
+                # limited and none belongs inside a web request. `cli stats`
+                # reports which detectors have no source data, so an empty
+                # result stays distinguishable from a clean one.
                 tier2_result = run_tier2_detection(sync_db)
 
                 results["anomalies"] = {

@@ -41,17 +41,18 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import deque
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Callable, Deque, Dict, Iterator, List, Set, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Set, Tuple
 
 import requests
 from sqlalchemy.orm import Session
 
-from src.db.models import CampaignDonation, Member, Transaction
+from src.db.models import CampaignDonation, Member
+from src.ingestion._helpers import traded_tickers
 from src.ingestion.committees import BASE_URL as LEGISLATORS_BASE_URL
 from src.ingestion.committees import _fetch_yaml
+from src.ingestion.rate_limit import HOUR, RateLimiter
 from src.ingestion.sec_tickers import TickerResolver
 
 logger = logging.getLogger(__name__)
@@ -84,42 +85,6 @@ class RequestBudgetExhausted(RuntimeError):
     """
 
 
-class RateLimiter:
-    """Rolling-window limiter matching how api.data.gov actually counts.
-
-    The quota is requests *per hour*, not a rate, so bursting is allowed and
-    only the request that would cross the line has to wait. A fixed delay
-    between calls would make a 200-request run take 13 minutes for no reason.
-    """
-
-    def __init__(
-        self,
-        requests_per_hour: int = DEFAULT_REQUESTS_PER_HOUR,
-        *,
-        clock: Callable[[], float] = time.monotonic,
-        sleeper: Callable[[float], None] = time.sleep,
-    ):
-        self.requests_per_hour = requests_per_hour
-        self._clock = clock
-        self._sleeper = sleeper
-        self._times: Deque[float] = deque()
-
-    def acquire(self) -> None:
-        now = self._clock()
-        while self._times and now - self._times[0] >= 3600:
-            self._times.popleft()
-
-        if len(self._times) >= self.requests_per_hour:
-            wait = 3600 - (now - self._times[0])
-            logger.warning("FEC hourly quota reached; waiting %.0fs", wait)
-            self._sleeper(wait)
-            now = self._clock()
-            while self._times and now - self._times[0] >= 3600:
-                self._times.popleft()
-
-        self._times.append(now)
-
-
 class FECClient:
     """Thin FEC API client with a request budget and 429 handling."""
 
@@ -144,7 +109,9 @@ class FECClient:
         self.requests_made = 0
         self._sleeper = sleeper
         self._backoff = backoff_seconds
-        self._limiter = RateLimiter(requests_per_hour, clock=clock, sleeper=sleeper)
+        self._limiter = RateLimiter(
+            requests_per_hour, HOUR, name="FEC", clock=clock, sleeper=sleeper
+        )
 
     def get(self, path: str, params: Dict[str, Any]) -> Dict[str, Any]:
         if self.max_requests is not None and self.requests_made >= self.max_requests:
@@ -281,12 +248,6 @@ def principal_committees(client: FECClient, candidate_ids: List[str]) -> Dict[st
 
     logger.info("Mapped %d principal campaign committees", len(mapping))
     return mapping
-
-
-def traded_tickers(db: Session) -> Set[str]:
-    """Tickers that appear in at least one disclosed transaction."""
-    rows = db.query(Transaction.ticker).filter(Transaction.ticker.isnot(None)).distinct().all()
-    return {(t[0] or "").strip().upper() for t in rows if (t[0] or "").strip()}
 
 
 def corporate_pacs(

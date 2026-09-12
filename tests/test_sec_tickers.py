@@ -151,6 +151,44 @@ def test_private_override_is_not_undone_by_the_fallback_pass(resolver):
     assert resolver.resolve("BLUE ORIGIN FEDERAL PAC", political=True) is None
 
 
+def test_a_one_word_registered_name_does_not_claim_everything_after_it(resolver):
+    # "UNIVERSAL CORP" indexes as "universal". Universal Synaptics is a
+    # different company, and attributing its filings to a Virginia tobacco
+    # issuer would put a wrong company name next to a real member's trades.
+    assert resolver.resolve("UNIVERSAL CORPORATION") == "UVV"
+    assert resolver.resolve("UNIVERSAL SYNAPTICS CORPORATION") is None
+    assert resolver.resolve("CATERPILLAR DEALERS ASSOCIATION") is None
+
+
+def test_a_two_word_prefix_still_reaches_the_operating_subsidiary(resolver):
+    # This is the case the prefix rule exists for, and it survives the
+    # strictness: two words is enough to identify, one is not.
+    assert resolver.resolve("NORTHROP GRUMMAN SYSTEMS CORPORATION") == "NOC"
+
+
+def test_pac_names_may_match_on_one_word(resolver):
+    # A PAC name is the company name plus committee boilerplate by
+    # construction, so the trailing words are noise rather than identity.
+    # Requiring two words costs 187 of the 1,675 real corporate PACs.
+    assert resolver.resolve("CATERPILLAR COMMITTEE FOR BETTER GOVERNMENT") is None
+    assert resolver.resolve("CATERPILLAR COMMITTEE FOR BETTER GOVERNMENT", political=True) == "CAT"
+
+
+def test_a_pac_alias_in_parentheses_is_dropped(resolver):
+    # Real names repeat themselves: "AFLAC POLITICAL ACTION COMMITTEE
+    # (AFLAC PAC)". Left in, the company name appears twice and matches
+    # nothing; stripping it recovers 84 PACs on its own.
+    assert resolver.resolve("CATERPILLAR INC. PAC (CATPAC)", political=True) == "CAT"
+    assert resolver.resolve("3M COMPANY PAC (3M PAC)", political=True) == "MMM"
+
+
+def test_the_longest_matching_registered_name_wins(resolver):
+    # Both "boeing" and "caterpillar" are registered one-word names; a more
+    # specific registered name must never be shadowed by a shorter one it
+    # contains.
+    assert resolver.resolve("LOCKHEED MARTIN CORPORATION SPACE SYSTEMS") == "LMT"
+
+
 def test_prefix_match_respects_word_boundaries(resolver):
     # "CAT" is Caterpillar. A substring rule would have "CATERING SERVICES"
     # or "CATALYST PHARMA" resolve to it; the space-anchored prefix does not.
@@ -176,3 +214,11 @@ def test_normalize_collapses_legal_forms():
     assert _normalize("Lockheed Martin Corporation") == _normalize("LOCKHEED MARTIN CORP")
     assert _normalize("The TJX Companies, Inc.") == _normalize("TJX Companies")
     assert _normalize("PROGRESSIVE CORP/OH/") == "progressive"
+
+
+def test_normalize_only_strips_the_alias_for_political_names():
+    # A parenthetical is boilerplate on a PAC and can be real on a company
+    # ("THE BOEING COMPANY (F.N.A. AURORA FLIGHT SCIENCES)" is still Boeing,
+    # but the filing name is what the LDA matched on).
+    assert _normalize("AFLAC PAC (AFLAC POLITICAL ACTION COMMITTEE)", political=True) == "aflac"
+    assert "aurora" in _normalize("BOEING (F.N.A. AURORA FLIGHT SCIENCES)")

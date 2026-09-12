@@ -474,6 +474,37 @@ def cmd_ingest_donations(args):
         )
 
 
+def cmd_ingest_lobbying(args):
+    """Ingest lobbying disclosures from the Senate LDA."""
+    from src.config import get_settings
+    from src.ingestion.lda import ingest_lobbying_disclosures
+
+    api_key = get_settings().lda_api_key
+    if not api_key:
+        print(
+            "No LDA_API_KEY set - running anonymously at a lower rate limit. "
+            "A free key from https://lda.senate.gov/api/register/ makes this ~8x faster."
+        )
+
+    print(f"Ingesting {args.year} lobbying disclosures for companies members have traded...")
+
+    with get_db() as db:
+        result = ingest_lobbying_disclosures(
+            db, filing_year=args.year, api_key=api_key, tickers=args.tickers
+        )
+
+    print("\nLobbying ingestion complete:")
+    print(f"  Tickers queried: {result['tickers_queried']}")
+    print(f"  Tickers not in the SEC register: {result['tickers_without_a_registered_name']}")
+    print(f"  Imported: {result['imported']}")
+    print(f"  Already present: {result['duplicates']}")
+    print(
+        f"  Rejected as a different company: {result['rejected_wrong_company']}"
+        "  - the API matches client names by substring"
+    )
+    print(f"  LDA requests used: {result['requests_made']}")
+
+
 def cmd_compliance(args):
     """Rank members by STOCK Act filing punctuality."""
     from src.analysis.compliance import compliance_leaderboard
@@ -871,6 +902,21 @@ def main():
         help="Re-scan PACs already stored for this cycle (use after filings are amended)",
     )
     donations_parser.set_defaults(func=cmd_ingest_donations)
+
+    lobbying_parser = subparsers.add_parser(
+        "ingest-lobbying",
+        help="Ingest lobbying disclosures from the Senate LDA (key optional)",
+    )
+    lobbying_parser.add_argument(
+        "--year", type=int, default=2024, help="Filing year (default: 2024)"
+    )
+    lobbying_parser.add_argument(
+        "--tickers",
+        nargs="+",
+        default=None,
+        help="Limit to these tickers (default: every ticker members have traded)",
+    )
+    lobbying_parser.set_defaults(func=cmd_ingest_lobbying)
 
     # Compliance command
     compliance_parser = subparsers.add_parser(

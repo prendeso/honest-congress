@@ -1,0 +1,294 @@
+{
+ "count": 12,
+ "next": null,
+ "results": [
+  {
+   "filing_uuid": "e86e3a7b-080a-468b-a8c3-25dd82b87f19",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-16T12:02:02-04:00",
+   "registrant": {
+    "name": "BROWNSTEIN HYATT FARBER SCHRECK, LLP"
+   },
+   "client": {
+    "name": "UNIVERSAL CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "TAX"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "e1fdd97b-188c-4e6a-afc0-6b022cefa20a",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-16T16:27:52-04:00",
+   "registrant": {
+    "name": "THE SMITH-FREE GROUP, LLC"
+   },
+   "client": {
+    "name": "UNIVERSAL CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "AGR"
+    },
+    {
+     "general_issue_code": "LBR"
+    },
+    {
+     "general_issue_code": "TAX"
+    },
+    {
+     "general_issue_code": "TOB"
+    },
+    {
+     "general_issue_code": "TRD"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "c2ccb294-5b4b-4775-8f93-f703d534234d",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "20000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-21T15:21:35-04:00",
+   "registrant": {
+    "name": "CAPEDC ADVISORS, LLC"
+   },
+   "client": {
+    "name": "UNIVERSAL SYNAPTICS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "2e0440c1-9b59-426a-a70f-35b58445415c",
+   "filing_type": "Q2",
+   "filing_type_display": "2nd Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2024-07-11T11:36:48-04:00",
+   "registrant": {
+    "name": "THE SMITH-FREE GROUP, LLC"
+   },
+   "client": {
+    "name": "UNIVERSAL CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "AGR"
+    },
+    {
+     "general_issue_code": "LBR"
+    },
+    {
+     "general_issue_code": "TAX"
+    },
+    {
+     "general_issue_code": "TOB"
+    },
+    {
+     "general_issue_code": "TRD"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "4ad13115-c421-458b-842e-a9f111d0a4f9",
+   "filing_type": "Q2",
+   "filing_type_display": "2nd Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2024-07-14T15:20:11-04:00",
+   "registrant": {
+    "name": "BROWNSTEIN HYATT FARBER SCHRECK, LLP"
+   },
+   "client": {
+    "name": "UNIVERSAL CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "TAX"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "d195d0a0-f0a0-4e62-9885-d219f5bfe44f",
+   "filing_type": "Q2",
+   "filing_type_display": "2nd Quarter - Report",
+   "filing_year": 2024,
+   "income": "20000.00",
+   "expenses": null,
+   "dt_posted": "2024-07-20T12:03:31-04:00",
+   "registrant": {
+    "name": "CAPEDC ADVISORS, LLC"
+   },
+   "client": {
+    "name": "UNIVERSAL SYNAPTICS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "63a0b7da-47ad-4031-b7d4-76cfee3566bc",
+   "filing_type": "Q3",
+   "filing_type_display": "3rd Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2024-10-15T17:30:56-04:00",
+   "registrant": {
+    "name": "BROWNSTEIN HYATT FARBER SCHRECK, LLP"
+   },
+   "client": {
+    "name": "UNIVERSAL CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "TAX"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "98fb9f8e-a20d-4ede-aebd-679a0f480b51",
+   "filing_type": "Q3",
+   "filing_type_display": "3rd Quarter - Report",
+   "filing_year": 2024,
+   "income": "20000.00",
+   "expenses": null,
+   "dt_posted": "2024-10-16T13:06:03-04:00",
+   "registrant": {
+    "name": "CAPEDC ADVISORS, LLC"
+   },
+   "client": {
+    "name": "UNIVERSAL SYNAPTICS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "d173913f-96d3-4265-b54c-3b65b076a434",
+   "filing_type": "Q3",
+   "filing_type_display": "3rd Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2024-10-21T08:29:26-04:00",
+   "registrant": {
+    "name": "THE SMITH-FREE GROUP, LLC"
+   },
+   "client": {
+    "name": "UNIVERSAL CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "AGR"
+    },
+    {
+     "general_issue_code": "LBR"
+    },
+    {
+     "general_issue_code": "TAX"
+    },
+    {
+     "general_issue_code": "TOB"
+    },
+    {
+     "general_issue_code": "TRD"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "411d6236-9b7c-40d6-a344-5be8cefdd95b",
+   "filing_type": "4T",
+   "filing_type_display": "4th Quarter - Termination",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2025-01-17T17:31:47-05:00",
+   "registrant": {
+    "name": "BROWNSTEIN HYATT FARBER SCHRECK, LLP"
+   },
+   "client": {
+    "name": "UNIVERSAL CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "TAX"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "a6a209a6-c155-4322-a28f-9fa3aae8b5ba",
+   "filing_type": "Q4",
+   "filing_type_display": "4th Quarter - Report",
+   "filing_year": 2024,
+   "income": "20000.00",
+   "expenses": null,
+   "dt_posted": "2025-01-20T08:34:11-05:00",
+   "registrant": {
+    "name": "CAPEDC ADVISORS, LLC"
+   },
+   "client": {
+    "name": "UNIVERSAL SYNAPTICS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "41304df7-c858-4724-a01e-f7bcd5a9c2c1",
+   "filing_type": "Q4",
+   "filing_type_display": "4th Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2025-01-21T11:43:22-05:00",
+   "registrant": {
+    "name": "THE SMITH-FREE GROUP, LLC"
+   },
+   "client": {
+    "name": "UNIVERSAL CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "AGR"
+    },
+    {
+     "general_issue_code": "LBR"
+    },
+    {
+     "general_issue_code": "TAX"
+    },
+    {
+     "general_issue_code": "TOB"
+    },
+    {
+     "general_issue_code": "TRD"
+    }
+   ]
+  }
+ ]
+}

@@ -481,7 +481,7 @@
 
                 async loadAnomalies() {
                     try {
-                        let url = `/api/anomalies?page=${this.anomalyPage}&page_size=20`;
+                        let url = `/api/anomalies/?page=${this.anomalyPage}&page_size=20`;
                         if (this.anomalyTypeFilter) url += `&anomaly_type=${this.anomalyTypeFilter}`;
                         if (this.severityFilter) url += `&severity=${this.severityFilter}`;
                         // The members page links here as `/anomalies?member_id=N`.

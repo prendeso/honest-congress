@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.analysis.anomaly_key import find_existing, identity_of
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
 from src.db.models import Anomaly, Disclosure, Member, Transaction
@@ -449,6 +450,7 @@ class TradeAnalyzer:
         all_anomalies = []
         members_analyzed = 0
         members_with_anomalies = 0
+        seen: set[tuple] = set()
 
         self._sync_large_trade_anomalies(db)
 
@@ -460,45 +462,34 @@ class TradeAnalyzer:
                 members_with_anomalies += 1
 
                 for anomaly in anomalies:
-                    # Check if this anomaly already exists
-                    # For large_trade, check by transaction_id to ensure each transaction is unique
-                    # For others, check by title within the same disclosure
-                    if anomaly.get("transaction_id"):
-                        existing = (
-                            db.query(Anomaly)
-                            .filter(
-                                Anomaly.member_id == anomaly["member_id"],
-                                Anomaly.anomaly_type == anomaly["anomaly_type"],
-                                Anomaly.transaction_id == anomaly["transaction_id"],
-                            )
-                            .first()
-                        )
+                    # One definition of "the same finding", shared with the
+                    # other writers and mirrored by the unique indexes:
+                    # src/analysis/anomaly_key.py. A finding about a trade is
+                    # keyed by the trade; one about the member, by its title.
+                    #
+                    # The member-level branch used to key on disclosure_id as
+                    # well, which the schema has no way to enforce: the same
+                    # monthly trading-frequency finding can be attributed to two
+                    # different disclosures, and both rows passed this check and
+                    # then collided in the database.
+                    key = identity_of(anomaly)
+                    if key is None or key in seen:
+                        continue
 
-                        if existing:
-                            if (
-                                existing.title != anomaly["title"]
-                                or existing.description != anomaly["description"]
-                                or existing.disclosure_id != anomaly.get("disclosure_id")
-                            ):
-                                existing.title = anomaly["title"]
-                                existing.description = anomaly["description"]
-                                existing.disclosure_id = anomaly.get("disclosure_id")
-                            continue
-                    else:
-                        existing = (
-                            db.query(Anomaly)
-                            .filter(
-                                Anomaly.member_id == anomaly["member_id"],
-                                Anomaly.anomaly_type == anomaly["anomaly_type"],
-                                Anomaly.disclosure_id == anomaly.get("disclosure_id"),
-                                Anomaly.title == anomaly["title"],
-                            )
-                            .first()
-                        )
-
-                        if existing:
-                            # Skip duplicate
-                            continue
+                    existing = find_existing(db, key)
+                    if existing is not None:
+                        # A trade-level finding is allowed to be restated: the
+                        # trade is the same, so the row is updated in place
+                        # rather than duplicated.
+                        if (
+                            existing.title != anomaly["title"]
+                            or existing.description != anomaly["description"]
+                            or existing.disclosure_id != anomaly.get("disclosure_id")
+                        ):
+                            existing.title = anomaly["title"]
+                            existing.description = anomaly["description"]
+                            existing.disclosure_id = anomaly.get("disclosure_id")
+                        continue
 
                     # These two analyzers build Anomaly() directly instead of
                     # going through persist_anomalies(), so the disabled-type
@@ -519,6 +510,9 @@ class TradeAnalyzer:
                         threshold_value=anomaly.get("threshold_value"),
                     )
                     db.add(db_anomaly)
+                    # The query above is blind to rows added earlier in this
+                    # loop: SessionLocal is autoflush=False.
+                    seen.add(key)
 
                     all_anomalies.append(
                         {

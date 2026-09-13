@@ -9,6 +9,7 @@ from src.analysis.advanced_anomaly_detector import (
     AdvancedAnomalyDetector,
     run_advanced_anomaly_detection,
 )
+from src.analysis.anomaly_key import find_existing, identity_of
 from src.analysis.clustering import (
     detect_cross_member_clusters,
     run_cluster_detection,
@@ -104,11 +105,12 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
 
     inserted = 0
     skipped_disabled = 0
-    # (member_id, anomaly_type, title) is now a unique index. The existence
-    # check below queries the database, which cannot see rows added earlier in
-    # this same batch and not yet flushed -- so track them here too, or a batch
-    # containing the same anomaly twice fails the whole commit.
-    seen: set[tuple[int, str, str]] = set()
+    # See src/analysis/anomaly_key.py for what counts as the same finding. The
+    # existence check below queries the database, which cannot see rows added
+    # earlier in this same batch and not yet flushed (SessionLocal is
+    # autoflush=False) -- so track them here too, or a batch containing the same
+    # anomaly twice fails the whole commit.
+    seen: set[tuple] = set()
     for a in anomalies:
         member_id = a.get("member_id")
         anomaly_type = a.get("anomaly_type")
@@ -126,20 +128,11 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
         severity = _normalize_severity(a.get("severity"))
         description = a.get("description") or title
 
-        key = (member_id, anomaly_type, title[:200])
-        if key in seen:
+        key = identity_of(a, title=title)
+        if key is None or key in seen:
             continue
 
-        existing = (
-            db.query(Anomaly)
-            .filter(
-                Anomaly.member_id == member_id,
-                Anomaly.anomaly_type == anomaly_type,
-                Anomaly.title == title,
-            )
-            .first()
-        )
-        if existing:
+        if find_existing(db, key) is not None:
             continue
 
         seen.add(key)

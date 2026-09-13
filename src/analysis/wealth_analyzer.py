@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from src.analysis.anomaly_key import find_existing, identity_of
 from src.config import get_settings
 from src.db import Anomaly, Asset, Disclosure, Liability, Member
 
@@ -163,6 +164,8 @@ class WealthAnalyzer:
         members_analyzed = 0
         members_with_anomalies = 0
 
+        seen: set[tuple] = set()
+
         for member in members:
             anomalies = self.analyze_member(db, member.id)
 
@@ -170,18 +173,17 @@ class WealthAnalyzer:
                 members_with_anomalies += 1
 
                 for anomaly in anomalies:
-                    # Check if this anomaly already exists
-                    existing = (
-                        db.query(Anomaly)
-                        .filter(
-                            Anomaly.member_id == anomaly["member_id"],
-                            Anomaly.anomaly_type == anomaly["anomaly_type"],
-                            Anomaly.title == anomaly["title"],
-                        )
-                        .first()
-                    )
+                    # What counts as the same finding lives in one place now:
+                    # src/analysis/anomaly_key.py, which the unique indexes
+                    # mirror. `seen` is the other half -- the query below cannot
+                    # see rows added earlier in this loop and not yet flushed
+                    # (SessionLocal is autoflush=False), so without it a batch
+                    # holding the same finding twice fails the whole commit.
+                    key = identity_of(anomaly)
+                    if key is None or key in seen:
+                        continue
 
-                    if existing:
+                    if find_existing(db, key) is not None:
                         # Skip duplicate
                         continue
 
@@ -203,6 +205,8 @@ class WealthAnalyzer:
                         threshold_value=anomaly.get("threshold_value"),
                     )
                     db.add(db_anomaly)
+                    seen.add(key)
+
                     all_anomalies.append(
                         {
                             **anomaly,

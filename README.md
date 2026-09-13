@@ -301,6 +301,7 @@ GET  /api/disclosures              paginated list with filters
 GET  /api/anomalies/               paginated anomalies (severity-ordered);
                                    ?min_percentile=N for the strongest findings
 GET  /api/anomalies/summary        counts by type / severity / party / chamber
+GET  /api/anomalies/types          what each detector looks for and cannot show
 GET  /api/anomalies/{id}           detail
 POST /api/anomalies/admin/login    issue token; required for mutating routes
 POST /api/anomalies/analyze        run full detector suite
@@ -309,8 +310,14 @@ GET  /api/insights                 dashboard hero stats
 GET  /api/compliance/              members ranked by STOCK Act filing punctuality
 GET  /api/compliance/{member_id}   one member's filing record
 GET  /api/compliance/opacity/      members ranked by disclosure legibility
+GET  /api/compliance/opacity/{id}  one member's legibility breakdown
 GET  /docs                         Swagger UI
 ```
+
+Filing punctuality and disclosure legibility are also a page at `/compliance`.
+They are the two least interpretive things here — one is the subtraction of two
+dates that both appear on the filing, the other counts what could not be read —
+and for a long time neither was reachable except through the API.
 
 Every response carries an `X-Request-ID` header (echoed if you supply one,
 otherwise auto-generated) so logs can be correlated.

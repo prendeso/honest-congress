@@ -72,6 +72,19 @@ async def anomalies_page(request: Request) -> HTMLResponse:
     return _render(request, "anomalies.html")
 
 
+@router.get("/compliance", response_class=HTMLResponse)
+async def compliance_page(request: Request) -> HTMLResponse:
+    """Filing lateness and disclosure legibility.
+
+    Both were reachable only through the API and the CLI. They are the two
+    least interpretive things the project computes -- one is the subtraction of
+    two dates that both appear on the filing, the other counts what could not
+    be read -- so they are also the two least arguable, and the site had no
+    page for either.
+    """
+    return _render(request, "compliance.html")
+
+
 # ---------------- insights JSON ----------------
 
 

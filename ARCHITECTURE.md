@@ -203,7 +203,7 @@ panel, inadequate for the metered API the project is heading toward.
 
 ### `src/templates/` — dashboard
 
-Seven Jinja pages, Tailwind and Alpine from CDN, no build step. Sorting,
+Eight Jinja pages, Tailwind and Alpine from CDN, no build step. Sorting,
 filtering and pagination are server-side.
 
 The pages hold no copy of anything the API knows. The anomalies page renders

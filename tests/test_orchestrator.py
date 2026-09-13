@@ -631,3 +631,104 @@ class TestOneUnstorableFilingDoesNotKillTheRun:
         }
         assert parsed["NUL-1"] is True
         assert parsed["NUL-3"] is True, "the filing queued after the bad one was never read"
+
+
+class TestFilingsWithNoMatchingMemberAreCounted:
+    """A filing whose filer matches no member is dropped. Silently, before this.
+
+    The lookup wants an exact last name, a first-name prefix, the chamber and
+    the state. On a miss the loop did `continue` behind a `logger.debug`, so
+    nothing counted it and nothing reported it -- and two very different things
+    looked identical from outside a run:
+
+      * a candidate report (FilingType "C") from somebody who is not in
+        Congress, correctly skipped
+      * an annual filing or a PTR from a sitting member whose name we failed to
+        match, which is a filing missing from the site
+
+    The House index for 2024 and 2025 holds 5,219 entries, 1,570 of them
+    candidate reports. Whether the remainder all landed was not answerable from
+    a run's output. These tests hold the counting open; they assert nothing
+    about which filings ought to match, which is a separate question that needs
+    these numbers first.
+    """
+
+    def _entry(self, last_name, filing_type="O", state="CA", doc_id="UM-1"):
+        return {
+            "first_name": "Nomatch",
+            "last_name": last_name,
+            "full_name": f"Nomatch {last_name}",
+            "state": state,
+            "district": "01",
+            "filing_type": filing_type,
+            "filing_date": datetime(2025, 5, 1),
+            "filing_year": 2025,
+            "document_id": doc_id,
+            "document_url": "https://example.invalid/x.pdf",
+            "chamber": "house",
+        }
+
+    def test_an_unmatched_annual_filing_is_counted_as_unexpected(self, db_session, tmp_path):
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        orch.house.fetch_annual_xml_index = lambda year: [  # type: ignore[method-assign]
+            self._entry("Ghost", filing_type="O", doc_id="UM-A")
+        ]
+
+        synced = orch.sync_house_disclosures(db_session, 2025)
+
+        assert synced == 0
+        assert orch.unmatched_filers == 1, "the dropped filing was not counted"
+
+    def test_a_candidate_report_is_counted_but_not_flagged(self, db_session, tmp_path):
+        """Candidates are not members. Missing them is the system working, and
+        reporting them as a problem would bury the real ones."""
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        orch.house.fetch_annual_xml_index = lambda year: [  # type: ignore[method-assign]
+            self._entry("Hopeful", filing_type="C", doc_id="UM-C")
+        ]
+
+        orch.sync_house_disclosures(db_session, 2025)
+
+        assert orch.unmatched_filers == 0, "a candidate report was reported as a lost filing"
+
+    def test_an_unmatched_ptr_always_counts(self, db_session, tmp_path):
+        """Every PTR in the index is a disclosed trade. There is no benign
+        class of miss here."""
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        orch.house.fetch_ptr_xml_index = lambda year: [  # type: ignore[method-assign]
+            {**self._entry("Ghost", filing_type="PTR", doc_id="UM-P"), "is_ptr": True}
+        ]
+
+        orch.sync_house_ptrs(db_session, 2025)
+
+        assert orch.unmatched_filers == 1
+
+    def test_a_filing_that_does_match_is_not_counted(self, db_session, tmp_path):
+        member = _make_member(db_session)
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        entry = self._entry(member.last_name, doc_id="UM-OK")
+        entry["first_name"] = member.first_name
+        entry["state"] = member.state
+        orch.house.fetch_annual_xml_index = lambda year: [entry]  # type: ignore[method-assign]
+
+        synced = orch.sync_house_disclosures(db_session, 2025)
+
+        assert synced == 1
+        assert orch.unmatched_filers == 0
+
+    def test_the_breakdown_names_the_filing_types(self, db_session, tmp_path, caplog):
+        """The count alone does not say whether it matters. The breakdown does."""
+        import logging
+
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        orch.house.fetch_annual_xml_index = lambda year: [  # type: ignore[method-assign]
+            self._entry("Hopeful", filing_type="C", doc_id="UM-C2"),
+            self._entry("Ghost", filing_type="O", doc_id="UM-O2"),
+        ]
+
+        with caplog.at_level(logging.WARNING, logger="src.ingestion.orchestrator"):
+            orch.sync_house_disclosures(db_session, 2025)
+
+        message = "\n".join(r.getMessage() for r in caplog.records)
+        assert "C=1" in message and "O=1" in message, message
+        assert orch.unmatched_filers == 1

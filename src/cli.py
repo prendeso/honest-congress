@@ -60,6 +60,16 @@ def cmd_ingest(args):
     print(f"  House PTRs (stock trades): {summary['house_ptrs']}")
     print(f"  Senate disclosures: {summary['senate_disclosures']}")
 
+    # Printed only when there is something to say, but never hidden. A filing
+    # whose filer matched no member is not stored and never reaches the site;
+    # before this it was dropped behind a debug log and nothing counted it.
+    unmatched = summary.get("unmatched_filers", 0)
+    if unmatched:
+        print(
+            f"  NOT stored — filer matched no member: {unmatched} "
+            "(see the warnings above for the breakdown by filing type)"
+        )
+
 
 def cmd_analyze(args):
     """Run anomaly analysis."""

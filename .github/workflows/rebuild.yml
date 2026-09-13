@@ -173,11 +173,22 @@ jobs:
       # all. Each is allowed to fail without stopping the run -- a throttled
       # FEC cycle must not block analysis of data already ingested -- and the
       # `stats` step at the end names anything left empty.
+      #
+      # Note the `|| 'contact@example.com'` on SEC_CONTACT_EMAIL below.
+      # `${{ secrets.X }}` for a secret that does not exist expands to the EMPTY
+      # STRING, and an empty value OVERRIDES a working default rather than
+      # leaving it in place. That is not hypothetical: it set the SEC User-Agent
+      # to "honest-congress " with no address, SEC answered 403, the ticker
+      # register came back empty, and every award and lobbying filing was then
+      # discarded as unresolvable. Both feeds need no API key whatsoever, and
+      # both sat dark while these steps reported success in about a second each.
+      # src/config.py absorbs a blank as well, so neither layer alone is
+      # load-bearing.
       - name: Ingest federal contract awards
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
-          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
         run: python -m src.cli ingest-contracts
 
       - name: Ingest corporate PAC donations
@@ -185,7 +196,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
-          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
         run: python -m src.cli ingest-donations --cycle 2024 --max-requests 800
 
       - name: Ingest lobbying disclosures
@@ -193,7 +204,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
-          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
         run: python -m src.cli ingest-lobbying --year 2024
 
       # Must precede analyze: three detectors join a bill or a committee remit
@@ -203,7 +214,7 @@ jobs:
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
-          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
         run: python -m src.cli sync-industries
 
       - name: Ingest bill sponsorship and committee referrals

@@ -73,7 +73,7 @@ jobs:
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
-          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
         run: python -m src.cli ingest-contracts
 
       # FEC allows 1,000 requests/hour and a full cycle costs more than that,
@@ -83,7 +83,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
-          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
         run: python -m src.cli ingest-donations --cycle 2024 --max-requests 800
 
       # LDA_API_KEY is optional: without it the ingester paces itself down to
@@ -93,7 +93,7 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
-          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
         run: python -m src.cli ingest-lobbying --year 2024
 
       # Sector classification for every traded ticker. Must run before analyze:
@@ -104,7 +104,7 @@ jobs:
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
-          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
         run: python -m src.cli sync-industries
 
       # The join to legislative action. `--sponsored-only` because cosponsorship

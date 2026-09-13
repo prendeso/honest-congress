@@ -486,3 +486,54 @@ class TestFdrFiltering:
         assert by_title["fdr-tested"]["q_value"] == pytest.approx(0.001)
         assert by_title["fdr-no-model"]["has_null_model"] is False
         assert by_title["fdr-no-model"]["q_value"] is None
+
+
+class TestParseConfidenceFiltering:
+    """`parsed` says the parser ran. The score says whether it worked."""
+
+    def _disclosure(self, db, document_id, confidence, warnings=None):
+        from src.db.models import Disclosure
+
+        db.add(
+            Disclosure(
+                member_id=db.query(Member).first().id,
+                filing_year=2024,
+                filing_type="PTR",
+                filing_date=datetime(2024, 6, 1),
+                document_id=document_id,
+                is_ptr=True,
+                parsed=True,
+                parse_confidence=confidence,
+                parse_warnings=warnings,
+            )
+        )
+        db.commit()
+
+    def test_the_response_carries_the_score_and_its_reasons(self, client, seeded_db):
+        self._disclosure(seeded_db, "CONF1", 0.75, "1 transaction(s) missing amount_min")
+
+        rows = {d["document_id"]: d for d in client.get("/api/disclosures/").json()["disclosures"]}
+        assert rows["CONF1"]["parse_confidence"] == pytest.approx(0.75)
+        assert "missing amount_min" in rows["CONF1"]["parse_warnings"]
+
+    def test_filtering_finds_the_filings_that_parsed_badly(self, client, seeded_db):
+        self._disclosure(seeded_db, "CONF_GOOD", 1.0)
+        self._disclosure(seeded_db, "CONF_BAD", 0.4)
+
+        ids = [
+            d["document_id"]
+            for d in client.get("/api/disclosures/?max_confidence=0.5").json()["disclosures"]
+        ]
+        assert "CONF_BAD" in ids
+        assert "CONF_GOOD" not in ids
+
+    def test_unscored_filings_are_not_treated_as_zero(self, client, seeded_db):
+        # Parsed before scoring existed. Including them would bury the real low
+        # scorers under filings nobody has looked at yet.
+        self._disclosure(seeded_db, "CONF_UNSCORED", None)
+
+        ids = [
+            d["document_id"]
+            for d in client.get("/api/disclosures/?max_confidence=0.5").json()["disclosures"]
+        ]
+        assert "CONF_UNSCORED" not in ids

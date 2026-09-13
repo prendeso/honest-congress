@@ -26,5 +26,14 @@
   ]
  ],
  "text": "Filing ID #20025152\nP\u0000\u0000\u0000\u0000\u0000\u0000\u0000 T\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 R\u0000\u0000\u0000\u0000\u0000\nClerk of the House of Representatives \u2022 Legislative Resource Center \u2022 B81 Cannon Building \u2022 Washington, DC 20515\nF\u0000\u0000\u0000\u0000 I\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nName: Hon. Doris O. Matsui\nStatus: Member\nState/District: CA07\nT\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nID Owner Asset Transaction Date Notification Amount Cap.\nType Date Gains >\n$200?\nSP Intrinsic Exchange Group, Inc. [OI] P 05/29/2024 05/29/2024 Spouse/DC Over\n$1,000,000\nF\u0000\u0000\u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000: New\nD\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000: The investment was made through a Simple Agreement for Future Equity (SAFE).\n* For the complete list of asset type abbreviations, please visit https://fd.house.gov/reference/asset-type-codes.aspx.\nI\u0000\u0000\u0000\u0000\u0000\u0000 P\u0000\u0000\u0000\u0000\u0000 O\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nYes No\nC\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000 \u0000\u0000\u0000 S\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\nI CERTIFY that the statements I have made on the attached Periodic Transaction Report are true, complete, and correct to the best of\nmy knowledge and belief. Further, I CERTIFY that I have disclosed all transactions as required by the STOCK Act.\nDigitally Signed: Hon. Doris O. Matsui , 06/04/2024",
- "expected_transactions": []
+ "expected_transactions": [
+  {
+   "date": "05/29/2024",
+   "notification": "05/29/2024",
+   "asset": "SP Intrinsic Exchange Group, Inc. [OI] P",
+   "type": "P",
+   "amount": "Over $1,000,000",
+   "recovered_from_collapsed_row": true
+  }
+ ]
 }

@@ -93,6 +93,11 @@ class DisclosureResponse(BaseModel):
     document_url: str | None
     parsed: bool
     is_ptr: bool = False
+    # How much of the document the parser read, 0-1. `parsed` only ever meant
+    # the parser ran without raising; this is what says whether it worked.
+    # Null means never scored, not scored and fine.
+    parse_confidence: float | None = None
+    parse_warnings: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -127,6 +132,18 @@ async def list_disclosures(
         "filing_date", description="Field to sort by: member_name, year, filing_date, status"
     ),
     sort_order: str | None = Query("desc", description="Sort order: asc or desc"),
+    max_confidence: float | None = Query(
+        None,
+        ge=0,
+        le=1,
+        description=(
+            "Only filings the parser read no better than this, 0-1. The useful "
+            "query is the low end: `parsed` says the parser ran, not that it "
+            "worked, so this is how you find the filings whose data is thin. "
+            "Filings with no score have never been scored, and are excluded "
+            "from this filter rather than assumed good."
+        ),
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db_session),
@@ -151,6 +168,15 @@ async def list_disclosures(
 
     if is_ptr is not None:
         query = query.filter(Disclosure.is_ptr == is_ptr)
+
+    if max_confidence is not None:
+        # `isnot(None)` deliberately: a filing parsed before scoring existed has
+        # no score, and treating that as 0 would bury the real low scorers in a
+        # list of filings nobody has looked at yet.
+        query = query.filter(
+            Disclosure.parse_confidence.isnot(None),
+            Disclosure.parse_confidence <= max_confidence,
+        )
 
     # Get total count
     total = query.count()
@@ -196,6 +222,8 @@ async def list_disclosures(
                 document_url=_normalized_document_url(d),
                 parsed=d.parsed,
                 is_ptr=d.is_ptr,
+                parse_confidence=d.parse_confidence,
+                parse_warnings=d.parse_warnings,
             )
             for d in disclosures
         ],
@@ -238,6 +266,8 @@ async def get_disclosure(
         document_id=disclosure.document_id,
         document_url=_normalized_document_url(disclosure),
         parsed=disclosure.parsed,
+        parse_confidence=disclosure.parse_confidence,
+        parse_warnings=disclosure.parse_warnings,
         total_assets_min=total_min,
         total_assets_max=total_max,
         assets=[

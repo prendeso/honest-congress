@@ -17,6 +17,7 @@ from src.ingestion.congress_gov import CongressGovClient
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 from src.ingestion.house import HouseIngester
 from src.ingestion.senate import SenateIngester, SenatePTRIngester
+from src.parsing.confidence import score_fd_parse, score_ptr_parse
 from src.parsing.pdf_parser import DisclosureParser
 from src.parsing.ptr_parser import PTRParser
 
@@ -528,19 +529,44 @@ class IngestionOrchestrator:
             if disclosure.is_ptr:
                 parsed = self.ptr_parser.parse_ptr(str(pdf_path))
                 self._store_ptr_data(db, disclosure, parsed)
+                score = score_ptr_parse(
+                    parsed.get("quality") or {},
+                    parsed.get("transactions") or [],
+                    disclosure.filing_date,
+                )
             else:
                 parsed = self.disclosure_parser.parse_pdf(str(pdf_path))
                 self._store_fd_data(db, disclosure, parsed)
+                score = score_fd_parse(
+                    bool(
+                        parsed.get("raw_text") or parsed.get("assets") or parsed.get("liabilities")
+                    ),
+                    len(parsed.get("assets") or []),
+                    len(parsed.get("liabilities") or []),
+                    parsed.get("parse_errors") or [],
+                )
 
-            # Mark as parsed
+            # `parsed` means the parser ran, which is all it has ever meant. The
+            # score is what says whether it worked.
             disclosure.parsed = True
             disclosure.parse_error = None
+            disclosure.parse_confidence = score.confidence
+            disclosure.parse_warnings = score.summary
 
             if parsed.get("parse_errors"):
                 disclosure.parse_error = "; ".join(parsed["parse_errors"])
+            elif score.confidence == 0.0:
+                # A filing that yielded nothing used to be recorded as a clean
+                # success. Put it where the existing "needs attention" query
+                # already looks.
+                disclosure.parse_error = score.summary or "Parser extracted nothing"
 
             db.commit()
-            logger.info(f"Parsed disclosure {disclosure.document_id}")
+            logger.info(
+                "Parsed disclosure %s (confidence %.2f)",
+                disclosure.document_id,
+                score.confidence,
+            )
             return True
 
         except Exception as e:
@@ -654,6 +680,7 @@ class IngestionOrchestrator:
         ptr_only: bool = False,
         reparse: bool = False,
         failed_only: bool = False,
+        min_confidence: float | None = None,
         delay: float = 1.0,
     ) -> Dict[str, int]:
         """
@@ -667,6 +694,7 @@ class IngestionOrchestrator:
             ptr_only: Only parse PTR disclosures
             reparse: Re-parse already parsed disclosures
             failed_only: Only retry disclosures that failed to download
+            min_confidence: Re-parse filings the parser read worse than this
             delay: Delay between downloads (seconds)
 
         Returns:
@@ -679,6 +707,16 @@ class IngestionOrchestrator:
                 or_(
                     Disclosure.parse_error.ilike("%Failed to download%"),
                     Disclosure.parse_error.ilike("%404%"),
+                )
+            )
+        elif min_confidence is not None:
+            # Re-read the filings the parser did badly on. Unscored filings are
+            # included: they were parsed before scoring existed, so nobody knows
+            # how well they were read.
+            query = query.filter(
+                or_(
+                    Disclosure.parse_confidence.is_(None),
+                    Disclosure.parse_confidence < min_confidence,
                 )
             )
         elif not reparse:

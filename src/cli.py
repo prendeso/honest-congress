@@ -304,6 +304,7 @@ def cmd_parse(args):
             ptr_only=args.ptr_only,
             reparse=args.reparse,
             failed_only=args.failed_only,
+            min_confidence=args.min_confidence,
             delay=args.delay,
         )
 
@@ -311,6 +312,18 @@ def cmd_parse(args):
     print(f"  Successfully parsed: {result['parsed']}")
     print(f"  Failed: {result['failed']}")
     print(f"  Skipped: {result['skipped']}")
+
+    from src.analysis.baselines import parse_quality_summary
+
+    with get_db() as db:
+        quality = parse_quality_summary(db)
+    print("\nHow well they were read:")
+    print(f"  Mean confidence: {quality['mean_confidence']}")
+    print(f"  Below 0.8: {quality['filings_below_0_8']}")
+    print(
+        f"  Yielded nothing at all: {quality['filings_that_yielded_nothing']}"
+        "  - a PTR with no transactions is a failed parse, not a quiet quarter"
+    )
 
 
 def cmd_download_pdfs(args):
@@ -932,6 +945,15 @@ def main():
     )
     parse_parser.add_argument(
         "--reparse", action="store_true", help="Re-parse already parsed disclosures"
+    )
+    parse_parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        help=(
+            "Re-parse filings the parser read worse than this (0-1), and filings "
+            "never scored at all. Use after improving the parser."
+        ),
     )
     parse_parser.add_argument(
         "--delay", type=float, default=1.0, help="Delay between downloads in seconds (default: 1.0)"

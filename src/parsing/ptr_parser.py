@@ -2,6 +2,7 @@
 
 import logging
 import re
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Tuple
@@ -22,6 +23,11 @@ PTR_VALUE_RANGES = {
     "$5,000,001 - $25,000,000": (5000001, 25000000),
     "$25,000,001 - $50,000,000": (25000001, 50000000),
     "Over $50,000,000": (50000001, None),
+    # The top band on a spouse or dependent-child line: the form stops
+    # itemising above $1M. Missing from this table, it fell through to the
+    # generic path and came out as exactly $1,000,000 -- a precise figure the
+    # filing never gave.
+    "Over $1,000,000": (1000001, None),
 }
 
 # Transaction type keywords
@@ -104,6 +110,27 @@ NON_TICKERS = {
 }
 
 
+@dataclass
+class ParseQuality:
+    """What the parser actually managed on one document.
+
+    Counted rather than judged: `rows_detected` includes rows that produced
+    nothing, so a dropped row lowers the score by arithmetic instead of by a
+    rule somebody has to remember to write.
+    """
+
+    rows_detected: int = 0
+    rows_parsed: int = 0
+    rows_recovered: int = 0
+    text_extracted: bool = False
+    tables_found: bool = False
+    headers_recognised: bool = False
+    used_text_fallback: bool = False
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 class PTRParser:
     """Parser specifically designed for PTR (Periodic Transaction Report) PDFs."""
 
@@ -127,11 +154,13 @@ class PTRParser:
         Returns:
             Dict with transactions and any parse errors
         """
-        result = {
+        quality = ParseQuality()
+        result: Dict[str, Any] = {
             "transactions": [],
             "filer_info": {},
             "filing_date": None,
             "parse_errors": [],
+            "quality": quality.as_dict(),
         }
 
         try:
@@ -151,19 +180,30 @@ class PTRParser:
                 result["filer_info"] = self._extract_filer_info(all_text)
                 result["filing_date"] = self._extract_filing_date(all_text)
 
+                quality.text_extracted = bool(all_text.strip())
+                quality.tables_found = bool(all_tables)
+
                 # Try to parse from tables first (most reliable)
                 if all_tables:
-                    result["transactions"] = self._parse_tables(all_tables)
+                    result["transactions"] = self._parse_tables(all_tables, quality)
 
                 # Fall back to text parsing if no tables found
                 if not result["transactions"]:
-                    result["transactions"] = self._parse_text(all_text)
+                    quality.used_text_fallback = True
+                    text_rows = self._parse_text(all_text)
+                    result["transactions"] = text_rows
+                    # The text path has no notion of a candidate row, so the
+                    # only honest denominator is what it produced.
+                    quality.rows_detected = max(quality.rows_detected, len(text_rows))
+                    quality.rows_parsed = len(text_rows)
 
+                result["quality"] = quality.as_dict()
                 logger.info(f"Parsed {len(result['transactions'])} transactions from PTR")
 
         except Exception as e:
             logger.error(f"Error parsing PTR {pdf_path}: {e}")
             result["parse_errors"].append(str(e))
+            result["quality"] = quality.as_dict()
 
         return result
 
@@ -194,8 +234,11 @@ class PTRParser:
             return self._parse_date(date_match.group(1))
         return None
 
-    def _parse_tables(self, tables: List[List[List[str]]]) -> List[Dict[str, Any]]:
+    def _parse_tables(
+        self, tables: List[List[List[str]]], quality: "ParseQuality | None" = None
+    ) -> List[Dict[str, Any]]:
         """Parse transactions from extracted tables."""
+        quality = quality if quality is not None else ParseQuality()
         transactions = []
 
         for table in tables:
@@ -217,14 +260,51 @@ class PTRParser:
 
             # Determine column indices
             col_indices = self._identify_columns(headers)
+            if self._headers_recognised(headers):
+                quality.headers_recognised = True
 
             # Parse each data row
             for row in table[1:]:
+                if not self._is_candidate_row(row):
+                    # Blank spacers, and the footnote rows PTR tables interleave
+                    # after each record ("Filing Status: New", "Location: ...").
+                    # Those legitimately yield no transaction, so counting them
+                    # as dropped would mark a clean filing as a bad one.
+                    continue
+                quality.rows_detected += 1
                 txn = self._parse_table_row(row, col_indices)
                 if txn:
+                    quality.rows_parsed += 1
+                    if txn.get("recovered_from_collapsed_row"):
+                        quality.rows_recovered += 1
                     transactions.append(txn)
 
         return transactions
+
+    @staticmethod
+    def _is_candidate_row(row: List[Any]) -> bool:
+        """Whether a row looks like it should yield a transaction.
+
+        A record always carries a date or an amount somewhere; the footnote
+        rows that follow it carry neither. This is the denominator the
+        confidence score divides by, so getting it wrong would either hide
+        dropped rows or invent them.
+        """
+        joined = " ".join(str(cell) for cell in row if cell)
+        if not joined.strip():
+            return False
+        return bool(re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", joined) or "$" in joined)
+
+    @staticmethod
+    def _headers_recognised(headers: List[str]) -> bool:
+        """Whether column positions were read off the header or merely assumed.
+
+        `_identify_columns` falls back to fixed positions 0-4 when nothing
+        matches, which is a guess about a layout rather than a reading of it.
+        The confidence score should not treat the two alike.
+        """
+        joined = " ".join(str(h).lower() for h in headers if h)
+        return any(word in joined for word in ("asset", "transaction", "date", "amount", "owner"))
 
     def _identify_columns(self, headers: List[str]) -> Dict[str, int]:
         """Identify which column contains which data.
@@ -279,6 +359,16 @@ class PTRParser:
 
         # Clean row values
         row = [str(cell).strip() if cell else "" for cell in row]
+
+        # pdfplumber sometimes fails to split a row and jams the whole record
+        # into the first cell, leaving every other cell null. Read by column
+        # index, that looks like an empty row and used to be dropped: across the
+        # six real filings in the test corpus, 18 transactions were lost this
+        # way against 16 kept, and two filings parsed to nothing at all while
+        # being recorded as parsed successfully.
+        populated = [cell for cell in row if cell]
+        if len(populated) == 1 and row[0]:
+            return self._parse_collapsed_cell(row[0])
 
         # Extract values based on column indices
         def get_col(name: str) -> str:
@@ -339,6 +429,62 @@ class PTRParser:
             "owner": self._normalize_owner(owner),
         }
 
+    def _parse_collapsed_cell(self, cell: str) -> Dict[str, Any] | None:
+        """Read a transaction out of a row pdfplumber collapsed into one cell.
+
+        The cell holds the record on its first line and the filing's footnotes
+        ("Filing Status", "Subholding Of", "Location") on the rest, with the
+        small-caps glyphs rendered as NUL bytes. Everything needed to read it
+        already exists: `_join_wrapped_amounts` stitches a range split across
+        two lines back together, and `_parse_text_line` reads the result. The
+        column-indexed path simply never called them.
+
+        Footnote lines carry no date, no dollar sign and no buy/sell keyword, so
+        `_parse_text_line` rejects them and the first successful parse is the
+        transaction.
+        """
+        lines = self._join_wrapped_amounts(str(cell).replace("\x00", "").split("\n"))
+
+        for line in lines:
+            txn = self._parse_text_line(self._spell_out_type_letter(line))
+            if not txn:
+                continue
+
+            # The record carries both dates in order -- the trade, then the
+            # notification. `_parse_text_line` takes the first, which is the one
+            # STOCK Act compliance is measured from; the second belongs in
+            # notification_date rather than being discarded.
+            dates = re.findall(r"\d{1,2}/\d{1,2}/\d{2,4}", line)
+            if len(dates) > 1:
+                txn["notification_date"] = self._parse_date(dates[1])
+
+            # Flagged because it arrived through the weaker text path, which the
+            # confidence score reports rather than hides.
+            txn["recovered_from_collapsed_row"] = True
+            return txn
+
+        return None
+
+    # The transaction-type column sits between the asset and the date, so in a
+    # flattened record the single letter immediately before the first date is
+    # always the type. Matching the letter anywhere in the line instead would be
+    # reckless -- "7.00% Series E" and "Class P" are asset names -- but anchored
+    # to the date it is the layout, not a guess.
+    _TYPE_LETTER = re.compile(r"\b([PSE])\s+(?=\d{1,2}/\d{1,2}/\d{2,4})")
+    _TYPE_WORDS = {"P": "purchase", "S": "sale", "E": "exchange"}
+
+    def _spell_out_type_letter(self, line: str) -> str:
+        """Expand the type letter so the text parser recognises an exchange.
+
+        `_parse_text_line` matches "p" and "s" as whole words and so already
+        reads purchases and sales, but nothing matches a lone "E". Without this
+        every exchange in a collapsed row is dropped -- one of the eighteen in
+        the test corpus.
+        """
+        return self._TYPE_LETTER.sub(
+            lambda match: f"{self._TYPE_WORDS[match.group(1)]} ", line, count=1
+        )
+
     def _parse_text(self, text: str) -> List[Dict[str, Any]]:
         """Parse transactions from plain text (fallback method)."""
         transactions = []
@@ -391,8 +537,14 @@ class PTRParser:
                 pending = None
                 continue
 
-            # A range that opens but does not close on this line.
-            if re.search(r"\$[\d,]+\s*[-–—]\s*$", line):
+            # A range that opens but does not close on this line -- either
+            # "$15,001 -" with the upper bound overleaf, or the open-ended
+            # "Over" with its figure overleaf. The second form is how the top
+            # band on a spouse line wraps, and without it the amount was lost
+            # entirely.
+            if re.search(r"\$[\d,]+\s*[-–—]\s*$", line) or re.search(
+                r"\b(over|above|more than)\s*$", line, re.IGNORECASE
+            ):
                 pending = line
                 continue
 
@@ -416,7 +568,11 @@ class PTRParser:
 
         # Try to extract components
         date_match = re.search(r"(\d{1,2}/\d{1,2}/\d{2,4})", line)
-        amount_match = re.search(r"\$[\d,]+\s*-\s*\$[\d,]+", line)
+        amount_match = re.search(
+            r"\$[\d,]+\s*-\s*\$[\d,]+|(?:over|above|more than)\s+\$[\d,]+|\$[\d,]+\s*\+",
+            line,
+            re.IGNORECASE,
+        )
 
         # Extract transaction type
         txn_type = None
@@ -428,6 +584,15 @@ class PTRParser:
             for kw in SELL_KEYWORDS:
                 if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
                     txn_type = "sale"
+                    break
+        if not txn_type:
+            # Exchanges were checked nowhere in this path, so every one of them
+            # was dropped -- the text fallback only ever recognised purchases
+            # and sales. `\bexchange\b` does not match "exchanged", which is
+            # how the word appears in the footnote prose beneath a record.
+            for kw in EXCHANGE_KEYWORDS:
+                if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
+                    txn_type = "exchange"
                     break
 
         if not txn_type:
@@ -537,7 +702,12 @@ class PTRParser:
 
         if len(amounts) >= 2:
             return Decimal(min(amounts)), Decimal(max(amounts))
-        elif len(amounts) == 1:
+        if len(amounts) == 1:
+            # "Over $X" and "$X +" are open-ended. Returning (X, X) would turn a
+            # lower bound into an exact figure, which is the one thing this
+            # project will not do with a disclosure that reports a band.
+            if re.search(r"\b(over|above|more than)\b", text, re.IGNORECASE) or "+" in text:
+                return Decimal(amounts[0]), None
             return Decimal(amounts[0]), Decimal(amounts[0])
 
         return None, None

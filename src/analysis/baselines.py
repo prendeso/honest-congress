@@ -29,6 +29,7 @@ from src.db.models import (
     BillSponsorship,
     CampaignDonation,
     CommitteeAssignment,
+    Disclosure,
     GovernmentContract,
     LobbyingDisclosure,
     Member,
@@ -203,6 +204,7 @@ def detection_summary(db: Session) -> Dict[str, object]:
     detectors_run = len(per_type)
     starved = detectors_without_source_data(db)
     significance = significance_summary(db)
+    parsing = parse_quality_summary(db)
 
     return {
         "members": member_count,
@@ -222,6 +224,10 @@ def detection_summary(db: Session) -> Dict[str, object]:
         # ran and found nothing.
         "detectors_without_source_data": starved,
         "significance": significance,
+        # Every trade in this project comes out of a PDF. If the parser read
+        # the filings badly, nothing downstream of it means anything, so the
+        # quality of that read belongs next to the findings.
+        "parsing": parsing,
         "caveat": (
             "Findings are pattern matches over public filings, not determinations "
             "of wrongdoing. Thresholds are asserted rather than calibrated; "
@@ -261,4 +267,45 @@ def significance_summary(db: Session) -> Dict[str, object]:
         # What an FDR of alpha means you should expect to be wrong among the
         # findings that passed.
         "expected_false_discoveries": round(passing * alpha, 2),
+    }
+
+
+def parse_quality_summary(db: Session) -> Dict[str, object]:
+    """How well the filings behind these findings were actually read.
+
+    `parsed` has only ever meant the parser ran without raising. A filing that
+    yielded nothing was recorded identically to one read cleanly, which is how
+    two filings in the test corpus came to hold no transactions at all without
+    anyone noticing.
+    """
+    parsed = db.query(func.count(Disclosure.id)).filter(Disclosure.parsed.is_(True)).scalar() or 0
+    scored = (
+        db.query(func.count(Disclosure.id)).filter(Disclosure.parse_confidence.isnot(None)).scalar()
+        or 0
+    )
+    empty = (
+        db.query(func.count(Disclosure.id)).filter(Disclosure.parse_confidence == 0.0).scalar() or 0
+    )
+    poor = (
+        db.query(func.count(Disclosure.id))
+        .filter(Disclosure.parse_confidence.isnot(None), Disclosure.parse_confidence < 0.8)
+        .scalar()
+        or 0
+    )
+    average = (
+        db.query(func.avg(Disclosure.parse_confidence))
+        .filter(Disclosure.parse_confidence.isnot(None))
+        .scalar()
+    )
+
+    return {
+        "filings_parsed": parsed,
+        # Never scored, because they were parsed before scoring existed. Not
+        # the same as scored and fine.
+        "filings_never_scored": parsed - scored,
+        "mean_confidence": round(float(average), 3) if average is not None else None,
+        "filings_below_0_8": poor,
+        # The number that says whether the dataset can be trusted at all: a
+        # filing the parser read nothing out of.
+        "filings_that_yielded_nothing": empty,
     }

@@ -83,6 +83,38 @@ class TestGoldenFilings:
 
         assert len(_parse_tables(parser, filing)) == len(expected)
 
+    def test_rows_collapsed_into_one_cell_are_recovered(self, parser, filing):
+        """pdfplumber sometimes jams a whole record into the first cell.
+
+        Read by column index that looks like an empty row, and it used to be
+        dropped: across these six filings 18 transactions were lost that way
+        against 16 kept, and two filings parsed to nothing while being recorded
+        as parsed successfully.
+        """
+        expected_recovered = [
+            e for e in filing["expected_transactions"] if e.get("recovered_from_collapsed_row")
+        ]
+        if not expected_recovered:
+            pytest.skip("no collapsed rows in this filing")
+
+        parsed = _parse_tables(parser, filing)
+        got = [t for t in parsed if t.get("recovered_from_collapsed_row")]
+        assert len(got) == len(expected_recovered)
+
+    def test_a_recovered_row_is_not_folded_into_its_neighbour(self, parser, filing):
+        """A collapsed row and a normal row for the same asset are two trades.
+
+        In 20023805 the filing reports seven Myno Carbon Corp transactions on
+        seven different dates. Deduplicating by description would collapse them
+        into one and lose six.
+        """
+        parsed = _parse_tables(parser, filing)
+        dates = [t["transaction_date"] for t in parsed if t["transaction_date"]]
+        assert len(parsed) == len(filing["expected_transactions"])
+        assert len(dates) == len(filing["expected_transactions"]), (
+            "every recovered row must carry its own date"
+        )
+
     def test_records_the_trade_date_not_the_notification_date(self, parser, filing):
         expected = filing["expected_transactions"]
         if not expected:
@@ -114,6 +146,15 @@ class TestGoldenFilings:
 
         parsed = _parse_tables(parser, filing)
         for txn, want in zip(parsed, expected, strict=True):
+            if want["amount"] is None:
+                # Two records in the corpus have an asset name that wraps across
+                # three lines, which interleaves it with the amount column and
+                # leaves no legible band. The parser must return nothing rather
+                # than assemble a figure out of the wreckage.
+                assert txn["amount_min"] is None and txn["amount_max"] is None, (
+                    f"{filing['document_id']}: invented an amount the filing does not show"
+                )
+                continue
             if "$" in want["amount"]:
                 assert txn["amount_min"] is not None or txn["amount_max"] is not None, (
                     f"{filing['document_id']}: no amount for {want['amount']!r}"

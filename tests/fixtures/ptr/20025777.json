@@ -262,9 +262,25 @@
   {
    "date": "09/03/2024",
    "notification": "09/04/2024",
+   "asset": "Alphabet Inc. - Class C Capital Stock P",
+   "type": "P",
+   "amount": "$1,001 - $15,000",
+   "recovered_from_collapsed_row": true
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
    "asset": "Amazon.com, Inc. - Common Stock\n(AMZN) [ST]",
    "type": "P",
    "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "Apple Inc. - Common Stock (AAPL) P",
+   "type": "P",
+   "amount": "$1,001 - $15,000",
+   "recovered_from_collapsed_row": true
   },
   {
    "date": "09/03/2024",
@@ -276,9 +292,25 @@
   {
    "date": "09/03/2024",
    "notification": "09/04/2024",
+   "asset": "Corning Incorporated Common Stock P",
+   "type": "P",
+   "amount": "$1,001 - $15,000",
+   "recovered_from_collapsed_row": true
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
    "asset": "CrowdStrike Holdings, Inc. - Class A\nCommon Stock (CRWD) [ST]",
    "type": "P",
    "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "Digital Realty Trust, Inc. Common P",
+   "type": "P",
+   "amount": "$1,001 - $15,000",
+   "recovered_from_collapsed_row": true
   },
   {
    "date": "09/03/2024",
@@ -290,6 +322,14 @@
   {
    "date": "09/03/2024",
    "notification": "09/04/2024",
+   "asset": "lululemon athletica inc. - Common P",
+   "type": "P",
+   "amount": "$1,001 - $15,000",
+   "recovered_from_collapsed_row": true
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
    "asset": "NVIDIA Corporation - Common Stock\n(NVDA) [ST]",
    "type": "P",
    "amount": "$1,001 - $15,000"
@@ -297,9 +337,25 @@
   {
    "date": "09/03/2024",
    "notification": "09/04/2024",
+   "asset": "Palo Alto Networks, Inc. (PANW) P",
+   "type": "P",
+   "amount": "$1,001 - $15,000",
+   "recovered_from_collapsed_row": true
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
    "asset": "QUALCOMM Incorporated -\nCommon Stock (QCOM) [ST]",
    "type": "P",
    "amount": "$1,001 - $15,000"
+  },
+  {
+   "date": "09/03/2024",
+   "notification": "09/04/2024",
+   "asset": "Tesla, Inc. - Common Stock (TSLA) P",
+   "type": "P",
+   "amount": "$1,001 - $15,000",
+   "recovered_from_collapsed_row": true
   },
   {
    "date": "09/03/2024",

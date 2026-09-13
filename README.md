@@ -181,6 +181,41 @@ python -m src.cli purge-disabled --dry-run   # preview
 python -m src.cli purge-disabled             # apply
 ```
 
+## Parse confidence
+
+Every trade in this project comes out of a PDF, so the parser is the single
+point of failure for the whole dataset. `parsed` has only ever meant the parser
+ran without raising — a filing that yielded nothing was recorded identically to
+one read cleanly.
+
+Each filing now carries `parse_confidence` (0–1) and `parse_warnings`. The score
+is a completeness ratio, not a weighted judgement:
+
+```
+confidence = (rows_parsed / rows_detected) × (fields_extracted / fields_expected)
+```
+
+A dropped row lowers it by arithmetic; a transaction missing its amount lowers
+it by arithmetic. Three caps are asserted and marked as such in the code: a
+scanned PDF and a PTR with no transactions both score 0, and a filing read
+through the text fallback is capped at 0.7.
+
+`GET /api/disclosures/?max_confidence=0.5` finds the filings that parsed badly —
+the low end is the useful query. **Nothing is excluded from analysis on the
+strength of the score.** A missing trade is already invisible, and dropping the
+ones known to be shaky would compound that silently.
+
+`python -m src.cli parse --min-confidence 0.8` re-reads the filings the parser
+did worst on, and filings never scored at all.
+
+### What building it found
+
+pdfplumber sometimes collapses an entire table row into its first cell. Read by
+column index that looks like an empty row, and it was dropped silently. Across
+the six real filings in the test corpus that was **18 transactions lost against
+16 kept**, with two filings parsing to nothing at all while recorded as parsed
+successfully. The corpus now yields 34.
+
 ## Multiple comparisons
 
 Sixteen detectors run against every member, so some of what gets flagged is what

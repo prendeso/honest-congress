@@ -117,9 +117,23 @@ class Disclosure(Base):
     # PTR (Periodic Transaction Report) flag
     is_ptr: Mapped[bool] = mapped_column(default=False, index=True)
 
-    # Parsing status
+    # Parsing status. `parsed` means the parser ran without raising -- it has
+    # never meant the parse worked, and a filing that yielded nothing at all
+    # used to be indistinguishable from one read cleanly.
     parsed: Mapped[bool] = mapped_column(default=False)
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # How much of the document the parser actually read, 0-1. A completeness
+    # ratio: rows read over rows that looked like records, times fields
+    # extracted over fields required. See src/parsing/confidence.py.
+    #
+    # Null means not scored yet -- a filing parsed before this existed -- never
+    # "scored and fine". Nothing is excluded from analysis on the strength of
+    # it: a missing trade is already invisible, and dropping the ones known to
+    # be shaky would compound that silently.
+    parse_confidence: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+    # The named reasons behind the score, which is what a person acts on.
+    parse_warnings: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

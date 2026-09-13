@@ -21,7 +21,6 @@ from src.analysis.extended_anomaly_detector import (
     ExtendedAnomalyDetector,
     run_extended_anomaly_detection,
 )
-from src.analysis.performance_analyzer import PerformanceAnalyzer, analyze_performance
 from src.analysis.tier2_detectors import (
     detect_contract_front_runs,
     detect_donor_conflicts,
@@ -177,8 +176,6 @@ __all__ = [
     "analyze_wealth",
     "TradeAnalyzer",
     "analyze_trades",
-    "PerformanceAnalyzer",
-    "analyze_performance",
     "AdvancedAnomalyDetector",
     "run_advanced_anomaly_detection",
     "ExtendedAnomalyDetector",

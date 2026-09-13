@@ -229,6 +229,96 @@ scoreboard.
 This is D5 turned on the project itself: honest about the limits of its own
 inputs.
 
+## D10. No returns without prices, and no prices we have
+
+`src/analysis/performance_analyzer.py` is deleted, along with
+`/api/performance` and `cli performance`. It claimed to identify "statistically
+significant outperformers" and published an `alpha_vs_sp500` per member.
+
+It could not have done either. STOCK Act filings disclose **amount bands and no
+share counts**, which is why `outperforming_trades`, `perfect_timing` and
+`loss_avoidance` are disabled (D3). This module made the same mistake with more
+machinery:
+
+* **Realized gains never touched a price.** `gain = sell_value - buy_value`,
+  where both are band midpoints. Selling a $15,001-50,000 position bought at
+  $1,001-15,000 reported a $24,500 "gain" -- the distance between two bands. A
+  member who sold at a loss could show a large one.
+* **`shares = amount / price` invented a quantity** the filing does not
+  disclose, and unrealized gains multiplied that invention by today's price.
+* **FIFO matching was quantity-blind**, popping one buy per sale regardless of
+  size.
+* No statistical test existed anywhere in the file.
+
+It was deleted rather than disabled because the three detectors run inside a
+suite whose output is persisted, so gating them was the minimal safe
+intervention; a standalone endpoint returning 503 has no partial value. The code
+is in git history if licensed price data ever arrives -- and if it does, the
+right rebuild is per-trade, not portfolio-level alpha, which this data cannot
+support at any price.
+
+Removing it took the last `yfinance` caller with it, so that dependency is gone
+too. `numpy` is now declared directly, for the permutation null in D11.
+
+The dashboard also carried filter options and descriptions for the three
+disabled detectors -- including "statistically improbable and suggests insider
+knowledge" -- for rows that can never appear. Those are gone for the same
+reason.
+
+## D11. Correct for looking everywhere
+
+Sixteen detectors run against every member, so some of what gets flagged is what
+running thousands of tests over hundreds of people produces. `percentile_rank`
+(D6) says where a finding sits among its peers; it says nothing about whether
+the finding is real.
+
+FDR control could not simply be added, because **no detector produces a
+p-value** -- every one is a threshold rule, so Benjamini-Hochberg had nothing to
+rank. A null model had to exist first, and one only exists for some of them.
+
+Six detectors ask a *timing* question, which has a well-posed null: the same
+trades, the same events, no relationship between them.
+`src/analysis/significance.py` tests each (member, detector) pair by circular-
+shifting the member's whole trading calendar and re-counting coincidences, then
+applies Benjamini-Hochberg across every test in the run.
+
+**Shifting rather than resampling is the load-bearing choice.** Disclosed trades
+arrive in same-day PTR batches; a null that resampled dates independently would
+scatter those batches, make ordinary clustering look extraordinary, and
+manufacture significance on exactly the data this project is built from.
+
+The other ten detectors measure a magnitude and carry **no q-value at all**. A
+null `q_value` means *no null model exists*, never *passed one* -- which is why
+the API default is `q IS NULL OR q <= alpha` rather than a bare threshold, and
+why every response says `has_null_model`.
+
+Surviving this means the timing alignment is unlikely by chance. Not that the
+member acted on anything.
+
+## D12. Say how much of each filing was actually read
+
+`parsed` only ever meant the parser ran without raising. A filing that yielded
+nothing was recorded identically to one read cleanly, and every trade in this
+project comes out of a PDF.
+
+Each disclosure now carries `parse_confidence` and `parse_warnings`
+(`src/parsing/confidence.py`). The score is a completeness ratio -- rows read
+over rows that looked like records, times fields extracted over fields required
+-- so a dropped row lowers it by arithmetic rather than by a rule somebody has
+to remember to tune. Three caps are asserted and labelled as such in the code.
+
+Building it found what it was built to find. pdfplumber collapses some table
+rows into a single cell, and the parser dropped them: across the six real
+filings in the test corpus, **18 transactions lost against 16 kept**, with two
+filings parsing to nothing while recorded as parsed successfully. The corpus now
+yields 34.
+
+Nothing is excluded from analysis on the strength of the score. A missing trade
+is already invisible, and dropping the ones known to be shaky would compound
+that silently -- and would make a member whose PDFs parse badly look cleaner
+than one whose parse well. This is D9 applied to the parser instead of the
+filer.
+
 ---
 
 ## Superseded

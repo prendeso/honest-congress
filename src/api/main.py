@@ -20,7 +20,6 @@ from src.api.routes import (
     disclosures,
     health,
     members,
-    performance,
 )
 from src.config import get_settings
 from src.db import SessionLocal
@@ -169,5 +168,4 @@ app.include_router(members.router, prefix="/api/members", tags=["Members"])
 app.include_router(disclosures.router, prefix="/api/disclosures", tags=["Disclosures"])
 app.include_router(anomalies.router, prefix="/api/anomalies", tags=["Anomalies"])
 app.include_router(assets.router, prefix="/api", tags=["Assets"])
-app.include_router(performance.router, prefix="/api", tags=["Performance"])
 app.include_router(compliance.router)  # declares its own /api/compliance prefix

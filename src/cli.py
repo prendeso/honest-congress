@@ -202,91 +202,6 @@ def cmd_analyze(args):
     )
 
 
-def cmd_performance(args):
-    """Analyze trading performance vs benchmarks."""
-    from datetime import datetime
-
-    from src.analysis.performance_analyzer import PerformanceAnalyzer
-
-    analyzer = PerformanceAnalyzer()
-
-    start_date = datetime.fromisoformat(args.start_date) if args.start_date else None
-    end_date = datetime.fromisoformat(args.end_date) if args.end_date else None
-
-    with get_db() as db:
-        if args.member_id:
-            print(f"Analyzing performance for member {args.member_id}...")
-            result = analyzer.compare_to_benchmarks(db, args.member_id, start_date, end_date)
-
-            member = result.get("member", {})
-            perf = result.get("member_performance", {})
-
-            print(
-                f"\n{member.get('name', 'Unknown')} ({member.get('party', '')} - {member.get('state', '')})"
-            )
-            print(
-                f"  Period: {result.get('period', {}).get('start', '')} to {result.get('period', {}).get('end', '')}"
-            )
-            print(f"  Trades analyzed: {perf.get('trades_analyzed', 0)}")
-            print(f"  Total invested: ${perf.get('total_invested', 0):,.0f}")
-            print(
-                f"  Estimated return: {perf.get('estimated_return_pct', 'N/A'):.1f}%"
-                if perf.get("estimated_return_pct")
-                else "  Estimated return: N/A"
-            )
-
-            print("\nBenchmark Comparison:")
-            for name, data in result.get("benchmarks", {}).items():
-                ret = data.get("return_pct")
-                print(f"  {name.upper()}: {ret:.1f}%" if ret else f"  {name.upper()}: N/A")
-
-            alpha = result.get("alpha_vs_sp500")
-            if alpha is not None:
-                print(f"\n  Alpha vs S&P 500: {alpha:+.1f}%")
-                print(f"  Beats S&P 500: {'Yes' if result.get('beats_sp500') else 'No'}")
-                print(f"  Beats Buffett: {'Yes' if result.get('beats_buffett') else 'No'}")
-
-        elif args.rankings:
-            print("Ranking members by trading performance...")
-            result = analyzer.rank_members_by_performance(
-                db, start_date, end_date, min_trades=args.min_trades, limit=args.limit
-            )
-
-            print(
-                f"\nPeriod: {result.get('period', {}).get('start', '')} to {result.get('period', {}).get('end', '')}"
-            )
-            print(f"Members analyzed: {result.get('total_members_analyzed', 0)}")
-            print(f"Members beating S&P 500: {result.get('members_beating_sp500', 0)}")
-
-            benchmarks = result.get("benchmarks", {})
-            print(
-                f"\nBenchmarks: S&P 500: {benchmarks.get('sp500', 'N/A'):.1f}%, Buffett: {benchmarks.get('buffett', 'N/A'):.1f}%"
-            )
-
-            print(f"\nTop {args.limit} Performers:")
-            for i, p in enumerate(result.get("top_performers", [])[: args.limit], 1):
-                member = p.get("member", {})
-                ret = p.get("member_performance", {}).get("estimated_return_pct", 0)
-                alpha = p.get("alpha_vs_sp500", 0)
-                print(
-                    f"  {i}. {member.get('name', 'Unknown')} ({member.get('party', '')}-{member.get('state', '')}): {ret:.1f}% (α: {alpha:+.1f}%)"
-                )
-
-        else:
-            print("Getting performance summary...")
-            result = analyzer.get_performance_summary(db)
-
-            print("\nPerformance Summary:")
-            print(f"  Members with transactions: {result.get('members_with_transactions', 0)}")
-            print(f"  Total transactions: {result.get('total_transactions', 0)}")
-            print(f"  Unique tickers: {result.get('unique_tickers', 0)}")
-
-            if result.get("top_traded_tickers"):
-                print("\n  Top traded tickers:")
-                for t in result["top_traded_tickers"][:5]:
-                    print(f"    {t['ticker']}: {t['count']} trades")
-
-
 def cmd_parse(args):
     """Parse disclosure PDFs."""
     from src.ingestion.orchestrator import IngestionOrchestrator
@@ -996,22 +911,6 @@ def main():
     fix_urls_parser.set_defaults(func=cmd_fix_urls)
 
     # Performance command
-    perf_parser = subparsers.add_parser(
-        "performance", help="Analyze trading performance vs benchmarks"
-    )
-    perf_parser.add_argument("-m", "--member-id", type=int, help="Analyze specific member by ID")
-    perf_parser.add_argument(
-        "-r", "--rankings", action="store_true", help="Show ranked list of performers"
-    )
-    perf_parser.add_argument("--start-date", type=str, help="Start date (YYYY-MM-DD)")
-    perf_parser.add_argument("--end-date", type=str, help="End date (YYYY-MM-DD)")
-    perf_parser.add_argument(
-        "--min-trades", type=int, default=5, help="Minimum trades for rankings (default: 5)"
-    )
-    perf_parser.add_argument(
-        "-l", "--limit", type=int, default=10, help="Number of top performers to show (default: 10)"
-    )
-    perf_parser.set_defaults(func=cmd_performance)
 
     # Parse FD assets / income
     parse_fd_parser = subparsers.add_parser(

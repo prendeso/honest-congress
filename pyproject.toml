@@ -23,12 +23,11 @@ dependencies = [
     "beautifulsoup4>=4.12,<5.0",
     "lxml>=5.0,<7.0",
     "pdfplumber>=0.11,<1.0",
-    "yfinance>=0.2.40,<1.0",
     "jinja2>=3.1,<4.0",
     "pyyaml>=6.0,<7.0",
     # Used directly by src/analysis/significance.py for the permutation null.
-    # It arrived transitively via yfinance -> pandas, which has one caller left
-    # and is a deletion candidate; the statistics should not depend on that.
+    # It used to arrive transitively via yfinance; that dependency is gone, so
+    # this is now the only thing keeping numpy installed.
     "numpy>=1.26,<3.0",
 ]
 

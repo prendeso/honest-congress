@@ -239,10 +239,8 @@
                             <option value="">All Types</option>
                             <option value="excessive_wealth_growth">Wealth vs Salary</option>
                             <option value="rapid_asset_appreciation">Asset Appreciation</option>
-                            <option value="outperforming_trades">Stock Outperformance</option>
                             <option value="trade_timing">Trade Timing</option>
                             <option value="sector_concentration">Sector Concentration</option>
-                            <option value="loss_avoidance">Loss Avoidance</option>
                             <option value="multi_factor_risk">Multi-Factor Risk</option>
                             <option value="late_filing">Late Filing</option>
                         </select>
@@ -423,13 +421,10 @@
                     const typeNames = {
                         'excessive_wealth_growth': 'Wealth vs Salary',
                         'rapid_asset_appreciation': 'Asset Appreciation',
-                        'outperforming_trades': 'Stock Outperformance',
                         'trade_timing': 'Trade Timing',
                         'trade_clustering': 'Trade Clustering',
-                        'perfect_timing': 'Perfect Timing',
                         'volume_spikes': 'Volume Spikes',
                         'sector_concentration': 'Sector Concentration',
-                        'loss_avoidance': 'Loss Avoidance',
                         'multi_factor_risk': 'Multi-Factor Risk',
                         'late_filing': 'Late Filing',
                         'high_frequency': 'High Frequency',
@@ -442,13 +437,10 @@
                     const explanations = {
                         'excessive_wealth_growth': 'Reported net worth grew by more than the Congressional salary alone could explain. Assets and liabilities are disclosed as ranges, so this is an estimate.',
                         'rapid_asset_appreciation': 'A single asset (business, property, or investment) grew in value by more than 100% in one year, which is unusual and warrants investigation.',
-                        'outperforming_trades': 'Reported trading returns exceeded a market benchmark. This detector is disabled by default because it benchmarks against a fixed constant rather than real index returns.',
                         'trade_timing': 'The member demonstrated unusually good timing on trades, such as buying before stock rises or selling before drops.',
                         'trade_clustering': 'Multiple consecutive trades in the same direction (all buys or all sells) suggests coordinated trading strategy.',
-                        'perfect_timing': 'The member has an abnormally high success rate on trades (80%+), which is statistically improbable without insider information.',
                         'volume_spikes': 'One or more trades were much larger than this member typically files. Amounts are disclosed as ranges, so sizes are band midpoints.',
                         'sector_concentration': 'A large share of the trades in one filing fall in a single industry sector, matched on trade descriptions. This does not use committee assignments.',
-                        'loss_avoidance': 'This member almost never loses money on trades (80%+ win rate), which is statistically improbable and suggests insider knowledge.',
                         'multi_factor_risk': 'This member shows 3 or more different anomaly patterns, making them a high-priority investigation target.',
                         'late_filing': 'The member reported this trade more than 45 days after it occurred, violating the STOCK Act disclosure requirements.',
                         'high_frequency': 'This member trades much more frequently than typical members, warranting additional scrutiny.',
@@ -461,13 +453,10 @@
                     const sources = {
                         'excessive_wealth_growth': 'Annual Financial Disclosure (FD)',
                         'rapid_asset_appreciation': 'Annual Financial Disclosure (FD)',
-                        'outperforming_trades': 'Stock Trades (PTR)',
                         'trade_timing': 'Stock Trades (PTR)',
                         'trade_clustering': 'Stock Trades (PTR)',
-                        'perfect_timing': 'Stock Trades (PTR)',
                         'volume_spikes': 'Stock Trades (PTR)',
                         'sector_concentration': 'Stock Trades (PTR)',
-                        'loss_avoidance': 'Stock Trades (PTR)',
                         'multi_factor_risk': 'Combined Analysis',
                         'late_filing': 'Stock Trades (PTR)',
                         'high_frequency': 'Stock Trades (PTR)',

@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Tuple
 
 import pdfplumber
 
+from src.parsing.text_cleanup import clean_tables, clean_text
+
 logger = logging.getLogger(__name__)
 
 # PTR-specific value ranges (often different from annual disclosures)
@@ -176,12 +178,14 @@ class PTRParser:
                 all_tables = []
 
                 for page in pdf.pages:
-                    page_text = page.extract_text() or ""
+                    # See src/parsing/text_cleanup.py: a NUL from an unmappable
+                    # glyph is a hard error on PostgreSQL and silent on SQLite.
+                    page_text = clean_text(page.extract_text())
                     all_text += page_text + "\n"
 
                     page_tables = page.extract_tables()
                     if page_tables:
-                        all_tables.extend(page_tables)
+                        all_tables.extend(clean_tables(page_tables))
 
                 # Extract filer information from header
                 result["filer_info"] = self._extract_filer_info(all_text)

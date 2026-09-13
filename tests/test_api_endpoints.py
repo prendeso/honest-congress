@@ -428,3 +428,61 @@ class TestPercentileFilter:
     def test_out_of_range_percentile_is_rejected(self, client, ranked_db):
         assert client.get("/api/anomalies/?min_percentile=101").status_code == 422
         assert client.get("/api/anomalies/?min_percentile=-1").status_code == 422
+
+
+class TestFdrFiltering:
+    """The default list must hide weak coincidences without hiding whole detectors.
+
+    Ten of the sixteen detectors measure a magnitude and have no null model, so
+    a bare `q_value <= alpha` filter would drop them from every default
+    response. A null q_value means untested, never failed.
+    """
+
+    def _anomaly(self, db, anomaly_type, title, q_value):
+        member_id = db.query(Member).first().id
+        db.add(
+            Anomaly(
+                member_id=member_id,
+                anomaly_type=anomaly_type,
+                severity="HIGH",
+                title=title,
+                description=title,
+                q_value=q_value,
+                p_value=q_value,
+            )
+        )
+        db.commit()
+
+    def test_untested_findings_are_returned_by_default(self, client, seeded_db):
+        self._anomaly(seeded_db, "sector_concentration", "fdr-untested", None)
+
+        titles = [a["title"] for a in client.get("/api/anomalies/").json()["anomalies"]]
+        assert "fdr-untested" in titles
+
+    def test_findings_failing_fdr_are_hidden_by_default(self, client, seeded_db):
+        self._anomaly(seeded_db, "donor_conflict", "fdr-failed", 0.8)
+
+        titles = [a["title"] for a in client.get("/api/anomalies/").json()["anomalies"]]
+        assert "fdr-failed" not in titles
+
+    def test_findings_passing_fdr_are_returned(self, client, seeded_db):
+        self._anomaly(seeded_db, "donor_conflict", "fdr-passed", 0.001)
+
+        titles = [a["title"] for a in client.get("/api/anomalies/").json()["anomalies"]]
+        assert "fdr-passed" in titles
+
+    def test_failures_can_be_asked_for_explicitly(self, client, seeded_db):
+        self._anomaly(seeded_db, "donor_conflict", "fdr-optin", 0.8)
+
+        response = client.get("/api/anomalies/?include_below_fdr=true")
+        assert "fdr-optin" in [a["title"] for a in response.json()["anomalies"]]
+
+    def test_the_response_says_whether_a_null_model_existed(self, client, seeded_db):
+        self._anomaly(seeded_db, "donor_conflict", "fdr-tested", 0.001)
+        self._anomaly(seeded_db, "large_trade", "fdr-no-model", None)
+
+        by_title = {a["title"]: a for a in client.get("/api/anomalies/").json()["anomalies"]}
+        assert by_title["fdr-tested"]["has_null_model"] is True
+        assert by_title["fdr-tested"]["q_value"] == pytest.approx(0.001)
+        assert by_title["fdr-no-model"]["has_null_model"] is False
+        assert by_title["fdr-no-model"]["q_value"] is None

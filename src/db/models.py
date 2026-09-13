@@ -299,6 +299,18 @@ class Anomaly(Base):
     # Maintained by src.analysis.baselines.annotate_percentile_ranks.
     percentile_rank: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # How often chance alone produces a coincidence this strong (`p_value`), and
+    # the same after Benjamini-Hochberg correction for every test in the run
+    # (`q_value`). Maintained by src.analysis.significance.
+    #
+    # NULL means "no null model exists for this detector", never "passed". Only
+    # the timing-coincidence detectors admit one; a magnitude rule like
+    # sector_concentration has no null to shift, and inventing a p-value for it
+    # would be the exact failure this project exists to avoid. Those keep
+    # percentile_rank, which is the right tool for a magnitude.
+    p_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    q_value: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
+
     # Metadata
     detected_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     reviewed: Mapped[bool] = mapped_column(default=False)

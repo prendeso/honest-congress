@@ -43,6 +43,14 @@ class AnomalyResponse(BaseModel):
     # Where this finding sits among others of its own type, 0-100.
     # Null when the population was too small to rank against.
     percentile_rank: float | None = None
+    # How often chance alone produces a coincidence this strong, and the same
+    # after correcting for every test in the run. Null means the detector has no
+    # null model -- a magnitude rule, not a timing one -- never that the finding
+    # passed one. `has_null_model` says which, so a consumer does not have to
+    # infer it from a missing field.
+    p_value: float | None = None
+    q_value: float | None = None
+    has_null_model: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

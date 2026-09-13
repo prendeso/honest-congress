@@ -180,6 +180,7 @@ def detection_summary(db: Session) -> Dict[str, object]:
             or 0
         )
         findings_by_type.append(count)
+        source = DETECTOR_SOURCE_TABLES.get(anomaly_type)
         per_type.append(
             {
                 "anomaly_type": anomaly_type,
@@ -188,29 +189,76 @@ def detection_summary(db: Session) -> Dict[str, object]:
                 "member_flag_rate": (
                     round(flagged_members / member_count * 100, 2) if member_count else 0.0
                 ),
+                # Rows the detector scanned to produce those findings. This is
+                # the number that makes a flag count readable: 4 findings out of
+                # 1,189 sponsorships says something quite different from 4 out
+                # of 4.
+                "source_rows_scanned": (
+                    db.query(func.count(source.id)).scalar() or 0 if source is not None else None
+                ),
             }
         )
 
     total_findings = sum(findings_by_type)
     detectors_run = len(per_type)
     starved = detectors_without_source_data(db)
+    significance = significance_summary(db)
 
     return {
         "members": member_count,
         "detector_types_with_findings": detectors_run,
-        # One test per detector per member; the honest denominator for any
-        # statement about how unusual a flag is.
-        "approximate_tests_run": detectors_run * member_count,
+        # Every (detector, member) pair the suite could have flagged, which is
+        # the denominator any statement about how unusual a flag is depends on.
+        #
+        # This used to be reported alone, under a name that implied it was the
+        # test count. It is not, and it understates the burden badly for the
+        # event-driven detectors: `sponsorship_conflict` scans every sponsored
+        # BILL, not every member -- 1,189 of them across three members on the
+        # seeded database, not 3. `source_rows_scanned` per type carries that.
+        "member_detector_pairs": detectors_run * member_count,
         "total_findings": total_findings,
         "by_type": per_type,
         # Detectors that could not run at all, as distinct from detectors that
         # ran and found nothing.
         "detectors_without_source_data": starved,
+        "significance": significance,
         "caveat": (
             "Findings are pattern matches over public filings, not determinations "
             "of wrongdoing. Thresholds are asserted rather than calibrated; "
             "percentile_rank compares a finding against others of its own type. "
-            "Check detectors_without_source_data before reading an absence of "
-            "findings as a clean result."
+            "A q_value is a false-discovery rate for timing coincidence only, and "
+            "a null q_value means no null model exists for that detector -- never "
+            "that the finding passed one. Check detectors_without_source_data "
+            "before reading an absence of findings as a clean result."
         ),
+    }
+
+
+def significance_summary(db: Session) -> Dict[str, object]:
+    """How the findings divide once multiple comparisons are accounted for.
+
+    Reported next to the flag counts because the two are only meaningful
+    together: "80 findings" and "6 of them survive correction for the 3,300
+    tests that produced them" are very different statements.
+    """
+    from src.config import get_settings
+
+    alpha = get_settings().fdr_alpha
+
+    tested = db.query(func.count(Anomaly.id)).filter(Anomaly.q_value.isnot(None)).scalar() or 0
+    passing = db.query(func.count(Anomaly.id)).filter(Anomaly.q_value <= alpha).scalar() or 0
+    untested = db.query(func.count(Anomaly.id)).filter(Anomaly.q_value.is_(None)).scalar() or 0
+
+    return {
+        "fdr_alpha": alpha,
+        "findings_with_a_null_model": tested,
+        "findings_passing_fdr": passing,
+        "findings_failing_fdr": tested - passing,
+        # Detectors that measure a magnitude rather than a coincidence. They
+        # have no null to shuffle, so they carry no q_value -- which is not the
+        # same as passing one.
+        "findings_without_a_null_model": untested,
+        # What an FDR of alpha means you should expect to be wrong among the
+        # findings that passed.
+        "expected_false_discoveries": round(passing * alpha, 2),
     }

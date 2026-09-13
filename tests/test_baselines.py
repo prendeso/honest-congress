@@ -152,8 +152,32 @@ class TestDetectionSummary:
         assert summary["members"] >= 1
         # The point of the summary: findings are meaningless without the number
         # of tests that produced them.
-        assert summary["approximate_tests_run"] >= summary["detector_types_with_findings"]
+        assert summary["member_detector_pairs"] >= summary["detector_types_with_findings"]
         assert "not determinations of wrongdoing" in str(summary["caveat"])
+
+    def test_reports_what_each_detector_actually_scanned(self, db_session, member):
+        # The member-detector pair count is not the test count. An event-driven
+        # detector scans every event, so 4 findings out of 1,189 sponsorships
+        # and 4 out of 4 must not look alike in the output.
+        _seed(db_session, member, "large_trade", [1, 2, 3])
+
+        entry = next(
+            e
+            for e in detection_summary(db_session)["by_type"]
+            if e["anomaly_type"] == "large_trade"
+        )
+        assert entry["source_rows_scanned"] is not None
+
+    def test_reports_how_many_findings_survive_correction(self, db_session, member):
+        _seed(db_session, member, "large_trade", [1, 2, 3])
+
+        significance = detection_summary(db_session)["significance"]
+
+        # large_trade is a magnitude rule with no null model, so it is counted
+        # as untested rather than as passing.
+        assert significance["findings_without_a_null_model"] == 3
+        assert significance["findings_passing_fdr"] == 0
+        assert significance["fdr_alpha"] > 0
 
     def test_per_type_breakdown_counts_distinct_members(self, db_session, member):
         _seed(db_session, member, "large_trade", [1, 2, 3, 4])

@@ -70,6 +70,15 @@ class Settings(BaseSettings):
             return set()
         return {t.strip() for t in raw.split(",") if t.strip()}
 
+    # Multiple-comparisons control. The suite runs sixteen detectors against
+    # every member, so some of what it flags is what running thousands of tests
+    # over hundreds of people produces. `fdr_alpha` is the false-discovery rate
+    # the API filters at; `significance_permutations` is how many shifted
+    # calendars the null is built from -- more is slower and gives a finer
+    # p-value floor of 1/(n+1). See src/analysis/significance.py.
+    fdr_alpha: float = Field(default=0.05, alias="FDR_ALPHA")
+    significance_permutations: int = Field(default=1000, alias="SIGNIFICANCE_PERMUTATIONS")
+
     # SEC refuses requests whose User-Agent does not carry a contact email --
     # a bare descriptive string gets a 403. Set this to a real address you
     # monitor before running any SEC-backed ingestion in production; the

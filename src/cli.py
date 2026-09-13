@@ -72,6 +72,8 @@ def cmd_analyze(args):
         run_tier2_detection,
     )
     from src.analysis.legislation import run_legislation_detection
+    from src.analysis.significance import annotate_significance
+    from src.config import get_settings
 
     analysis_types = []
 
@@ -159,6 +161,26 @@ def cmd_analyze(args):
 
         total_anomalies += advanced.get("total", 0) + extended.get("total", 0)
 
+    # Multiple-comparisons control, before the percentile ranks: the suite has
+    # just run thousands of tests over hundreds of people, and some of what it
+    # found is what that produces. Only the timing-coincidence detectors admit
+    # a null model; the rest are explicitly left without one.
+    with get_db() as db:
+        significance = annotate_significance(
+            db,
+            permutations=get_settings().significance_permutations,
+            alpha=get_settings().fdr_alpha,
+        )
+    print(
+        f"\nSignificance: {significance['tests']} tests, "
+        f"{significance['tests_passing_fdr']} passing FDR at alpha="
+        f"{significance['alpha']}"
+    )
+    print(
+        f"  Findings with a null model: {significance['findings_annotated']}; "
+        f"without one: {significance['findings_without_a_null_model']}"
+    )
+
     # Member.anomaly_count is denormalized; refresh it now that anomalies moved.
     # Percentile ranks compare each finding against others of its own type and
     # must be recomputed whenever the population changes.
@@ -175,7 +197,7 @@ def cmd_analyze(args):
             f"too few findings of their type to rank against)"
         )
     print(
-        f"\nContext: ~{summary['approximate_tests_run']} detector-member tests produced "
+        f"\nContext: ~{summary['member_detector_pairs']} detector-member pairs produced "
         f"{summary['total_findings']} findings across {summary['members']} members."
     )
 
@@ -483,6 +505,31 @@ def cmd_ingest_donations(args):
             "\n  Stopped at the request cap. Nothing is lost - rerun the same "
             "command and it resumes from the PACs it has not reached yet."
         )
+
+
+def cmd_significance(args):
+    """Recompute p-values and FDR q-values over existing findings."""
+    from src.analysis.significance import annotate_significance
+    from src.config import get_settings
+
+    settings = get_settings()
+    alpha = args.alpha if args.alpha is not None else settings.fdr_alpha
+    permutations = args.permutations or settings.significance_permutations
+
+    print(f"Testing findings against a shifted-calendar null ({permutations} permutations)...")
+
+    with get_db() as db:
+        result = annotate_significance(db, permutations=permutations, alpha=alpha, seed=args.seed)
+
+    print("\nSignificance complete:")
+    print(f"  Tests run: {result['tests']}")
+    print(f"  Passing FDR at alpha={result['alpha']}: {result['tests_passing_fdr']}")
+    print(f"  Expected false discoveries among those: {result['expected_false_discoveries']}")
+    print(f"  Findings annotated: {result['findings_annotated']}")
+    print(
+        f"  Findings with no null model: {result['findings_without_a_null_model']}"
+        "  - magnitude rules; they carry percentile_rank instead"
+    )
 
 
 def cmd_sync_industries(args):
@@ -1001,6 +1048,24 @@ def main():
         help="Re-scan PACs already stored for this cycle (use after filings are amended)",
     )
     donations_parser.set_defaults(func=cmd_ingest_donations)
+
+    significance_parser = subparsers.add_parser(
+        "significance",
+        help="Recompute p-values and FDR q-values over existing findings",
+    )
+    significance_parser.add_argument(
+        "--alpha", type=float, default=None, help="False-discovery rate (default: FDR_ALPHA)"
+    )
+    significance_parser.add_argument(
+        "--permutations",
+        type=int,
+        default=None,
+        help="Shifted calendars per test; the p-value floor is 1/(n+1)",
+    )
+    significance_parser.add_argument(
+        "--seed", type=int, default=None, help="Seed the permutations for a reproducible run"
+    )
+    significance_parser.set_defaults(func=cmd_significance)
 
     industries_parser = subparsers.add_parser(
         "sync-industries",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import case, func
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, contains_eager
 
 from src.api.routes.anomalies._shared import (
@@ -11,6 +11,7 @@ from src.api.routes.anomalies._shared import (
     AnomalyResponse,
     AnomalySummaryResponse,
 )
+from src.config import get_settings
 from src.db import Anomaly, Disclosure, Member, get_db_session
 
 router = APIRouter()
@@ -40,6 +41,16 @@ async def list_anomalies(
             "defensible way to ask for the strongest findings."
         ),
     ),
+    include_below_fdr: bool = Query(
+        False,
+        description=(
+            "Include findings that did not survive false-discovery-rate correction. "
+            "Off by default: the suite runs thousands of tests over hundreds of "
+            "people, and some of what it flags is what that produces. Findings from "
+            "detectors with no null model are always returned either way and are "
+            "marked has_null_model=false."
+        ),
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db_session),
@@ -65,6 +76,13 @@ async def list_anomalies(
         query = query.filter(Anomaly.reviewed == reviewed)
     if min_percentile is not None:
         query = query.filter(Anomaly.percentile_rank >= min_percentile)
+    if not include_below_fdr:
+        # NOT `q_value <= alpha`. Ten of the sixteen detectors measure a
+        # magnitude rather than a coincidence and have no null model at all, so
+        # a bare threshold would silently drop them from every default response.
+        # A null q_value means "untested", never "failed".
+        alpha = get_settings().fdr_alpha
+        query = query.filter(or_(Anomaly.q_value.is_(None), Anomaly.q_value <= alpha))
 
     total = query.count()
 
@@ -104,6 +122,9 @@ async def list_anomalies(
                 transaction_id=a.transaction_id,
                 filing_year=filing_year,
                 percentile_rank=a.percentile_rank,
+                p_value=a.p_value,
+                q_value=a.q_value,
+                has_null_model=a.q_value is not None,
             )
             for a, filing_year in rows
         ],
@@ -183,6 +204,9 @@ async def get_anomaly(
             else None
         ),
         percentile_rank=anomaly.percentile_rank,
+        p_value=anomaly.p_value,
+        q_value=anomaly.q_value,
+        has_null_model=anomaly.q_value is not None,
     )
 
 

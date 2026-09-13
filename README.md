@@ -53,7 +53,7 @@ python -m src.cli ingest-lobbying    # Senate LDA (key optional)
 python -m src.cli ingest-bills       # Congress.gov (free key: api.congress.gov/sign-up)
 python -m src.cli sync-industries    # SEC industry codes -> sector classification
 
-python -m src.cli analyze
+python -m src.cli analyze            # detectors, then FDR correction, then ranks
 python -m src.cli stats              # what ran, and against how much data
 python -m src.cli serve              # http://localhost:8000
 ```
@@ -180,6 +180,38 @@ before they were disabled:
 python -m src.cli purge-disabled --dry-run   # preview
 python -m src.cli purge-disabled             # apply
 ```
+
+## Multiple comparisons
+
+Sixteen detectors run against every member, so some of what gets flagged is what
+running thousands of tests over hundreds of people produces. Six of them ask a
+*timing* question — donations, lobbying filings, contract awards, bill
+sponsorship, committee referrals, cross-member clusters — and those have a
+well-posed null: the same trades, the same events, no relationship between them.
+
+`analyze` tests each (member, detector) pair against that null by circular-
+shifting the member's whole trading calendar ~1,000 times and re-counting
+coincidences, then applies Benjamini–Hochberg across every test in the run.
+Findings carry `p_value` and `q_value`.
+
+Shifting rather than resampling is deliberate: disclosed trades arrive in
+same-day PTR batches, and a null that scattered them would make ordinary
+clustering look extraordinary.
+
+The other ten detectors measure a magnitude (`sector_concentration`,
+`late_filing`, …). There is no coincidence to destroy, so **they carry no
+q-value at all** — `has_null_model: false` in the API. A null `q_value` means
+*no null model exists*, never *passed one*. They keep `percentile_rank`, which
+is the right tool for a magnitude.
+
+`GET /api/anomalies/` hides findings that failed correction by default; pass
+`include_below_fdr=true` to see them. Untested findings are always returned.
+`python -m src.cli significance --alpha 0.1` re-runs the correction at a
+different rate without re-detecting anything.
+
+What surviving this means: the timing alignment is unlikely by chance. Not that
+the member acted on anything, and not that the detector's threshold is
+calibrated.
 
 ## API endpoints
 

@@ -34,11 +34,13 @@ feeds they replace.
 | House trades | House Clerk PTR XML | — already official | done |
 | Member roster | unitedstates.io congress-legislators | — already official | done |
 | Committee assignments | none (detector had an empty table) | congress-legislators `committee-membership-current.yaml` | **done** |
+| Campaign donations | FEC API (`src/ingestion/fec.py`) | — | **done** |
+| Lobbying | Senate LDA API (`src/ingestion/lda.py`) | — | **done** |
+| Gov contracts | USASpending (`src/ingestion/usaspending.py`) | — | **done** |
+| Bills and sponsorship | Congress.gov (`src/ingestion/bills.py`) | — | **done** |
+| Company → sector | SEC EDGAR industry codes (`src/ingestion/sec_industries.py`) | — | **done** |
 | Senate trades | — (vendor removed) | Senate eFD | not started |
-| Campaign donations | — (vendor removed) | FEC API | **not started — table empty** |
-| Lobbying | — (vendor removed) | Senate LDA API | **not started — table empty** |
-| Gov contracts | — (vendor removed) | USASpending API | **not started — table empty** |
-| Benchmark prices | `yfinance` | licensed vendor, or drop — see D4 | deferred |
+| Benchmark prices | — | dropped, see D10 | **dropped** |
 
 The Tier-2 detector logic in `src/analysis/tier2_detectors.py` does not change;
 only its feed does.
@@ -57,14 +59,14 @@ the client:
   PTRs and the download/parse path is chamber-agnostic, so Senate is reachable
   in principle — but nothing has shown the scraper survives eFD's anti-bot
   protection, or that `ptr_parser` handles the Senate PDF layout.
-- **The three Tier-2 tables have no ingester.** `donor_conflict`,
-  `lobbying_overlap` and `contract_front_run` therefore return nothing until
-  FEC, Senate LDA and USASpending are built. `detection_summary()` — and
-  `cli stats` — names detectors whose source table is empty, so this reads as
-  "no data" rather than "no findings".
+- **The three Tier-2 tables now have ingesters** and all three detectors emit.
+  `detection_summary()` — and `cli stats` — still names any detector whose
+  source table is empty, so a silent zero stays distinguishable from a clean
+  result.
 
-**`yfinance`** scrapes Yahoo Finance through an unofficial library against
-Yahoo's terms. Acceptable for a hobby project, not for a paid endpoint.
+**`yfinance`** scraped Yahoo Finance through an unofficial library against
+Yahoo's terms. Acceptable for a hobby project, not for a paid endpoint. It is
+gone, along with its only caller — see D10.
 
 ## D3. Three detectors are disabled, not merely untuned
 
@@ -110,6 +112,8 @@ several already give away free (return calculations).
 
 When it is wanted, this is end-of-day closes rather than real-time quotes — the
 cheapest and least restricted category of market data, roughly $20–30/month.
+The price-based performance analyzer that used to sit here has been deleted
+rather than left waiting for that data; see D10 for why.
 
 **A constraint that does not go away with better data:** disclosures report
 amount *bands* and no share counts. Per-trade percentage return is computable
@@ -161,9 +165,9 @@ alongside the number of detector-member tests that produced them, so a long list
 is not mistaken for a long list of wrongdoing.
 
 **Still outstanding:** the detectors continue to *fire* on their asserted
-thresholds; percentile rank is currently an annotation on the output, not the
-trigger. Formal FDR control needs per-detector p-values, which none of them
-currently produce.
+thresholds; percentile rank is an annotation on the output, not the trigger.
+Formal FDR control is now implemented for the six detectors that admit a null
+model — see D11.
 
 ## D7. Compliance scoring is the flagship
 

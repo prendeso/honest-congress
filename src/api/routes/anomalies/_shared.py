@@ -4,15 +4,9 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
-from decimal import Decimal
 from typing import Any, Dict, List
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import func
-from sqlalchemy.orm import Session
-
-from src.analysis.trade_analyzer import TradeAnalyzer
-from src.db import Anomaly, Transaction
 
 # ---------------- response schemas ----------------
 
@@ -77,44 +71,10 @@ class AnomalySummaryResponse(BaseModel):
 # ---------------- large-trade sync state ----------------
 
 # One-time per-process flag to avoid repeating the sync work on every request.
-_large_trade_synced = False
-
-
-def _large_trade_sync_needed(db: Session) -> bool:
-    """Decide whether the large-trade anomaly cache is out of sync with rows."""
-    large_trade_threshold = Decimal("1000000")
-    large_txn_count = (
-        db.query(func.count(Transaction.id))
-        .filter(Transaction.amount_min > large_trade_threshold)
-        .scalar()
-    )
-    anomaly_count = (
-        db.query(func.count(Anomaly.id))
-        .filter(
-            Anomaly.anomaly_type == "large_trade",
-            Anomaly.transaction_id.isnot(None),
-        )
-        .scalar()
-    )
-    missing_txn_id = (
-        db.query(Anomaly.id)
-        .filter(
-            Anomaly.anomaly_type == "large_trade",
-            Anomaly.transaction_id.is_(None),
-        )
-        .first()
-    )
-
-    return bool(missing_txn_id) or large_txn_count != anomaly_count
-
-
-def ensure_large_trade_sync(db: Session) -> None:
-    """Idempotent: bring the large-trade anomalies in line with transactions."""
-    global _large_trade_synced
-    if _large_trade_synced and not _large_trade_sync_needed(db):
-        return
-    TradeAnalyzer()._sync_large_trade_anomalies(db)
-    _large_trade_synced = True
+# The large-trade sync that used to run here is gone. It fired on three GET
+# endpoints, wrote rows during a read, and never committed them; the writes were
+# removed and `cli recount` / `cli analyze` own that work now. The function
+# outlived its callers, which is how dead code comes to look like a feature.
 
 
 # ---------------- background sync status ----------------

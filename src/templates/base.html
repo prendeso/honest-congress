@@ -10,8 +10,11 @@
     <style>
         [x-cloak] { display: none !important; }
         .glass-card { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); }
-        .btn-primary { @apply bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition; }
-        .btn-secondary { @apply bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition; }
+        /* .btn-primary and .btn-secondary lived here, written with @apply.
+           That is a build-step Tailwind directive and this page loads the play
+           CDN, which ignores it silently -- so both classes rendered as no
+           styling at all. Nothing referenced them either. Use the utility
+           classes directly, as every template here already does. */
     </style>
 </head>
 <body class="{% block body_class %}bg-gray-100 min-h-screen{% endblock %}">

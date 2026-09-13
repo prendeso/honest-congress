@@ -523,3 +523,111 @@ class TestADuplicateDocIdDoesNotKillTheIngest:
         second = db_session.query(Disclosure).count()
 
         assert first == second == 5
+
+
+class TestOneUnstorableFilingDoesNotKillTheRun:
+    """A filing the database refuses must cost one failure, not the queue.
+
+    A 2024 House filing extracted with NUL bytes in an asset description --
+    a font with no usable ToUnicode map, so every glyph came back U+0000.
+    PostgreSQL rejects NUL in a text field with a `psycopg.DataError` raised
+    at flush time, which leaves the session needing a rollback.
+
+    Neither handler issued one, and both then touched the session: the inner
+    one read `disclosure.document_id` (expired by the previous commit, so the
+    read goes to the database) and called `db.commit()`. So the error handler
+    raised PendingRollbackError from inside itself, that escaped the loop, and
+    a parse run of a thousand filings ended nine seconds in having stored
+    nothing. The second filing of three below is the one the database refuses;
+    the third is what the old code never reached.
+    """
+
+    def _orchestrator(self, tmp_path, member, poison_doc_id):
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        (tmp_path / "x.pdf").write_bytes(b"%PDF-1.4")
+        orch.download_disclosure_pdf = lambda d: tmp_path / "x.pdf"  # type: ignore[method-assign]
+
+        # The failure has to come from the FLUSH, not from any old statement.
+        # Only a rejected flush sets the session's rollback-required flag, and
+        # that flag is what turns every later ORM call into PendingRollbackError
+        # -- the whole mechanism under test. A statement error alone leaves the
+        # session usable and reproduces nothing. So the stand-in queues a row
+        # the database will refuse (a duplicate `document_id`, which carries a
+        # unique constraint) and lets `parse_disclosure`'s own `db.commit()`
+        # hit it, exactly as the NUL byte did on PostgreSQL.
+        state = {"session": None, "doc": None}
+
+        def fake_parse_ptr(path):
+            db = state["session"]
+            if state["doc"] == poison_doc_id:
+                db.add(
+                    Disclosure(
+                        member_id=member.id,
+                        filing_year=2024,
+                        filing_type="PTR",
+                        filing_date=datetime(2024, 5, 1),
+                        document_id="NUL-1",
+                        is_ptr=True,
+                    )
+                )
+            return {
+                "quality": {"text_extracted": True, "rows_detected": 1, "rows_parsed": 1},
+                "transactions": [
+                    {
+                        "transaction_date": datetime(2024, 3, 1),
+                        "transaction_type": "purchase",
+                        "amount_min": 1001,
+                        "amount_max": 15000,
+                        "description": "Apple Inc",
+                        "ticker": "AAPL",
+                    }
+                ],
+            }
+
+        orch.ptr_parser.parse_ptr = fake_parse_ptr  # type: ignore[method-assign]
+
+        original = orch.parse_disclosure
+
+        def tracking_parse(db, disclosure, pdf_path=None):
+            state["session"] = db
+            state["doc"] = disclosure.document_id
+            return original(db, disclosure, pdf_path)
+
+        orch.parse_disclosure = tracking_parse  # type: ignore[method-assign]
+        return orch
+
+    def test_the_run_continues_past_the_filing_the_database_refuses(self, db_session, tmp_path):
+        member = _make_member(db_session)
+        for doc_id in ("NUL-1", "NUL-2", "NUL-3"):
+            db_session.add(
+                Disclosure(
+                    member_id=member.id,
+                    filing_year=2024,
+                    filing_type="PTR",
+                    filing_date=datetime(2024, 5, 1),
+                    document_id=doc_id,
+                    is_ptr=True,
+                )
+            )
+        db_session.commit()
+
+        orch = self._orchestrator(tmp_path, member, poison_doc_id="NUL-2")
+
+        # The assertion is first of all that this returns at all. Before the
+        # fix it raised PendingRollbackError out of the loop.
+        results = orch.parse_disclosures(db_session, limit=10)
+
+        assert results["failed"] == 1, results
+        assert results["parsed"] == 2, (
+            f"the run stopped at the bad filing instead of continuing past it: {results}"
+        )
+
+        db_session.expire_all()
+        parsed = {
+            d.document_id: d.parsed
+            for d in db_session.query(Disclosure)
+            .filter(Disclosure.document_id.in_(["NUL-1", "NUL-2", "NUL-3"]))
+            .all()
+        }
+        assert parsed["NUL-1"] is True
+        assert parsed["NUL-3"] is True, "the filing queued after the bad one was never read"

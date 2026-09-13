@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Tuple
 
 import pdfplumber
 
+from src.parsing.text_cleanup import clean_tables, clean_text
+
 logger = logging.getLogger(__name__)
 
 # Value ranges used in disclosures
@@ -62,14 +64,15 @@ class DisclosureParser:
                 tables = []
 
                 for page in pdf.pages:
-                    # Extract text
-                    page_text = page.extract_text() or ""
+                    # Extract text. Sanitised here, at the one point every
+                    # stored string comes through, rather than at each field.
+                    page_text = clean_text(page.extract_text())
                     text += page_text + "\n"
 
                     # Extract tables
                     page_tables = page.extract_tables()
                     if page_tables:
-                        tables.extend(page_tables)
+                        tables.extend(clean_tables(page_tables))
 
                 # Identify document sections and parse accordingly
                 result["assets"] = self._parse_assets_section(text, tables)

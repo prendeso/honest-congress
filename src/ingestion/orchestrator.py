@@ -540,6 +540,11 @@ class IngestionOrchestrator:
             db.commit()
             return False
 
+        # Read once, up front, into a plain string. After a failed flush the
+        # ORM attribute cannot be read at all, and the error path needs to be
+        # able to say which filing it was about.
+        document_id = disclosure.document_id
+
         try:
             # Use appropriate parser based on disclosure type
             if disclosure.is_ptr:
@@ -597,9 +602,23 @@ class IngestionOrchestrator:
             return True
 
         except Exception as e:
-            logger.error(f"Error parsing disclosure {disclosure.document_id}: {e}")
-            disclosure.parse_error = str(e)
-            db.commit()
+            # The rollback has to come first, and it is not a tidy-up. When the
+            # exception was raised BY `db.commit()` -- a DataError from the
+            # flush, say -- the session is left needing a rollback, and every
+            # subsequent ORM operation on it raises PendingRollbackError
+            # instead. That included this handler's own `disclosure.document_id`
+            # (expired by the previous commit, so reading it goes to the
+            # database) and its `db.commit()`. So the handler raised from inside
+            # itself, the new exception escaped `parse_disclosures`' loop, and
+            # one unparseable filing ended a run of a thousand.
+            db.rollback()
+            logger.error("Error parsing disclosure %s: %s", document_id, e)
+            try:
+                disclosure.parse_error = str(e)
+                db.commit()
+            except Exception:  # pragma: no cover - the session is unusable
+                db.rollback()
+                logger.exception("Could not record the parse error for %s", document_id)
             return False
 
     @staticmethod
@@ -831,6 +850,9 @@ class IngestionOrchestrator:
         results = {"parsed": 0, "failed": 0, "skipped": 0}
 
         for disclosure in disclosures:
+            # Same reason as in `parse_disclosure`: read it while the session is
+            # known good, so the handler below never has to touch the database.
+            document_id = disclosure.document_id
             try:
                 success = self.parse_disclosure(db, disclosure)
                 if success:
@@ -843,7 +865,11 @@ class IngestionOrchestrator:
                     time.sleep(delay)
 
             except Exception as e:
-                logger.error(f"Error processing {disclosure.document_id}: {e}")
+                # A filing that cannot be stored must cost one failure, not the
+                # rest of the queue. The rollback puts the session back in a
+                # usable state for the next iteration.
+                db.rollback()
+                logger.error("Error processing %s: %s", document_id, e)
                 results["failed"] += 1
 
         logger.info(f"Parsing complete: {results}")

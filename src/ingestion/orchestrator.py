@@ -17,6 +17,7 @@ from src.ingestion.congress_gov import CongressGovClient
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 from src.ingestion.house import HouseIngester
 from src.ingestion.senate import SenateIngester, SenatePTRIngester
+from src.parsing.confidence import score_fd_parse, score_ptr_parse
 from src.parsing.pdf_parser import DisclosureParser
 from src.parsing.ptr_parser import PTRParser
 
@@ -341,6 +342,8 @@ class IngestionOrchestrator:
 
         disclosures = self.senate.search_all_disclosures(year)
         synced = 0
+        unmatched = 0
+        ambiguous = 0
 
         for d in disclosures:
             try:
@@ -352,35 +355,66 @@ class IngestionOrchestrator:
                 if existing:
                     continue
 
-                # For Senate, we may need to match member differently
-                # since the search results may not include full name
-                # This is simplified - real implementation would parse
-                # the disclosure page to get member name
+                # Disclosure.member_id is non-nullable, so an unmatched filing
+                # cannot be stored. Senate search rows carry no state, so we
+                # match on name + chamber and require a unique hit rather than
+                # silently attaching a filing to the wrong senator.
+                last_name = (d.get("last_name") or "").strip()
+                first_name = (d.get("first_name") or "").strip()
+                if not last_name:
+                    unmatched += 1
+                    logger.warning(
+                        f"Senate disclosure {d.get('document_id')} has no filer name; skipping"
+                    )
+                    continue
 
-                # Create disclosure without member link for now
-                # Will be linked during parsing.
-                # NOTE: not currently persisted (db.add commented out below).
-                _disclosure = Disclosure(
-                    member_id=None,  # Will be linked later
-                    filing_year=d["filing_year"],
-                    filing_type=d.get("filing_type", "Unknown"),
-                    filing_date=choose_filing_date(d.get("filing_date"), d.get("filing_year")),
-                    document_id=d["document_id"],
-                    document_url=d["document_url"],
-                    parsed=False,
+                matches = (
+                    db.query(Member)
+                    .filter(
+                        Member.last_name.ilike(last_name),
+                        Member.first_name.ilike(f"{first_name}%"),
+                        Member.chamber == Chamber.SENATE,
+                    )
+                    .limit(2)
+                    .all()
                 )
 
-                # Only add if we can link to a member
-                # For now, skip unlinked disclosures
-                # db.add(disclosure)
+                if not matches:
+                    unmatched += 1
+                    logger.warning(
+                        f"Member not found for Senate disclosure: {first_name} {last_name}"
+                    )
+                    continue
 
+                if len(matches) > 1:
+                    ambiguous += 1
+                    logger.warning(
+                        f"Ambiguous member match for Senate disclosure: "
+                        f"{first_name} {last_name} matched {len(matches)} senators; skipping"
+                    )
+                    continue
+
+                db.add(
+                    Disclosure(
+                        member_id=matches[0].id,
+                        filing_year=d["filing_year"],
+                        filing_type=d.get("filing_type", "Unknown"),
+                        filing_date=choose_filing_date(d.get("filing_date"), d.get("filing_year")),
+                        document_id=d["document_id"],
+                        document_url=d["document_url"],
+                        parsed=False,
+                    )
+                )
                 synced += 1
 
             except Exception as e:
                 logger.error(f"Error syncing Senate disclosure {d.get('document_id')}: {e}")
 
         db.commit()
-        logger.info(f"Synced {synced} Senate disclosures for {year}")
+        logger.info(
+            f"Synced {synced} Senate disclosures for {year} "
+            f"({unmatched} unmatched, {ambiguous} ambiguous, skipped)"
+        )
         return synced
 
     def download_disclosure_pdf(self, disclosure: Disclosure, force: bool = False) -> Path | None:
@@ -495,19 +529,49 @@ class IngestionOrchestrator:
             if disclosure.is_ptr:
                 parsed = self.ptr_parser.parse_ptr(str(pdf_path))
                 self._store_ptr_data(db, disclosure, parsed)
+                text_extracted = bool((parsed.get("quality") or {}).get("text_extracted"))
+                score = score_ptr_parse(
+                    parsed.get("quality") or {},
+                    parsed.get("transactions") or [],
+                    disclosure.filing_date,
+                )
             else:
                 parsed = self.disclosure_parser.parse_pdf(str(pdf_path))
                 self._store_fd_data(db, disclosure, parsed)
+                text_extracted = bool(
+                    parsed.get("raw_text") or parsed.get("assets") or parsed.get("liabilities")
+                )
+                score = score_fd_parse(
+                    text_extracted,
+                    len(parsed.get("assets") or []),
+                    len(parsed.get("liabilities") or []),
+                    parsed.get("parse_errors") or [],
+                )
 
-            # Mark as parsed
+            # `parsed` means the parser ran, which is all it has ever meant. The
+            # score is what says whether it worked.
             disclosure.parsed = True
             disclosure.parse_error = None
+            disclosure.parse_confidence = score.confidence
+            disclosure.parse_warnings = score.summary
+            # A property of the document, not of the parse. Recorded so that a
+            # scan and a genuine parser failure stop counting as the same thing.
+            disclosure.has_text_layer = text_extracted
 
             if parsed.get("parse_errors"):
                 disclosure.parse_error = "; ".join(parsed["parse_errors"])
+            elif score.confidence == 0.0:
+                # A filing that yielded nothing used to be recorded as a clean
+                # success. Put it where the existing "needs attention" query
+                # already looks.
+                disclosure.parse_error = score.summary or "Parser extracted nothing"
 
             db.commit()
-            logger.info(f"Parsed disclosure {disclosure.document_id}")
+            logger.info(
+                "Parsed disclosure %s (confidence %.2f)",
+                disclosure.document_id,
+                score.confidence,
+            )
             return True
 
         except Exception as e:
@@ -621,6 +685,7 @@ class IngestionOrchestrator:
         ptr_only: bool = False,
         reparse: bool = False,
         failed_only: bool = False,
+        min_confidence: float | None = None,
         delay: float = 1.0,
     ) -> Dict[str, int]:
         """
@@ -634,6 +699,7 @@ class IngestionOrchestrator:
             ptr_only: Only parse PTR disclosures
             reparse: Re-parse already parsed disclosures
             failed_only: Only retry disclosures that failed to download
+            min_confidence: Re-parse filings the parser read worse than this
             delay: Delay between downloads (seconds)
 
         Returns:
@@ -648,6 +714,28 @@ class IngestionOrchestrator:
                     Disclosure.parse_error.ilike("%404%"),
                 )
             )
+        elif min_confidence is not None:
+            # Re-read the filings the parser did badly on. Unscored filings are
+            # included: they were parsed before scoring existed, so nobody knows
+            # how well they were read.
+            query = query.filter(
+                or_(
+                    Disclosure.parse_confidence.is_(None),
+                    Disclosure.parse_confidence < min_confidence,
+                )
+            )
+            # Except the scans. They score 0.0 and always will: there is no
+            # text in them to read. Without this, every re-parse run downloads
+            # and re-reads 12.7% of the House corpus to reach the same answer
+            # it reached last time. `--reparse` still reaches them; filings
+            # whose text layer is unknown are still included, because nobody
+            # has checked those.
+            query = query.filter(
+                or_(
+                    Disclosure.has_text_layer.is_(None),
+                    Disclosure.has_text_layer.is_(True),
+                )
+            )
         elif not reparse:
             query = query.filter(Disclosure.parsed == False)
 
@@ -659,6 +747,23 @@ class IngestionOrchestrator:
 
         if ptr_only:
             query = query.filter(Disclosure.is_ptr == True)
+
+        # Least-recently-touched first, and this is what makes `--limit`
+        # resumable rather than a treadmill.
+        #
+        # There was no ordering at all, so the database returned an arbitrary
+        # set. That is harmless for the default filter -- a filing that parses
+        # leaves `parsed == False` and cannot come back -- but it silently
+        # breaks the two filters a filing can stay inside after being read.
+        # `--min-confidence 1.0 --limit 500` would take some arbitrary 500,
+        # re-read them, leave any that scored below 1.0 still matching, and
+        # take the same 500 again on the next run: a re-parse campaign that
+        # never reaches the rest of the corpus however many times it is run.
+        #
+        # `updated_at` carries `onupdate`, so parsing a filing moves it to the
+        # back of the queue whatever its new score. Each run therefore advances
+        # to filings it has not reached, and repeated runs converge.
+        query = query.order_by(Disclosure.updated_at.asc(), Disclosure.id.asc())
 
         if limit:
             query = query.limit(limit)
@@ -767,7 +872,6 @@ class IngestionOrchestrator:
         query = db.query(Disclosure).filter(
             Disclosure.document_url.isnot(None),
             Disclosure.document_url != "",
-            ~Disclosure.document_id.like("QANT_%"),  # Skip API-sourced records
         )
 
         if limit:

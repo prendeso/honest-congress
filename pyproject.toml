@@ -23,8 +23,12 @@ dependencies = [
     "beautifulsoup4>=4.12,<5.0",
     "lxml>=5.0,<7.0",
     "pdfplumber>=0.11,<1.0",
-    "yfinance>=0.2.40,<1.0",
     "jinja2>=3.1,<4.0",
+    "pyyaml>=6.0,<7.0",
+    # Used directly by src/analysis/significance.py for the permutation null.
+    # It used to arrive transitively via yfinance; that dependency is gone, so
+    # this is now the only thing keeping numpy installed.
+    "numpy>=1.26,<3.0",
 ]
 
 [project.optional-dependencies]
@@ -35,6 +39,11 @@ dev = [
     "ruff>=0.6.0,<1.0",
     "mypy>=1.10,<2.0",
     "pre-commit>=3.7,<5.0",
+    # Stub packages: without these mypy reports import-untyped for requests and
+    # yaml, which `ignore_missing_imports` does not suppress (that flag covers
+    # libraries with no stubs published at all).
+    "types-requests>=2.32,<3.0",
+    "types-PyYAML>=6.0,<7.0",
 ]
 
 [project.scripts]
@@ -59,9 +68,6 @@ line-length = 100
 target-version = "py311"
 extend-exclude = [
     "alembic/versions",
-    "docs/archive",
-    "scripts",
-    "verify_retired_fix.py",
 ]
 
 [tool.ruff.lint]
@@ -93,8 +99,6 @@ warn_redundant_casts = true
 ignore_missing_imports = true
 exclude = [
     "alembic/versions",
-    "docs/archive",
-    "scripts",
     "tests",
 ]
 

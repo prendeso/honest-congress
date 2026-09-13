@@ -2,6 +2,7 @@
 
 import logging
 import re
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Tuple
@@ -22,6 +23,11 @@ PTR_VALUE_RANGES = {
     "$5,000,001 - $25,000,000": (5000001, 25000000),
     "$25,000,001 - $50,000,000": (25000001, 50000000),
     "Over $50,000,000": (50000001, None),
+    # The top band on a spouse or dependent-child line: the form stops
+    # itemising above $1M. Missing from this table, it fell through to the
+    # generic path and came out as exactly $1,000,000 -- a precise figure the
+    # filing never gave.
+    "Over $1,000,000": (1000001, None),
 }
 
 # Transaction type keywords
@@ -29,10 +35,58 @@ BUY_KEYWORDS = ["purchase", "buy", "bought", "p"]
 SELL_KEYWORDS = ["sale", "sell", "sold", "s"]
 EXCHANGE_KEYWORDS = ["exchange", "ex"]
 
+_DATE_PATTERN = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}")
+
+# The footnote block under each record. Its labels render with the small-caps
+# glyphs as NUL bytes, so once those are stripped they read "F S:", "S O:",
+# "D:", "L:" -- Filing Status, Subholding Of, Description, Location.
+_FOOTNOTE_PREFIX = re.compile(r"^\s*(?:F\s+S\s*:|S\s+O\s*:|D\s*:|L\s*:)")
+
 # Common ticker pattern
 TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
 
 # Words that look like tickers but aren't
+# House Clerk PTR filings tag each holding with a bracketed asset-class code --
+# [ST] stock, [CS] common stock, [OP] options, and so on. `_extract_ticker`
+# reads bracketed uppercase as a ticker, so without these a TuHURA Biosciences
+# purchase tagged [CS] was recorded against a company called "CS".
+ASSET_CLASS_CODES = {
+    "ST",
+    "CS",
+    "PS",
+    "OP",
+    "OL",
+    "OT",
+    "MF",
+    "ETF",
+    "EF",
+    "CT",
+    "GS",
+    "HN",
+    "IH",
+    "PE",
+    "RP",
+    "SA",
+    "AB",
+    "BA",
+    "CO",
+    "CD",
+    "CR",
+    "DB",
+    "DO",
+    "FA",
+    "FN",
+    "IC",
+    "IR",
+    "OI",
+    "OO",
+    "PM",
+    "RE",
+    "TR",
+    "VI",
+    "WU",
+}
+
 NON_TICKERS = {
     "THE",
     "AND",
@@ -63,6 +117,27 @@ NON_TICKERS = {
 }
 
 
+@dataclass
+class ParseQuality:
+    """What the parser actually managed on one document.
+
+    Counted rather than judged: `rows_detected` includes rows that produced
+    nothing, so a dropped row lowers the score by arithmetic instead of by a
+    rule somebody has to remember to write.
+    """
+
+    rows_detected: int = 0
+    rows_parsed: int = 0
+    rows_recovered: int = 0
+    text_extracted: bool = False
+    tables_found: bool = False
+    headers_recognised: bool = False
+    used_text_fallback: bool = False
+
+    def as_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
 class PTRParser:
     """Parser specifically designed for PTR (Periodic Transaction Report) PDFs."""
 
@@ -86,11 +161,13 @@ class PTRParser:
         Returns:
             Dict with transactions and any parse errors
         """
-        result = {
+        quality = ParseQuality()
+        result: Dict[str, Any] = {
             "transactions": [],
             "filer_info": {},
             "filing_date": None,
             "parse_errors": [],
+            "quality": quality.as_dict(),
         }
 
         try:
@@ -110,19 +187,30 @@ class PTRParser:
                 result["filer_info"] = self._extract_filer_info(all_text)
                 result["filing_date"] = self._extract_filing_date(all_text)
 
+                quality.text_extracted = bool(all_text.strip())
+                quality.tables_found = bool(all_tables)
+
                 # Try to parse from tables first (most reliable)
                 if all_tables:
-                    result["transactions"] = self._parse_tables(all_tables)
+                    result["transactions"] = self._parse_tables(all_tables, quality)
 
                 # Fall back to text parsing if no tables found
                 if not result["transactions"]:
-                    result["transactions"] = self._parse_text(all_text)
+                    quality.used_text_fallback = True
+                    text_rows = self._parse_text(all_text)
+                    result["transactions"] = text_rows
+                    # The text path has no notion of a candidate row, so the
+                    # only honest denominator is what it produced.
+                    quality.rows_detected = max(quality.rows_detected, len(text_rows))
+                    quality.rows_parsed = len(text_rows)
 
+                result["quality"] = quality.as_dict()
                 logger.info(f"Parsed {len(result['transactions'])} transactions from PTR")
 
         except Exception as e:
             logger.error(f"Error parsing PTR {pdf_path}: {e}")
             result["parse_errors"].append(str(e))
+            result["quality"] = quality.as_dict()
 
         return result
 
@@ -153,8 +241,11 @@ class PTRParser:
             return self._parse_date(date_match.group(1))
         return None
 
-    def _parse_tables(self, tables: List[List[List[str]]]) -> List[Dict[str, Any]]:
+    def _parse_tables(
+        self, tables: List[List[List[str]]], quality: "ParseQuality | None" = None
+    ) -> List[Dict[str, Any]]:
         """Parse transactions from extracted tables."""
+        quality = quality if quality is not None else ParseQuality()
         transactions = []
 
         for table in tables:
@@ -176,17 +267,86 @@ class PTRParser:
 
             # Determine column indices
             col_indices = self._identify_columns(headers)
+            if self._headers_recognised(headers):
+                quality.headers_recognised = True
 
             # Parse each data row
             for row in table[1:]:
+                if not self._is_candidate_row(row):
+                    # Blank spacers, and the footnote rows PTR tables interleave
+                    # after each record ("Filing Status: New", "Location: ...").
+                    # Those legitimately yield no transaction, so counting them
+                    # as dropped would mark a clean filing as a bad one.
+                    continue
+                quality.rows_detected += 1
                 txn = self._parse_table_row(row, col_indices)
                 if txn:
+                    quality.rows_parsed += 1
+                    if txn.get("recovered_from_collapsed_row"):
+                        quality.rows_recovered += 1
                     transactions.append(txn)
 
         return transactions
 
+    @staticmethod
+    def _is_candidate_row(row: List[Any]) -> bool:
+        """Whether a row looks like it should yield a transaction.
+
+        This is the denominator the confidence score divides by, so getting it
+        wrong either hides dropped rows or invents them. Measured across 200
+        real filings, an earlier rule -- "has a date OR a dollar sign" -- marked
+        107 rows as unread transactions that were nothing of the kind:
+
+        * the "Cap. Gains > $200?" header, which wraps onto its own rows and
+          carries a dollar sign; and
+        * the footnote block beneath each record ("Filing Status", "Subholding
+          Of", "Description"), whose prose mentions figures like "$500,000" and
+          option strike prices.
+
+        A transaction always carries a trade date, and neither of those does, so
+        the date is the requirement and an amount alone is not enough. Tightening
+        it dropped 107 false candidates and exactly one "transaction": a row
+        reading `["[ST]", "$50,000"]` -- an asset-class code and the wrapped half
+        of an amount -- with no date, no type, and a $50,000 band invented from
+        one bound.
+        """
+        joined = " ".join(str(cell) for cell in row if cell).replace("\x00", "")
+        if not joined.strip():
+            return False
+
+        if not _DATE_PATTERN.search(joined):
+            return False
+
+        # A footnote block can still quote a date in its prose, so the date has
+        # to appear on a line that is not itself a footnote.
+        dated = [line for line in joined.split("\n") if _DATE_PATTERN.search(line)]
+        return any(not _FOOTNOTE_PREFIX.match(line) for line in dated)
+
+    @staticmethod
+    def _headers_recognised(headers: List[str]) -> bool:
+        """Whether column positions were read off the header or merely assumed.
+
+        `_identify_columns` falls back to fixed positions 0-4 when nothing
+        matches, which is a guess about a layout rather than a reading of it.
+        The confidence score should not treat the two alike.
+        """
+        joined = " ".join(str(h).lower() for h in headers if h)
+        return any(word in joined for word in ("asset", "transaction", "date", "amount", "owner"))
+
     def _identify_columns(self, headers: List[str]) -> Dict[str, int]:
-        """Identify which column contains which data."""
+        """Identify which column contains which data.
+
+        House PTR tables carry TWO date columns -- "Date" (when the trade
+        happened) and "Notification Date" (when the filer was told). A plain
+        `"date" in header` test matches both, and since the notification column
+        comes second it used to win, so almost every stored transaction_date was
+        actually the notification date. Measured against 18 real 2024 filings,
+        that was wrong on 29 of 31 transactions.
+
+        It matters beyond tidiness: STOCK Act compliance is filing date minus
+        transaction date, so using the notification date understates lateness by
+        however long notification took.
+        """
         indices = {
             "asset": 0,
             "type": 1,
@@ -198,9 +358,13 @@ class PTRParser:
         for i, header in enumerate(headers):
             if not header:
                 continue
-            h = str(header).lower()
+            # Headers wrap, so "Notification\nDate" arrives with a newline in it.
+            h = " ".join(str(header).lower().split())
 
-            if "asset" in h or "description" in h or "name" in h:
+            # Checked before the generic "date" test so it cannot claim the slot.
+            if "notification" in h:
+                indices["notification_date"] = i
+            elif "asset" in h or "description" in h or "name" in h:
                 indices["asset"] = i
             elif "type" in h or "transaction" in h:
                 indices["type"] = i
@@ -223,6 +387,16 @@ class PTRParser:
         # Clean row values
         row = [str(cell).strip() if cell else "" for cell in row]
 
+        # pdfplumber sometimes fails to split a row and jams the whole record
+        # into the first cell, leaving every other cell null. Read by column
+        # index, that looks like an empty row and used to be dropped: across the
+        # six real filings in the test corpus, 18 transactions were lost this
+        # way against 16 kept, and two filings parsed to nothing at all while
+        # being recorded as parsed successfully.
+        populated = [cell for cell in row if cell]
+        if len(populated) == 1 and row[0]:
+            return self._parse_collapsed_cell(row[0])
+
         # Extract values based on column indices
         def get_col(name: str) -> str:
             idx = col_indices.get(name, -1)
@@ -238,6 +412,15 @@ class PTRParser:
         if not description and not txn_type_raw:
             return None
 
+        # PTR tables interleave a footnote row after each transaction --
+        # "Filing Status: New", with the glyphs rendered as NUL bytes. Those
+        # rows carry a non-empty description, so the emptiness check above lets
+        # them through, and they used to be emitted as transactions with every
+        # field None: 46% of all rows the parser produced.
+        description = description.replace("\x00", "").strip()
+        if not description and not txn_type_raw:
+            return None
+
         # Parse transaction type
         txn_type = self._parse_transaction_type(txn_type_raw)
         if not txn_type:
@@ -249,6 +432,13 @@ class PTRParser:
 
         # Parse amount range
         amount_min, amount_max = self._parse_amount_range(amount_raw)
+
+        # A real transaction row always carries a date. Accepting an amount
+        # instead let `["[ST]", "$50,000"]` -- an asset-class code and the
+        # wrapped half of a band -- through as a transaction with a $50,000
+        # amount and nothing else.
+        if txn_date is None:
+            return None
 
         # Extract ticker
         ticker = self._extract_ticker(description)
@@ -262,18 +452,78 @@ class PTRParser:
             "asset_type": asset_type,
             "transaction_type": txn_type,
             "transaction_date": txn_date,
+            "notification_date": self._parse_date(get_col("notification_date")),
             "amount_min": amount_min,
             "amount_max": amount_max,
             "owner": self._normalize_owner(owner),
         }
 
+    def _parse_collapsed_cell(self, cell: str) -> Dict[str, Any] | None:
+        """Read a transaction out of a row pdfplumber collapsed into one cell.
+
+        The cell holds the record on its first line and the filing's footnotes
+        ("Filing Status", "Subholding Of", "Location") on the rest, with the
+        small-caps glyphs rendered as NUL bytes. Everything needed to read it
+        already exists: `_join_wrapped_amounts` stitches a range split across
+        two lines back together, and `_parse_text_line` reads the result. The
+        column-indexed path simply never called them.
+
+        Footnote lines carry no date, no dollar sign and no buy/sell keyword, so
+        `_parse_text_line` rejects them and the first successful parse is the
+        transaction.
+        """
+        lines = self._join_wrapped_amounts(str(cell).replace("\x00", "").split("\n"))
+
+        for line in lines:
+            txn = self._parse_text_line(self._spell_out_type_letter(line))
+            if not txn:
+                continue
+
+            # The record carries both dates in order -- the trade, then the
+            # notification. `_parse_text_line` takes the first, which is the one
+            # STOCK Act compliance is measured from; the second belongs in
+            # notification_date rather than being discarded.
+            dates = re.findall(r"\d{1,2}/\d{1,2}/\d{2,4}", line)
+            if len(dates) > 1:
+                txn["notification_date"] = self._parse_date(dates[1])
+
+            # Flagged because it arrived through the weaker text path, which the
+            # confidence score reports rather than hides.
+            txn["recovered_from_collapsed_row"] = True
+            return txn
+
+        return None
+
+    # The transaction-type column sits between the asset and the date, so in a
+    # flattened record the single letter immediately before the first date is
+    # always the type. Matching the letter anywhere in the line instead would be
+    # reckless -- "7.00% Series E" and "Class P" are asset names -- but anchored
+    # to the date it is the layout, not a guess.
+    _TYPE_LETTER = re.compile(r"\b([PSE])\s+(?=\d{1,2}/\d{1,2}/\d{2,4})")
+    _TYPE_WORDS = {"P": "purchase", "S": "sale", "E": "exchange"}
+
+    def _spell_out_type_letter(self, line: str) -> str:
+        """Expand the type letter so the text parser recognises an exchange.
+
+        `_parse_text_line` matches "p" and "s" as whole words and so already
+        reads purchases and sales, but nothing matches a lone "E". Without this
+        every exchange in a collapsed row is dropped -- one of the eighteen in
+        the test corpus.
+        """
+        return self._TYPE_LETTER.sub(
+            lambda match: f"{self._TYPE_WORDS[match.group(1)]} ", line, count=1
+        )
+
     def _parse_text(self, text: str) -> List[Dict[str, Any]]:
         """Parse transactions from plain text (fallback method)."""
         transactions = []
 
-        # Look for transaction patterns in text
-        # Common pattern: "ASSET DESCRIPTION    P/S    MM/DD/YYYY    $X - $Y    Owner"
-        lines = text.split("\n")
+        # Common pattern: "ASSET DESCRIPTION  P/S  MM/DD/YYYY  $X - $Y  Owner".
+        # The amount range routinely wraps -- "$15,001 -" on one line and
+        # "$50,000" on the next -- so a line-at-a-time scan saw only the opening
+        # bound and stored no amount at all. Stitch a dangling range back
+        # together before parsing.
+        lines = self._join_wrapped_amounts(text.split("\n"))
 
         for line in lines:
             # Skip header/footer lines
@@ -300,6 +550,50 @@ class PTRParser:
 
         return transactions
 
+    @staticmethod
+    def _join_wrapped_amounts(lines: List[str]) -> List[str]:
+        """Rejoin amount ranges split across two lines."""
+        joined: List[str] = []
+        pending: str | None = None
+
+        for raw in lines:
+            line = raw.rstrip()
+            if pending is not None:
+                # The continuation carries the upper bound, but rarely on its
+                # own: the asset name wraps too, so the line reads
+                # "Common Stock (ACI) [ST] $50,000" or "D Cumulative Perpetual
+                # Redeemable $50,000". Taking the whole tail leaves the two
+                # halves of the band separated by that text, and the range never
+                # matches -- which is why 60 of 200 real filings had a
+                # transaction with no amount at all. Take the first figure
+                # instead, and keep the rest so the description is not lost.
+                tail = re.sub(r"^\s*\[[A-Z]{1,5}\]\s*", "", line).strip()
+                bound = re.search(r"\$[\d,]+", tail)
+                if bound:
+                    rest = (tail[: bound.start()] + " " + tail[bound.end() :]).strip()
+                    joined.append(f"{pending} {bound.group(0)} {rest}".strip())
+                else:
+                    joined.append(f"{pending} {tail}".strip())
+                pending = None
+                continue
+
+            # A range that opens but does not close on this line -- either
+            # "$15,001 -" with the upper bound overleaf, or the open-ended
+            # "Over" with its figure overleaf. The second form is how the top
+            # band on a spouse line wraps, and without it the amount was lost
+            # entirely.
+            if re.search(r"\$[\d,]+\s*[-–—]\s*$", line) or re.search(
+                r"\b(over|above|more than)\s*$", line, re.IGNORECASE
+            ):
+                pending = line
+                continue
+
+            joined.append(line)
+
+        if pending is not None:
+            joined.append(pending)
+        return joined
+
     def _parse_text_line(self, line: str) -> Dict[str, Any] | None:
         """Try to parse a single line as a transaction."""
         if not line or len(line) < 20:
@@ -314,18 +608,42 @@ class PTRParser:
 
         # Try to extract components
         date_match = re.search(r"(\d{1,2}/\d{1,2}/\d{2,4})", line)
-        amount_match = re.search(r"\$[\d,]+\s*-\s*\$[\d,]+", line)
+        amount_match = re.search(
+            r"\$[\d,]+\s*-\s*\$[\d,]+|(?:over|above|more than)\s+\$[\d,]+|\$[\d,]+\s*\+",
+            line,
+            re.IGNORECASE,
+        )
 
-        # Extract transaction type
+        # Extract transaction type. Positionally first: the type column sits
+        # immediately before the date, so the token just before the first date
+        # is the type. Scanning the whole line for keywords instead made
+        # "Best Buy Co., Inc. Common Stock S 02/23/2024" a PURCHASE, because
+        # "Buy" is in the company name -- a disclosed sale recorded backwards.
         txn_type = None
-        for kw in BUY_KEYWORDS:
-            if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
-                txn_type = "purchase"
-                break
+        if date_match:
+            before = line[: date_match.start()].rstrip()
+            trailing = re.search(r"([A-Za-z]+)\s*$", before)
+            if trailing:
+                txn_type = self._parse_transaction_type(trailing.group(1))
+
+        if not txn_type:
+            for kw in BUY_KEYWORDS:
+                if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
+                    txn_type = "purchase"
+                    break
         if not txn_type:
             for kw in SELL_KEYWORDS:
                 if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
                     txn_type = "sale"
+                    break
+        if not txn_type:
+            # Exchanges were checked nowhere in this path, so every one of them
+            # was dropped -- the text fallback only ever recognised purchases
+            # and sales. `\bexchange\b` does not match "exchanged", which is
+            # how the word appears in the footnote prose beneath a record.
+            for kw in EXCHANGE_KEYWORDS:
+                if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
+                    txn_type = "exchange"
                     break
 
         if not txn_type:
@@ -338,9 +656,21 @@ class PTRParser:
         elif amount_match:
             description = line[: amount_match.start()].strip()
 
-        # Clean up description
-        for kw in BUY_KEYWORDS + SELL_KEYWORDS:
-            description = re.sub(rf"\b{kw}\b", "", description, flags=re.IGNORECASE)
+        # Strip the transaction-type token, and ONLY it. This used to remove
+        # every occurrence of every keyword anywhere in the description, so
+        # "Best Buy Co., Inc." became "Best Co., Inc." and "Purchase Point Media
+        # Corp" became "Point Media Corp" -- a company name mangled by the word
+        # it happens to contain, in a field that feeds sector classification and
+        # the opacity index.
+        #
+        # The type column sits immediately before the date, so the token to
+        # remove is the last one in the description and nothing else.
+        description = re.sub(
+            rf"\s*\b(?:{'|'.join(BUY_KEYWORDS + SELL_KEYWORDS + EXCHANGE_KEYWORDS)})\b\s*$",
+            "",
+            description,
+            flags=re.IGNORECASE,
+        )
         description = re.sub(r"\s+", " ", description).strip()
 
         if not description:
@@ -362,23 +692,36 @@ class PTRParser:
         }
 
     def _parse_transaction_type(self, text: str) -> str | None:
-        """Parse transaction type from text."""
+        """Parse transaction type from a Transaction Type cell.
+
+        The cell holds a one-letter code, sometimes with a qualifier: "P", "S",
+        "E", "S (partial)". The code is the first token, and reading it that way
+        is the whole fix here.
+
+        This used to test `keyword in text.lower()` as a plain substring, so
+        "S (partial)" matched the "p" of BUY_KEYWORDS inside the word "partial"
+        and a disclosed **sale was recorded as a purchase**. Direction is not
+        cosmetic: `contract_front_run` only looks at purchases, and the
+        cross-member cluster detector groups by it.
+        """
         if not text:
             return None
 
-        text_lower = text.lower().strip()
+        cleaned = text.lower().strip()
+        first = next((token for token in re.split(r"[^a-z]+", cleaned) if token), "")
 
-        for kw in BUY_KEYWORDS:
-            if kw in text_lower or text_lower == kw[0]:
-                return "purchase"
+        codes = {"p": "purchase", "s": "sale", "e": "exchange"}
+        if first in codes:
+            return codes[first]
 
-        for kw in SELL_KEYWORDS:
-            if kw in text_lower or text_lower == kw[0]:
-                return "sale"
-
-        for kw in EXCHANGE_KEYWORDS:
-            if kw in text_lower:
-                return "exchange"
+        for keywords, kind in (
+            (BUY_KEYWORDS, "purchase"),
+            (SELL_KEYWORDS, "sale"),
+            (EXCHANGE_KEYWORDS, "exchange"),
+        ):
+            for kw in keywords:
+                if re.search(rf"\b{re.escape(kw)}\b", cleaned):
+                    return kind
 
         return None
 
@@ -435,7 +778,12 @@ class PTRParser:
 
         if len(amounts) >= 2:
             return Decimal(min(amounts)), Decimal(max(amounts))
-        elif len(amounts) == 1:
+        if len(amounts) == 1:
+            # "Over $X" and "$X +" are open-ended. Returning (X, X) would turn a
+            # lower bound into an exact figure, which is the one thing this
+            # project will not do with a disclosure that reports a band.
+            if re.search(r"\b(over|above|more than)\b", text, re.IGNORECASE) or "+" in text:
+                return Decimal(amounts[0]), None
             return Decimal(amounts[0]), Decimal(amounts[0])
 
         return None, None
@@ -445,12 +793,16 @@ class PTRParser:
         if not text:
             return None
 
-        # Look for explicit ticker notation like (AAPL) or [MSFT]
-        explicit = re.search(r"[\(\[]([A-Z]{1,5})[\)\]]", text)
-        if explicit:
-            ticker = explicit.group(1)
-            if ticker not in NON_TICKERS:
-                return ticker
+        # Explicit ticker notation like (AAPL) or [MSFT]. Parenthesised codes are
+        # tickers; square-bracketed ones are usually the filing's asset-class
+        # tag, so those are checked against ASSET_CLASS_CODES as well.
+        for match in re.finditer(r"([\(\[])([A-Z]{1,5})([\)\]])", text):
+            opener, ticker, _ = match.groups()
+            if ticker in NON_TICKERS:
+                continue
+            if opener == "[" and ticker in ASSET_CLASS_CODES:
+                continue
+            return ticker
 
         # Look for ticker at start of description (common PTR format)
         start_match = re.match(r"^([A-Z]{1,5})\s*[-–—]\s", text)

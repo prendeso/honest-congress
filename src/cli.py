@@ -7,7 +7,9 @@ import sys
 from datetime import datetime
 
 from src.analysis import analyze_wealth
+from src.analysis.baselines import annotate_percentile_ranks, detection_summary
 from src.db import get_db
+from src.db.utils import recalculate_member_counts
 from src.ingestion import run_ingestion
 
 
@@ -47,6 +49,11 @@ def cmd_ingest(args):
 
     summary = run_ingestion(years=years, download_files=args.download, include_ptrs=include_ptrs)
 
+    # Member.disclosure_count is denormalized and the members API sorts and
+    # filters on it, so it has to be refreshed whenever disclosures change.
+    with get_db() as db:
+        recalculate_member_counts(db)
+
     print("\nIngestion complete:")
     print(f"  Members synced: {summary['members']}")
     print(f"  House disclosures: {summary['house_disclosures']}")
@@ -54,29 +61,19 @@ def cmd_ingest(args):
     print(f"  Senate disclosures: {summary['senate_disclosures']}")
 
 
-def cmd_ingest_trades(args):
-    """Ingest congressional trades from QuiverQuant."""
-    from src.ingestion.quiverquant import ingest_quiverquant_trades
-
-    print("Importing congressional trades from QuiverQuant...")
-
-    with get_db() as db:
-        result = ingest_quiverquant_trades(db, chamber=args.chamber)
-
-    print("\nTrade Ingestion Complete:")
-    print(f"  Imported: {result['imported']}")
-    print(f"  Duplicates: {result['duplicates']}")
-    print(f"  Errors: {result['errors']}")
-    print(f"  Total processed: {result['imported'] + result['duplicates'] + result['errors']}")
-
-
 def cmd_analyze(args):
     """Run anomaly analysis."""
     from src.analysis import (
         analyze_trades,
         run_advanced_anomaly_detection,
+        run_cluster_detection,
+        run_committee_conflict_detection,
         run_extended_anomaly_detection,
+        run_tier2_detection,
     )
+    from src.analysis.legislation import run_legislation_detection
+    from src.analysis.significance import annotate_significance
+    from src.config import get_settings
 
     analysis_types = []
 
@@ -122,6 +119,40 @@ def cmd_analyze(args):
         print(f"  Asset Appreciation: {len(advanced.get('asset_anomalies', []))}")
         print(f"  Stock Outperformance: {len(advanced.get('stock_anomalies', []))}")
 
+        print("\nRunning committee jurisdiction conflict detection...")
+        with get_db() as db:
+            committee = run_committee_conflict_detection(db)
+        print(f"  Committee jurisdiction conflicts: {committee['total']}")
+        total_anomalies += committee["total"]
+
+        print("\nRunning cross-member cluster detection...")
+        with get_db() as db:
+            clusters = run_cluster_detection(db)
+        print(f"  Cross-member clusters: {clusters['total']}")
+        total_anomalies += clusters["total"]
+
+        # The Tier-2 detectors were reachable only from the API, so the nightly
+        # workflow -- which runs this command -- never ran them at all. Their
+        # three source tables are fed by `ingest-contracts`, `ingest-donations`
+        # and `ingest-lobbying`; `stats` reports any that are still empty.
+        # The join to legislative action -- what the member did in office, not
+        # just what they traded. Reads bills/sponsorships/referrals from
+        # `ingest-bills`; `stats` reports if those tables are empty.
+        print("\nRunning legislative action detection...")
+        with get_db() as db:
+            legislation = run_legislation_detection(db)
+        print(f"  Sponsorship conflicts: {len(legislation['sponsorship_conflicts'])}")
+        print(f"  Bill jurisdiction conflicts: {len(legislation['bill_jurisdiction_conflicts'])}")
+        total_anomalies += legislation["total"]
+
+        print("\nRunning donor / lobbying / contract detection...")
+        with get_db() as db:
+            tier2 = run_tier2_detection(db)
+        print(f"  Donor conflicts: {len(tier2.get('donor_anomalies', []))}")
+        print(f"  Lobbying overlaps: {len(tier2.get('lobbying_anomalies', []))}")
+        print(f"  Contract front-runs: {len(tier2.get('contract_anomalies', []))}")
+        total_anomalies += tier2.get("total", 0)
+
         print("\nExtended Analysis Results:")
         print(f"  Trade Timing: {len(extended.get('timing_anomalies', []))}")
         print(f"  Committee Conflicts: {len(extended.get('conflict_anomalies', []))}")
@@ -130,92 +161,45 @@ def cmd_analyze(args):
 
         total_anomalies += advanced.get("total", 0) + extended.get("total", 0)
 
-    print(f"\nTotal anomalies detected: {total_anomalies}")
-
-
-def cmd_performance(args):
-    """Analyze trading performance vs benchmarks."""
-    from datetime import datetime
-
-    from src.analysis.performance_analyzer import PerformanceAnalyzer
-
-    analyzer = PerformanceAnalyzer()
-
-    start_date = datetime.fromisoformat(args.start_date) if args.start_date else None
-    end_date = datetime.fromisoformat(args.end_date) if args.end_date else None
-
+    # Multiple-comparisons control, before the percentile ranks: the suite has
+    # just run thousands of tests over hundreds of people, and some of what it
+    # found is what that produces. Only the timing-coincidence detectors admit
+    # a null model; the rest are explicitly left without one.
     with get_db() as db:
-        if args.member_id:
-            print(f"Analyzing performance for member {args.member_id}...")
-            result = analyzer.compare_to_benchmarks(db, args.member_id, start_date, end_date)
+        significance = annotate_significance(
+            db,
+            permutations=get_settings().significance_permutations,
+            alpha=get_settings().fdr_alpha,
+        )
+    print(
+        f"\nSignificance: {significance['tests']} tests, "
+        f"{significance['tests_passing_fdr']} passing FDR at alpha="
+        f"{significance['alpha']}"
+    )
+    print(
+        f"  Findings with a null model: {significance['findings_annotated']}; "
+        f"without one: {significance['findings_without_a_null_model']}"
+    )
 
-            member = result.get("member", {})
-            perf = result.get("member_performance", {})
+    # Member.anomaly_count is denormalized; refresh it now that anomalies moved.
+    # Percentile ranks compare each finding against others of its own type and
+    # must be recomputed whenever the population changes.
+    with get_db() as db:
+        recalculate_member_counts(db)
+        ranks = annotate_percentile_ranks(db)
+        summary = detection_summary(db)
 
-            print(
-                f"\n{member.get('name', 'Unknown')} ({member.get('party', '')} - {member.get('state', '')})"
-            )
-            print(
-                f"  Period: {result.get('period', {}).get('start', '')} to {result.get('period', {}).get('end', '')}"
-            )
-            print(f"  Trades analyzed: {perf.get('trades_analyzed', 0)}")
-            print(f"  Total invested: ${perf.get('total_invested', 0):,.0f}")
-            print(
-                f"  Estimated return: {perf.get('estimated_return_pct', 'N/A'):.1f}%"
-                if perf.get("estimated_return_pct")
-                else "  Estimated return: N/A"
-            )
-
-            print("\nBenchmark Comparison:")
-            for name, data in result.get("benchmarks", {}).items():
-                ret = data.get("return_pct")
-                print(f"  {name.upper()}: {ret:.1f}%" if ret else f"  {name.upper()}: N/A")
-
-            alpha = result.get("alpha_vs_sp500")
-            if alpha is not None:
-                print(f"\n  Alpha vs S&P 500: {alpha:+.1f}%")
-                print(f"  Beats S&P 500: {'Yes' if result.get('beats_sp500') else 'No'}")
-                print(f"  Beats Buffett: {'Yes' if result.get('beats_buffett') else 'No'}")
-
-        elif args.rankings:
-            print("Ranking members by trading performance...")
-            result = analyzer.rank_members_by_performance(
-                db, start_date, end_date, min_trades=args.min_trades, limit=args.limit
-            )
-
-            print(
-                f"\nPeriod: {result.get('period', {}).get('start', '')} to {result.get('period', {}).get('end', '')}"
-            )
-            print(f"Members analyzed: {result.get('total_members_analyzed', 0)}")
-            print(f"Members beating S&P 500: {result.get('members_beating_sp500', 0)}")
-
-            benchmarks = result.get("benchmarks", {})
-            print(
-                f"\nBenchmarks: S&P 500: {benchmarks.get('sp500', 'N/A'):.1f}%, Buffett: {benchmarks.get('buffett', 'N/A'):.1f}%"
-            )
-
-            print(f"\nTop {args.limit} Performers:")
-            for i, p in enumerate(result.get("top_performers", [])[: args.limit], 1):
-                member = p.get("member", {})
-                ret = p.get("member_performance", {}).get("estimated_return_pct", 0)
-                alpha = p.get("alpha_vs_sp500", 0)
-                print(
-                    f"  {i}. {member.get('name', 'Unknown')} ({member.get('party', '')}-{member.get('state', '')}): {ret:.1f}% (α: {alpha:+.1f}%)"
-                )
-
-        else:
-            print("Getting performance summary...")
-            result = analyzer.get_performance_summary(db)
-
-            print("\nPerformance Summary:")
-            print(f"  Members with transactions: {result.get('members_with_transactions', 0)}")
-            print(f"  Total transactions: {result.get('total_transactions', 0)}")
-            print(f"  Unique tickers: {result.get('unique_tickers', 0)}")
-
-            if result.get("top_traded_tickers"):
-                print("\n  Top traded tickers:")
-                for t in result["top_traded_tickers"][:5]:
-                    print(f"    {t['ticker']}: {t['count']} trades")
+    print(f"\nTotal anomalies detected: {total_anomalies}")
+    print(f"Percentile ranks assigned: {ranks['ranked']}")
+    if ranks["skipped_small_population"]:
+        print(
+            f"  ({ranks['skipped_small_population']} left unranked - "
+            f"too few findings of their type to rank against)"
+        )
+    print(
+        f"\nContext: ~{summary['member_detector_pairs']} detector-member pairs produced "
+        f"{summary['total_findings']} findings across {summary['members']} members."
+    )
 
 
 def cmd_parse(args):
@@ -235,6 +219,7 @@ def cmd_parse(args):
             ptr_only=args.ptr_only,
             reparse=args.reparse,
             failed_only=args.failed_only,
+            min_confidence=args.min_confidence,
             delay=args.delay,
         )
 
@@ -242,6 +227,22 @@ def cmd_parse(args):
     print(f"  Successfully parsed: {result['parsed']}")
     print(f"  Failed: {result['failed']}")
     print(f"  Skipped: {result['skipped']}")
+
+    from src.analysis.baselines import parse_quality_summary
+
+    with get_db() as db:
+        quality = parse_quality_summary(db)
+    print("\nHow well they were read:")
+    print(f"  Mean confidence: {quality['mean_confidence']}")
+    print(f"  Below 0.8: {quality['filings_below_0_8']}")
+    print(
+        f"  Yielded nothing at all: {quality['filings_that_yielded_nothing']}"
+        "  - a PTR with no transactions is a failed parse, not a quiet quarter"
+    )
+    print(
+        f"  Scans with no text layer: {quality['filings_with_no_text_layer']}"
+        "  - not a parse failure; there is nothing in them to read"
+    )
 
 
 def cmd_download_pdfs(args):
@@ -297,8 +298,6 @@ def cmd_fix_urls(args):
     BASE_URL = "https://disclosures-clerk.house.gov/public_disc"
 
     def get_correct_url(d):
-        if d.document_id.startswith("QANT_"):
-            return d.document_url or ""
         if d.is_ptr:
             return f"{BASE_URL}/ptr-pdfs/{d.filing_year}/{d.document_id}.pdf"
         return f"{BASE_URL}/financial-pdfs/{d.filing_year}/{d.document_id}.pdf"
@@ -306,7 +305,7 @@ def cmd_fix_urls(args):
     print("Checking disclosure URLs...")
 
     with get_db() as db:
-        disclosures = db.query(Disclosure).filter(~Disclosure.document_id.like("QANT_%")).all()
+        disclosures = db.query(Disclosure).all()
 
         issues = []
         for d in disclosures:
@@ -328,6 +327,463 @@ def cmd_fix_urls(args):
                 print(f"  {d.document_id}: {d.document_url} -> {correct}")
             if len(issues) > 5:
                 print(f"  ... and {len(issues) - 5} more")
+
+
+def cmd_parse_fd(args):
+    """Parse assets and income sources out of annual FD filings.
+
+    These parsers were previously reachable only from a one-off script in
+    scripts/, which is why neither had a documented entry point.
+    """
+    from src.parsing.fd_asset_parser import FDAssetParser
+    from src.parsing.fd_income_parser import FDIncomeParser
+
+    if args.income_only and args.assets_only:
+        print("--assets-only and --income-only are mutually exclusive.")
+        sys.exit(1)
+
+    if not args.income_only:
+        print("Parsing FD assets...")
+        FDAssetParser().parse_all_disclosures()
+
+    if not args.assets_only:
+        print("Parsing FD income sources...")
+        FDIncomeParser().parse_all_disclosures()
+
+    with get_db() as db:
+        recalculate_member_counts(db)
+
+    print("FD parsing complete.")
+
+
+def cmd_sync_committees(args):
+    """Fetch current committee assignments from congress-legislators."""
+    from src.ingestion.committees import ingest_committee_assignments
+
+    print("Syncing committee assignments...")
+
+    with get_db() as db:
+        result = ingest_committee_assignments(db)
+
+    print("\nCommittee sync complete:")
+    print(f"  Committees indexed: {result['committees_indexed']}")
+    print(f"  Assignments stored: {result['assignments']}")
+    if result["skipped_unknown_member"]:
+        print(
+            f"  Skipped (member not in database): {result['skipped_unknown_member']}"
+            "  - run `ingest` first to populate the roster"
+        )
+    if result["skipped_unknown_committee"]:
+        print(f"  Skipped (committee not in metadata): {result['skipped_unknown_committee']}")
+
+
+def cmd_ingest_contracts(args):
+    """Ingest federal contract awards from USASpending."""
+    from src.ingestion.usaspending import ingest_government_contracts
+
+    print(f"Ingesting federal contract awards ({args.start} to {args.end or 'today'})...")
+
+    with get_db() as db:
+        result = ingest_government_contracts(
+            db, start_date=args.start, end_date=args.end, pages=args.pages
+        )
+
+    print("\nContract ingestion complete:")
+    print(f"  Award actions fetched: {result['fetched']}")
+    print(f"  Imported: {result['imported']}")
+    print(f"  Already present: {result['duplicates']}")
+    print(
+        f"  Recipients not publicly traded: {result['unresolved_recipients']}"
+        "  - expected; labs, universities and private firms have no ticker to trade"
+    )
+
+
+def cmd_ingest_donations(args):
+    """Ingest corporate PAC donations from the FEC."""
+    from src.config import get_settings
+    from src.ingestion.fec import ingest_campaign_donations
+
+    api_key = get_settings().fec_api_key
+    if not api_key:
+        print("FEC_API_KEY is not set. Get a free key at https://api.data.gov/signup/")
+        sys.exit(1)
+
+    print(f"Ingesting corporate PAC donations for the {args.cycle} cycle...")
+    if args.all_pacs:
+        print("  (scanning every corporate PAC, not just those members have traded)")
+
+    with get_db() as db:
+        result = ingest_campaign_donations(
+            db,
+            api_key,
+            cycle=args.cycle,
+            max_requests=args.max_requests,
+            restrict_to_traded=not args.all_pacs,
+            resume=not args.no_resume,
+        )
+
+    print("\nDonation ingestion complete:")
+    print(f"  PACs queried: {result['pacs_queried']}")
+    if result["pacs_already_ingested"]:
+        print(f"  PACs already ingested (skipped): {result['pacs_already_ingested']}")
+    print(f"  Imported: {result['imported']}")
+    print(f"  Already present: {result['duplicates']}")
+    print(
+        f"  Receipts to committees with no sitting member: {result['skipped_unmapped_recipient']}"
+    )
+    print(f"  FEC requests used: {result['requests_made']}")
+    if result["stopped_early"]:
+        print(
+            "\n  Stopped at the request cap. Nothing is lost - rerun the same "
+            "command and it resumes from the PACs it has not reached yet."
+        )
+
+
+def cmd_significance(args):
+    """Recompute p-values and FDR q-values over existing findings."""
+    from src.analysis.significance import annotate_significance
+    from src.config import get_settings
+
+    settings = get_settings()
+    alpha = args.alpha if args.alpha is not None else settings.fdr_alpha
+    permutations = args.permutations or settings.significance_permutations
+
+    print(f"Testing findings against a shifted-calendar null ({permutations} permutations)...")
+
+    with get_db() as db:
+        result = annotate_significance(db, permutations=permutations, alpha=alpha, seed=args.seed)
+
+    print("\nSignificance complete:")
+    print(f"  Tests run: {result['tests']}")
+    print(f"  Passing FDR at alpha={result['alpha']}: {result['tests_passing_fdr']}")
+    print(f"  Expected false discoveries among those: {result['expected_false_discoveries']}")
+    print(f"  Findings annotated: {result['findings_annotated']}")
+    print(
+        f"  Findings with no null model: {result['findings_without_a_null_model']}"
+        "  - magnitude rules; they carry percentile_rank instead"
+    )
+
+
+def cmd_sync_industries(args):
+    """Cache SEC industry codes for traded tickers."""
+    from src.ingestion.sec_industries import ingest_company_industries
+
+    scope = "every SEC registrant" if args.all else "tickers members have traded"
+    print(f"Looking up SEC industry codes for {scope}...")
+
+    with get_db() as db:
+        result = ingest_company_industries(
+            db, all_registrants=args.all, max_requests=args.max_requests
+        )
+
+    print("\nIndustry lookup complete:")
+    print(f"  Looked up: {result['looked_up']}")
+    print(
+        f"  Symbols that are not SEC registrants: {result['not_sec_registrants']}"
+        "  - funds, foreign listings, or symbols the PDF parser misread"
+    )
+    print(
+        f"  Tickers now carrying a sector: {result['tickers_with_a_sector']}"
+        f" of {result['cached_tickers']} cached"
+    )
+    print(f"  SEC requests used: {result['requests_made']}")
+    if result["stopped_early"]:
+        print("\n  Stopped at the request cap. Rerun to continue where it left off.")
+
+
+def cmd_ingest_bills(args):
+    """Ingest bill sponsorship and committee referrals from Congress.gov."""
+    from src.analysis.legislation import bills_worth_committee_lookup, coverage_report
+    from src.config import get_settings
+    from src.ingestion.bills import fetch_bill_committees, ingest_member_bills
+
+    api_key = get_settings().congress_gov_api_key
+    if not api_key:
+        print(
+            "CONGRESS_GOV_API_KEY is not set. Get a free key at https://api.congress.gov/sign-up/"
+        )
+        sys.exit(1)
+
+    print("Ingesting bill sponsorship from Congress.gov...")
+
+    with get_db() as db:
+        result = ingest_member_bills(
+            db,
+            api_key,
+            max_requests=args.max_requests,
+            include_cosponsored=not args.sponsored_only,
+        )
+
+    print("\nSponsorship ingestion complete:")
+    print(f"  Members queried: {result['members_queried']}")
+    print(f"  Bills stored: {result['bills']}")
+    print(f"  Sponsorships: {result['sponsorships']}")
+    print(f"  Cosponsorships: {result['cosponsorships']}")
+    print(f"  Congress.gov requests used: {result['requests_made']}")
+
+    if not args.skip_committees:
+        # One request per bill, so only for bills that could actually produce a
+        # finding: a sector-mapped policy area and a trade by a member who
+        # touched the bill. On real data this is a ~99% reduction.
+        print("\nFetching committee referrals for bills that matched a member's trading...")
+        with get_db() as db:
+            candidates = bills_worth_committee_lookup(db)
+            referrals = fetch_bill_committees(db, api_key, bills=candidates)
+        print(f"  Bills looked up: {referrals['bills_looked_up']}")
+        print(f"  Referrals stored: {referrals['referrals']}")
+        print(f"  Congress.gov requests used: {referrals['requests_made']}")
+
+    with get_db() as db:
+        coverage = coverage_report(db)
+
+    print("\nWhat the legislative detectors can see:")
+    print(
+        f"  Bills in a sector-mapped policy area: {coverage['bills_mapped_to_a_sector']}"
+        f" of {coverage['bills']}"
+    )
+    print(
+        f"  Traded tickers with a known sector: "
+        f"{coverage['traded_tickers_with_a_known_sector']}"
+        f" of {coverage['distinct_traded_tickers']}"
+        "  - this is the binding constraint; see src/analysis/sectors.py"
+    )
+
+    if result["stopped_early"]:
+        print("\n  Stopped at the request cap. Rerun to continue.")
+
+
+def cmd_ingest_lobbying(args):
+    """Ingest lobbying disclosures from the Senate LDA."""
+    from src.config import get_settings
+    from src.ingestion.lda import ingest_lobbying_disclosures
+
+    api_key = get_settings().lda_api_key
+    if not api_key:
+        print(
+            "No LDA_API_KEY set - running anonymously at a lower rate limit. "
+            "A free key from https://lda.senate.gov/api/register/ makes this ~8x faster."
+        )
+
+    print(f"Ingesting {args.year} lobbying disclosures for companies members have traded...")
+
+    with get_db() as db:
+        result = ingest_lobbying_disclosures(
+            db, filing_year=args.year, api_key=api_key, tickers=args.tickers
+        )
+
+    print("\nLobbying ingestion complete:")
+    print(f"  Tickers queried: {result['tickers_queried']}")
+    print(f"  Tickers not in the SEC register: {result['tickers_without_a_registered_name']}")
+    print(f"  Imported: {result['imported']}")
+    print(f"  Already present: {result['duplicates']}")
+    print(
+        f"  Rejected as a different company: {result['rejected_wrong_company']}"
+        "  - the API matches client names by substring"
+    )
+    print(f"  LDA requests used: {result['requests_made']}")
+
+
+def cmd_compliance(args):
+    """Rank members by STOCK Act filing punctuality."""
+    from src.analysis.compliance import compliance_leaderboard
+
+    with get_db() as db:
+        board = compliance_leaderboard(db, min_transactions=args.min_transactions, limit=args.limit)
+
+    print(
+        f"STOCK Act filing compliance "
+        f"({board['deadline_days']}-day deadline, "
+        f"min {board['min_transactions']} transactions)\n"
+    )
+    print(
+        f"{board['total_filed_late']} of {board['total_transactions_checked']} "
+        f"transactions filed late ({board['overall_late_rate_percent']}%) "
+        f"across {board['members_ranked']} members.\n"
+    )
+
+    if not board["members"]:
+        print("No members meet the minimum transaction count.")
+        return
+
+    print(f"{'Member':<28} {'Party':<6} {'Late':>6} {'Checked':>8} {'Rate':>7} {'Worst':>7}")
+    print("-" * 68)
+    for entry in board["members"]:
+        print(
+            f"{entry['member_name'][:27]:<28} "
+            f"{(entry['party'] or '')[:5]:<6} "
+            f"{entry['filed_late']:>6} "
+            f"{entry['transactions_checked']:>8} "
+            f"{entry['late_rate_percent']:>6.1f}% "
+            f"{entry['max_days_late']:>6}d"
+        )
+
+
+def cmd_stats(args):
+    """Show detector output in context: how many tests, how many findings."""
+    import json
+
+    with get_db() as db:
+        summary = detection_summary(db)
+
+    print(json.dumps(summary, indent=2))
+
+
+def _alembic_config():
+    """Alembic config pointed at this repo's alembic.ini."""
+    from pathlib import Path
+
+    from alembic.config import Config
+
+    return Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
+
+
+def cmd_reset(args):
+    """Delete all data and rebuild the schema from scratch.
+
+    Irreversible. Dry run by default -- it reports what exists and exits
+    without touching anything unless --yes is given, and refuses outright in
+    production unless --force-production is also given.
+
+    The schema is dropped and rebuilt (`alembic downgrade base` then `upgrade
+    head`) rather than the tables merely emptied, so nothing survives: no rows,
+    no sequence state, and no drift from schema changes made outside Alembic.
+    """
+    import shutil
+    from pathlib import Path
+
+    from sqlalchemy import func
+
+    from alembic import command
+    from src.config import get_settings
+    from src.db.models import Base
+
+    settings = get_settings()
+
+    # Report before destroying. Ordered as the tables will be dropped, so the
+    # output reads in the same order as the work.
+    tables = list(reversed(Base.metadata.sorted_tables))
+    model_by_table = {
+        m.__tablename__: m
+        for m in Base.registry._class_registry.values()
+        if hasattr(m, "__tablename__")
+    }
+
+    print(f"Target database: {settings.database_url_display}")
+    print(f"Environment:     {settings.env}\n")
+
+    total = 0
+    with get_db() as db:
+        print(f"{'Table':<26} {'Rows':>10}")
+        print("-" * 38)
+        for table in tables:
+            model = model_by_table.get(table.name)
+            if model is None:
+                continue
+            try:
+                count = db.query(func.count()).select_from(table).scalar() or 0
+            except Exception as exc:  # table may not exist yet
+                print(f"{table.name:<26} {'(missing)':>10}  {exc.__class__.__name__}")
+                continue
+            total += count
+            print(f"{table.name:<26} {count:>10,}")
+        print("-" * 38)
+        print(f"{'TOTAL':<26} {total:>10,}\n")
+
+    disclosures_dir = Path(__file__).resolve().parent.parent / "data" / "disclosures"
+    pdf_count = len(list(disclosures_dir.rglob("*.pdf"))) if disclosures_dir.exists() else 0
+    if pdf_count:
+        fate = "DELETED" if args.purge_pdfs else "kept (pass --purge-pdfs to remove)"
+        print(f"Local PDFs: {pdf_count:,} files in {disclosures_dir} -- {fate}\n")
+
+    if not args.yes:
+        print("Dry run. Nothing has been changed.")
+        print("Re-run with --yes to delete all of the above and rebuild the schema.")
+        return
+
+    if settings.is_production and not args.force_production:
+        print("REFUSING: ENV=production.")
+        print("This would destroy the live database. Pass --force-production if that is")
+        print("genuinely what you want.")
+        sys.exit(1)
+
+    print("Dropping schema (alembic downgrade base)...")
+    command.downgrade(_alembic_config(), "base")
+
+    print("Rebuilding schema (alembic upgrade head)...")
+    command.upgrade(_alembic_config(), "head")
+
+    if args.purge_pdfs and disclosures_dir.exists():
+        shutil.rmtree(disclosures_dir)
+        print(f"Deleted {pdf_count:,} local PDFs.")
+
+    print("\nReset complete. The database is empty and at the latest revision.")
+    print("\nRe-ingest with:")
+    print("  python -m src.cli ingest -y 2024 2025")
+    print("  python -m src.cli download-pdfs")
+    print("  python -m src.cli parse")
+    print("  python -m src.cli sync-committees")
+    print("  python -m src.cli analyze")
+
+
+def cmd_recount(args):
+    """Recalculate the materialized count columns on members."""
+    print("Recalculating member counts...")
+
+    with get_db() as db:
+        stats = recalculate_member_counts(db)
+
+    print(
+        f"Done. {stats['members']} members, {stats['disclosures']} disclosures, "
+        f"{stats['anomalies']} anomalies."
+    )
+
+
+def cmd_purge_disabled(args):
+    """Delete persisted anomalies whose detector has since been disabled.
+
+    Disabling a detector stops new rows, but rows written before it was
+    disabled stay in the database and keep being served by the API. This
+    removes them.
+    """
+    from src.config import get_settings
+    from src.db.models import Anomaly
+
+    disabled = sorted(get_settings().disabled_anomaly_types_set)
+    if not disabled:
+        print("No anomaly types are disabled; nothing to purge.")
+        return
+
+    print(f"Disabled anomaly types: {', '.join(disabled)}")
+
+    with get_db() as db:
+        rows = db.query(Anomaly).filter(Anomaly.anomaly_type.in_(disabled)).all()
+
+        if not rows:
+            print("No persisted anomalies of disabled types found.")
+            return
+
+        counts: dict[str, int] = {}
+        for row in rows:
+            counts[row.anomaly_type] = counts.get(row.anomaly_type, 0) + 1
+
+        for atype, count in sorted(counts.items()):
+            print(f"  {atype}: {count}")
+
+        if args.dry_run:
+            print(
+                f"\nDry run - {len(rows)} anomalies would be deleted. "
+                f"Re-run without --dry-run to apply."
+            )
+            return
+
+        deleted = (
+            db.query(Anomaly)
+            .filter(Anomaly.anomaly_type.in_(disabled))
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        recalculate_member_counts(db)
+        print(f"\nDeleted {deleted} anomalies of disabled types.")
 
 
 def cmd_serve(args):
@@ -374,19 +830,6 @@ def main():
     )
     ingest_parser.set_defaults(func=cmd_ingest)
 
-    # Ingest trades command
-    ingest_trades_parser = subparsers.add_parser(
-        "ingest-trades", help="Import trades from QuiverQuant"
-    )
-    ingest_trades_parser.add_argument(
-        "-c",
-        "--chamber",
-        choices=["house", "senate", "both"],
-        default="both",
-        help="Which chamber to import (default: both)",
-    )
-    ingest_trades_parser.set_defaults(func=cmd_ingest_trades)
-
     # Analyze command
     analyze_parser = subparsers.add_parser("analyze", help="Run anomaly analysis")
     analyze_parser.add_argument("-m", "--member-id", type=int, help="Analyze specific member by ID")
@@ -421,6 +864,15 @@ def main():
     )
     parse_parser.add_argument(
         "--reparse", action="store_true", help="Re-parse already parsed disclosures"
+    )
+    parse_parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=None,
+        help=(
+            "Re-parse filings the parser read worse than this (0-1), and filings "
+            "never scored at all. Use after improving the parser."
+        ),
     )
     parse_parser.add_argument(
         "--delay", type=float, default=1.0, help="Delay between downloads in seconds (default: 1.0)"
@@ -463,22 +915,195 @@ def main():
     fix_urls_parser.set_defaults(func=cmd_fix_urls)
 
     # Performance command
-    perf_parser = subparsers.add_parser(
-        "performance", help="Analyze trading performance vs benchmarks"
+
+    # Parse FD assets / income
+    parse_fd_parser = subparsers.add_parser(
+        "parse-fd", help="Parse assets and income sources from annual FD filings"
     )
-    perf_parser.add_argument("-m", "--member-id", type=int, help="Analyze specific member by ID")
-    perf_parser.add_argument(
-        "-r", "--rankings", action="store_true", help="Show ranked list of performers"
+    parse_fd_parser.add_argument("--assets-only", action="store_true", help="Parse assets only")
+    parse_fd_parser.add_argument(
+        "--income-only", action="store_true", help="Parse income sources only"
     )
-    perf_parser.add_argument("--start-date", type=str, help="Start date (YYYY-MM-DD)")
-    perf_parser.add_argument("--end-date", type=str, help="End date (YYYY-MM-DD)")
-    perf_parser.add_argument(
-        "--min-trades", type=int, default=5, help="Minimum trades for rankings (default: 5)"
+    parse_fd_parser.set_defaults(func=cmd_parse_fd)
+
+    # Committee sync
+    committees_parser = subparsers.add_parser(
+        "sync-committees",
+        help="Fetch committee assignments from congress-legislators (free, no key)",
     )
-    perf_parser.add_argument(
-        "-l", "--limit", type=int, default=10, help="Number of top performers to show (default: 10)"
+    committees_parser.set_defaults(func=cmd_sync_committees)
+
+    contracts_parser = subparsers.add_parser(
+        "ingest-contracts",
+        help="Ingest federal contract awards from USASpending (free, no key)",
     )
-    perf_parser.set_defaults(func=cmd_performance)
+    contracts_parser.add_argument(
+        "--start", default="2023-01-01", help="Earliest action date (default: 2023-01-01)"
+    )
+    contracts_parser.add_argument("--end", default=None, help="Latest action date (default: today)")
+    contracts_parser.add_argument(
+        "--pages",
+        type=int,
+        default=3,
+        help="Pages of 100 award actions, largest first (default: 3)",
+    )
+    contracts_parser.set_defaults(func=cmd_ingest_contracts)
+
+    donations_parser = subparsers.add_parser(
+        "ingest-donations",
+        help="Ingest corporate PAC donations from the FEC (free key required)",
+    )
+    donations_parser.add_argument(
+        "--cycle", type=int, default=2024, help="Two-year election cycle (default: 2024)"
+    )
+    donations_parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="Stop after this many FEC requests; rerun to resume (quota is 1,000/hour)",
+    )
+    donations_parser.add_argument(
+        "--all-pacs",
+        action="store_true",
+        help="Scan every corporate PAC, not just companies members have traded (much slower)",
+    )
+    donations_parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Re-scan PACs already stored for this cycle (use after filings are amended)",
+    )
+    donations_parser.set_defaults(func=cmd_ingest_donations)
+
+    significance_parser = subparsers.add_parser(
+        "significance",
+        help="Recompute p-values and FDR q-values over existing findings",
+    )
+    significance_parser.add_argument(
+        "--alpha", type=float, default=None, help="False-discovery rate (default: FDR_ALPHA)"
+    )
+    significance_parser.add_argument(
+        "--permutations",
+        type=int,
+        default=None,
+        help="Shifted calendars per test; the p-value floor is 1/(n+1)",
+    )
+    significance_parser.add_argument(
+        "--seed", type=int, default=None, help="Seed the permutations for a reproducible run"
+    )
+    significance_parser.set_defaults(func=cmd_significance)
+
+    industries_parser = subparsers.add_parser(
+        "sync-industries",
+        help="Cache SEC industry codes so sector detectors see past ~70 large caps",
+    )
+    industries_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Look up every SEC registrant (~8,000) rather than only traded tickers",
+    )
+    industries_parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="Stop after this many SEC requests; rerun to continue",
+    )
+    industries_parser.set_defaults(func=cmd_sync_industries)
+
+    bills_parser = subparsers.add_parser(
+        "ingest-bills",
+        help="Ingest bill sponsorship and committee referrals from Congress.gov (free key)",
+    )
+    bills_parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="Stop after this many requests; rerun to continue (quota is 20,000/hour)",
+    )
+    bills_parser.add_argument(
+        "--sponsored-only",
+        action="store_true",
+        help="Skip cosponsorship, which is ~20x more voluminous and produces no findings yet",
+    )
+    bills_parser.add_argument(
+        "--skip-committees",
+        action="store_true",
+        help="Skip the committee-referral pass (one request per matching bill)",
+    )
+    bills_parser.set_defaults(func=cmd_ingest_bills)
+
+    lobbying_parser = subparsers.add_parser(
+        "ingest-lobbying",
+        help="Ingest lobbying disclosures from the Senate LDA (key optional)",
+    )
+    lobbying_parser.add_argument(
+        "--year", type=int, default=2024, help="Filing year (default: 2024)"
+    )
+    lobbying_parser.add_argument(
+        "--tickers",
+        nargs="+",
+        default=None,
+        help="Limit to these tickers (default: every ticker members have traded)",
+    )
+    lobbying_parser.set_defaults(func=cmd_ingest_lobbying)
+
+    # Compliance command
+    compliance_parser = subparsers.add_parser(
+        "compliance", help="Rank members by STOCK Act filing punctuality"
+    )
+    compliance_parser.add_argument(
+        "--min-transactions",
+        type=int,
+        default=5,
+        help="Minimum checkable transactions to be ranked (default: 5)",
+    )
+    compliance_parser.add_argument(
+        "-l", "--limit", type=int, default=25, help="Members to show (default: 25)"
+    )
+    compliance_parser.set_defaults(func=cmd_compliance)
+
+    # Stats command
+    stats_parser = subparsers.add_parser(
+        "stats", help="Report detector findings with the test count behind them"
+    )
+    stats_parser.set_defaults(func=cmd_stats)
+
+    # Reset command
+    reset_parser = subparsers.add_parser(
+        "reset",
+        help="Delete ALL data and rebuild the schema (irreversible; dry run by default)",
+    )
+    reset_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Actually perform the reset. Without this the command only reports.",
+    )
+    reset_parser.add_argument(
+        "--force-production",
+        action="store_true",
+        help="Required in addition to --yes when ENV=production",
+    )
+    reset_parser.add_argument(
+        "--purge-pdfs",
+        action="store_true",
+        help="Also delete downloaded PDFs in data/disclosures/ (kept by default)",
+    )
+    reset_parser.set_defaults(func=cmd_reset)
+
+    # Recount command
+    recount_parser = subparsers.add_parser(
+        "recount", help="Recalculate materialized member disclosure/anomaly counts"
+    )
+    recount_parser.set_defaults(func=cmd_recount)
+
+    # Purge disabled anomaly types
+    purge_parser = subparsers.add_parser(
+        "purge-disabled",
+        help="Delete persisted anomalies whose detector is now disabled",
+    )
+    purge_parser.add_argument(
+        "--dry-run", action="store_true", help="Preview deletions without applying them"
+    )
+    purge_parser.set_defaults(func=cmd_purge_disabled)
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start API server")

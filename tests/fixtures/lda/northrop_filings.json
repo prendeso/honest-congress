@@ -1,0 +1,300 @@
+{
+ "count": 29,
+ "next": null,
+ "results": [
+  {
+   "filing_uuid": "feda8578-be9a-4611-b9ae-fc4740ceb728",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "37500.00",
+   "expenses": null,
+   "dt_posted": "2024-04-15T13:15:45-04:00",
+   "registrant": {
+    "name": "KADESH & ASSOCIATES, LLC"
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "BUD"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "4ddfdc3f-28c4-4d99-bfba-43ccc142d4bd",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "40000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-20T22:40:20-04:00",
+   "registrant": {
+    "name": "535 GROUP, LLC"
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN SYSTEMS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    },
+    {
+     "general_issue_code": "BUD"
+    },
+    {
+     "general_issue_code": "TAX"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "a5166b31-1bfc-469d-bbc9-cb985256cf59",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-22T12:44:42-04:00",
+   "registrant": {
+    "name": "ETHERTON AND ASSOCIATES, INC."
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    },
+    {
+     "general_issue_code": "GOV"
+    },
+    {
+     "general_issue_code": "INT"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "6dfe9ebf-98d0-46e4-9a82-870e88ccc88e",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "10000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-22T13:52:08-04:00",
+   "registrant": {
+    "name": "RESTON STRATEGY GROUP, LLC"
+   },
+   "client": {
+    "name": "535 GROUP, LLC ON BEHALF OF NORTHROP GRUMMAN SYSTEMS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "BUD"
+    },
+    {
+     "general_issue_code": "DEF"
+    },
+    {
+     "general_issue_code": "AER"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "7e05aa90-a21b-4e2a-a0bf-6e7586b03990",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "60000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-22T14:09:25-04:00",
+   "registrant": {
+    "name": "THE DUBERSTEIN GROUP INC."
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN SYSTEMS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "TAX"
+    },
+    {
+     "general_issue_code": "BUD"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "0fdfc2f6-a571-4e28-bce1-1da176862900",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": "50000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-22T14:30:44-04:00",
+   "registrant": {
+    "name": "INNOVATIVE FEDERAL STRATEGIES, LLC"
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "BUD"
+    },
+    {
+     "general_issue_code": "DEF"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "ecd109bc-e98c-47c1-bc9b-99e8b9e7f3a4",
+   "filing_type": "Q1",
+   "filing_type_display": "1st Quarter - Report",
+   "filing_year": 2024,
+   "income": null,
+   "expenses": "3800000.00",
+   "dt_posted": "2024-04-22T15:07:02-04:00",
+   "registrant": {
+    "name": "NORTHROP GRUMMAN CORPORATION"
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    },
+    {
+     "general_issue_code": "AER"
+    },
+    {
+     "general_issue_code": "TAX"
+    },
+    {
+     "general_issue_code": "FOR"
+    },
+    {
+     "general_issue_code": "INT"
+    },
+    {
+     "general_issue_code": "BUD"
+    },
+    {
+     "general_issue_code": "SCI"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "c32ef151-488c-4cac-b24e-5d01639108ce",
+   "filing_type": "1T",
+   "filing_type_display": "1st Quarter - Termination",
+   "filing_year": 2024,
+   "income": "20000.00",
+   "expenses": null,
+   "dt_posted": "2024-04-22T18:01:15-04:00",
+   "registrant": {
+    "name": "AVOQ, LLC"
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN SYSTEMS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "TAX"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "4dea2fdf-83f0-480f-ab76-fc9ec71ada81",
+   "filing_type": "Q2",
+   "filing_type_display": "2nd Quarter - Report",
+   "filing_year": 2024,
+   "income": "37500.00",
+   "expenses": null,
+   "dt_posted": "2024-07-17T18:36:02-04:00",
+   "registrant": {
+    "name": "KADESH & ASSOCIATES, LLC"
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "BUD"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "c657ce74-5b41-4a7f-bf18-9e225621fee9",
+   "filing_type": "Q2",
+   "filing_type_display": "2nd Quarter - Report",
+   "filing_year": 2024,
+   "income": "50000.00",
+   "expenses": null,
+   "dt_posted": "2024-07-18T22:50:12-04:00",
+   "registrant": {
+    "name": "535 GROUP, LLC"
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN SYSTEMS CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    },
+    {
+     "general_issue_code": "BUD"
+    },
+    {
+     "general_issue_code": "TAX"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "45ac2f5e-3a3f-4587-8b7d-551e85900355",
+   "filing_type": "Q2",
+   "filing_type_display": "2nd Quarter - Report",
+   "filing_year": 2024,
+   "income": "30000.00",
+   "expenses": null,
+   "dt_posted": "2024-07-19T13:31:29-04:00",
+   "registrant": {
+    "name": "ETHERTON AND ASSOCIATES, INC."
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "DEF"
+    },
+    {
+     "general_issue_code": "GOV"
+    }
+   ]
+  },
+  {
+   "filing_uuid": "d7afece6-ec71-4ef7-81fc-d91078d4c487",
+   "filing_type": "Q2",
+   "filing_type_display": "2nd Quarter - Report",
+   "filing_year": 2024,
+   "income": "50000.00",
+   "expenses": null,
+   "dt_posted": "2024-07-21T15:03:45-04:00",
+   "registrant": {
+    "name": "INNOVATIVE FEDERAL STRATEGIES, LLC"
+   },
+   "client": {
+    "name": "NORTHROP GRUMMAN CORPORATION"
+   },
+   "lobbying_activities": [
+    {
+     "general_issue_code": "BUD"
+    },
+    {
+     "general_issue_code": "DEF"
+    }
+   ]
+  }
+ ]
+}

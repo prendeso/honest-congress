@@ -1,0 +1,33 @@
+<company-info>
+      <addresses>
+        <address type="mailing">
+          <city>OMAHA</city>
+          <state>NE</state>
+          <street1>3555 FARNAM STREET</street1>
+          <zip>68131</zip>
+        </address>
+        <address type="business">
+          <city>OMAHA</city>
+          <phone>4023461400</phone>
+          <state>NE</state>
+          <street1>3555 FARNAM STREET</street1>
+          <zip>68131</zip>
+        </address>
+      </addresses>
+      <assigned-sic>6331</assigned-sic>
+      <assigned-sic-desc>FIRE, MARINE &amp;amp; CASUALTY INSURANCE</assigned-sic-desc>
+      <assigned-sic-href>https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;SIC=6331&amp;owner=include&amp;count=10</assigned-sic-href>
+      <cik>0001067983</cik>
+      <cik-href>https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0001067983&amp;owner=include&amp;count=10</cik-href>
+      <conformed-name>BERKSHIRE HATHAWAY INC</conformed-name>
+      <fiscal-year-end>1231</fiscal-year-end>
+      <formerly-names count="1">
+        <names>
+          <date>1999-01-05</date>
+          <name>NBH INC</name>
+        </names>
+      </formerly-names>
+      <state-location>NE</state-location>
+      <state-location-href>https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;State=NE&amp;owner=include&amp;count=10</state-location-href>
+      <state-of-incorporation>DE</state-of-incorporation>
+    </company-info>

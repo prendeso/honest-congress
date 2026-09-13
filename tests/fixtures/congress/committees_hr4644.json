@@ -1,0 +1,28 @@
+{
+ "committees": [
+  {
+   "activities": [
+    {
+     "date": "2025-07-23T14:11:15Z",
+     "name": "Referred To"
+    }
+   ],
+   "chamber": "House",
+   "name": "Ways and Means Committee",
+   "systemCode": "hswm00",
+   "type": "Standing",
+   "url": "https://api.congress.gov/v3/committee/house/hswm00?format=json"
+  }
+ ],
+ "pagination": {
+  "count": 1
+ },
+ "request": {
+  "billNumber": "4644",
+  "billType": "hr",
+  "billUrl": "https://api.congress.gov/v3/bill/119/hr/4644?format=json",
+  "congress": "119",
+  "contentType": "application/json",
+  "format": "json"
+ }
+}

@@ -1,10 +1,11 @@
 """Disclosure API endpoints."""
 
 from datetime import datetime
-from typing import List
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.db import Asset, Disclosure, Liability, Member, Transaction, get_db_session
@@ -12,10 +13,52 @@ from src.db import Asset, Disclosure, Liability, Member, Transaction, get_db_ses
 router = APIRouter()
 
 
+def _extracted_counts(db: Session, disclosure_ids: List[int]) -> dict[int, tuple[int, int, int]]:
+    """How many rows were actually extracted from each filing on this page.
+
+    Three grouped queries rather than three per row: the page shows fifty
+    filings, and the N+1 version would be a hundred and fifty round trips to
+    render one table.
+
+    These counts are the page's whole subject and they were never served. The
+    Parsed Documents table read `doc.asset_count`, `doc.transaction_count` and
+    `doc.liability_count` from a response that has never contained any of them,
+    so every row showed 0, 0, 0 and all three column sorts did nothing. A
+    filing read cleanly and a filing that yielded nothing displayed identically
+    -- which is the exact confusion D12 exists to remove, on the one page whose
+    entire subject is what was extracted.
+    """
+    if not disclosure_ids:
+        return {}
+
+    assets = _count_by_disclosure(db, Asset, disclosure_ids)
+    transactions = _count_by_disclosure(db, Transaction, disclosure_ids)
+    liabilities = _count_by_disclosure(db, Liability, disclosure_ids)
+
+    return {
+        doc_id: (
+            assets.get(doc_id, 0),
+            transactions.get(doc_id, 0),
+            liabilities.get(doc_id, 0),
+        )
+        for doc_id in disclosure_ids
+    }
+
+
+def _count_by_disclosure(db: Session, model: Any, disclosure_ids: List[int]) -> dict[int, int]:
+    rows = (
+        db.query(model.disclosure_id, func.count(model.id))
+        .filter(model.disclosure_id.in_(disclosure_ids))
+        .group_by(model.disclosure_id)
+        .all()
+    )
+    return {disclosure_id: count for disclosure_id, count in rows}
+
+
 def _normalized_document_url(disclosure: Disclosure) -> str | None:
     url = disclosure.document_url
 
-    if not disclosure.document_id or disclosure.document_id.startswith("QANT_"):
+    if not disclosure.document_id:
         return url
 
     base = "https://disclosures-clerk.house.gov/public_disc"
@@ -93,6 +136,21 @@ class DisclosureResponse(BaseModel):
     document_url: str | None
     parsed: bool
     is_ptr: bool = False
+    # How much of the document the parser read, 0-1. `parsed` only ever meant
+    # the parser ran without raising; this is what says whether it worked.
+    # Null means never scored, not scored and fine.
+    parse_confidence: float | None = None
+    parse_warnings: str | None = None
+    # Whether the PDF had any text in it. A false here means the score of 0.0
+    # is the document's doing, not the parser's -- about one House PTR in eight
+    # is a scan of a paper form. Null means nobody has checked.
+    has_text_layer: bool | None = None
+    # What was actually extracted. Zero transactions on a PTR is a failed parse
+    # rather than a quiet quarter, and these counts beside `parse_confidence`
+    # are how a reader can see that for themselves.
+    asset_count: int = 0
+    transaction_count: int = 0
+    liability_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -127,6 +185,28 @@ async def list_disclosures(
         "filing_date", description="Field to sort by: member_name, year, filing_date, status"
     ),
     sort_order: str | None = Query("desc", description="Sort order: asc or desc"),
+    max_confidence: float | None = Query(
+        None,
+        ge=0,
+        le=1,
+        description=(
+            "Only filings the parser read no better than this, 0-1. The useful "
+            "query is the low end: `parsed` says the parser ran, not that it "
+            "worked, so this is how you find the filings whose data is thin. "
+            "Filings with no score have never been scored, and are excluded "
+            "from this filter rather than assumed good."
+        ),
+    ),
+    has_text_layer: bool | None = Query(
+        None,
+        description=(
+            "Filter by whether the PDF had any extractable text. Pair it with "
+            "`max_confidence`: `has_text_layer=true` gives the filings the "
+            "parser genuinely did badly on, and `has_text_layer=false` gives "
+            "the scanned paper forms, which score 0 because there is nothing "
+            "in them to read. Roughly one House PTR in eight is the latter."
+        ),
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db_session),
@@ -151,6 +231,18 @@ async def list_disclosures(
 
     if is_ptr is not None:
         query = query.filter(Disclosure.is_ptr == is_ptr)
+
+    if max_confidence is not None:
+        # `isnot(None)` deliberately: a filing parsed before scoring existed has
+        # no score, and treating that as 0 would bury the real low scorers in a
+        # list of filings nobody has looked at yet.
+        query = query.filter(
+            Disclosure.parse_confidence.isnot(None),
+            Disclosure.parse_confidence <= max_confidence,
+        )
+
+    if has_text_layer is not None:
+        query = query.filter(Disclosure.has_text_layer.is_(has_text_layer))
 
     # Get total count
     total = query.count()
@@ -179,6 +271,7 @@ async def list_disclosures(
 
     # Apply pagination
     disclosures = query.offset((page - 1) * page_size).limit(page_size).all()
+    counts = _extracted_counts(db, [d.id for d in disclosures])
 
     return DisclosureListResponse(
         total=total,
@@ -196,6 +289,12 @@ async def list_disclosures(
                 document_url=_normalized_document_url(d),
                 parsed=d.parsed,
                 is_ptr=d.is_ptr,
+                parse_confidence=d.parse_confidence,
+                parse_warnings=d.parse_warnings,
+                has_text_layer=d.has_text_layer,
+                asset_count=counts.get(d.id, (0, 0, 0))[0],
+                transaction_count=counts.get(d.id, (0, 0, 0))[1],
+                liability_count=counts.get(d.id, (0, 0, 0))[2],
             )
             for d in disclosures
         ],
@@ -238,6 +337,13 @@ async def get_disclosure(
         document_id=disclosure.document_id,
         document_url=_normalized_document_url(disclosure),
         parsed=disclosure.parsed,
+        parse_confidence=disclosure.parse_confidence,
+        parse_warnings=disclosure.parse_warnings,
+        has_text_layer=disclosure.has_text_layer,
+        # Already in hand from the rows above, so no extra query.
+        asset_count=len(assets),
+        transaction_count=len(transactions),
+        liability_count=len(liabilities),
         total_assets_min=total_min,
         total_assets_max=total_max,
         assets=[

@@ -20,6 +20,21 @@ from src.db.models import Disclosure, Member, Transaction, TransactionType
 
 logger = logging.getLogger(__name__)
 
+# Volume-spike tuning. These remain asserted rather than calibrated -- see D6 in
+# docs/DECISIONS.md, which calls for population base rates instead.
+MIN_TRADES_FOR_VOLUME_SPIKE = 8
+VOLUME_SPIKE_SIGMAS = 3.0
+VOLUME_SPIKE_FLAT_MULTIPLE = 5.0
+
+
+def _median(values: List[float]) -> float:
+    """Median of a non-empty list."""
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
 
 class ExtendedAnomalyDetector:
     """Detect extended anomaly patterns in Congressional finances."""
@@ -77,8 +92,9 @@ class ExtendedAnomalyDetector:
                                 "threshold_value": Decimal("5"),
                                 "description": (
                                     f"Member made {consecutive_same_direction} consecutive trades "
-                                    f"in same direction (all buys or all sells) within short period. "
-                                    f"Could indicate insider information or coordinated strategy."
+                                    f"in the same direction (all buys or all sells) within a short "
+                                    f"period. This describes the sequence only; it does not measure "
+                                    f"timing, profitability, or intent."
                                 ),
                             }
                         )
@@ -110,7 +126,7 @@ class ExtendedAnomalyDetector:
                                     f"Member executed {perfect_timing['count']} trades with exceptional timing. "
                                     f"Success rate: {perfect_timing['rate']:.1f}%. "
                                     f"Probability of this performance by chance: <1%. "
-                                    f"Suggests insider information or exceptional predictive ability."
+                                    f"Timing is not evaluated against prices; see docs/DECISIONS.md."
                                 ),
                             }
                         )
@@ -153,17 +169,31 @@ class ExtendedAnomalyDetector:
 
         anomalies = []
 
-        # Calculate average trade size
         amounts = [transaction_amount(t) for t in trades]
         amounts = [a for a in amounts if a > 0]
-        if len(amounts) < 2:
+
+        # Mean + 3 standard deviations is not meaningful on a handful of
+        # heavy-tailed points, and disclosure amounts cluster hard on a few band
+        # midpoints -- a single large trade drags the mean and the deviation
+        # together, so the outlier hides itself. Median absolute deviation is
+        # resistant to exactly that. It still needs enough points to have a
+        # stable centre, hence the higher floor.
+        if len(amounts) < MIN_TRADES_FOR_VOLUME_SPIKE:
             return anomalies
 
-        avg_amount = sum(amounts) / len(amounts)
-        std_dev = (sum((x - avg_amount) ** 2 for x in amounts) / len(amounts)) ** 0.5
-        threshold = avg_amount + (3 * std_dev)  # 3 standard deviations
+        median_amount = _median(amounts)
+        mad = _median([abs(a - median_amount) for a in amounts])
 
-        # Find spikes
+        if mad > 0:
+            # 0.6745 rescales MAD to a normal-consistent sigma, so the cutoff
+            # stays comparable to the "3 sigma" this replaced.
+            threshold = median_amount + (VOLUME_SPIKE_SIGMAS * mad / 0.6745)
+        else:
+            # More than half the trades share one value (common when amounts
+            # collapse onto the same band). Fall back to a multiple of the
+            # median rather than flagging every non-median trade.
+            threshold = median_amount * VOLUME_SPIKE_FLAT_MULTIPLE
+
         spikes = [t for t in trades if transaction_amount(t) > threshold]
 
         if len(spikes) >= 2:
@@ -173,10 +203,12 @@ class ExtendedAnomalyDetector:
                 "title": f"Unusual trading volume spikes ({len(spikes)})",
                 "spike_count": len(spikes),
                 "computed_value": Decimal(str(round(threshold, 2))),
-                "threshold_value": Decimal(str(round(avg_amount, 2))),
+                "threshold_value": Decimal(str(round(median_amount, 2))),
                 "description": (
-                    f"Identified {len(spikes)} unusual trading volume spikes "
-                    f"(>3 std dev above average). May indicate insider trading activity."
+                    f"{len(spikes)} trades were unusually large relative to this member's "
+                    f"own typical trade size. Disclosures report amount bands, so sizes are "
+                    f"band midpoints; this compares a member against themselves, not a "
+                    f"population baseline."
                 ),
             }
             if member is not None:
@@ -221,123 +253,10 @@ class ExtendedAnomalyDetector:
 
     # ========== ANOMALY 5: COMMITTEE-BASED CONFLICTS ==========
 
-    def detect_committee_conflicts(self, db: Session) -> List[Dict]:
-        """
-        Detect trading that overlaps with committee responsibilities.
-        Requires committee data to be available.
-        """
-        anomalies = []
-
-        try:
-            members = db.query(Member).all()
-
-            for member in members:
-                try:
-                    # Get trades (joined through Disclosure because Transaction
-                    # has no direct member_id column).
-                    trades = (
-                        db.query(Transaction)
-                        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-                        .filter(Disclosure.member_id == member.id)
-                        .all()
-                    )
-
-                    if not trades:
-                        continue
-
-                    # Check for sector overlap (would need committee data in actual implementation)
-                    # For now, flag trading in any heavily regulated sector
-                    regulated_trades = self._check_regulated_sector_trading(trades)
-
-                    if regulated_trades:
-                        sectors = ", ".join(regulated_trades["sectors"][:3]) or "regulated sectors"
-                        anomalies.append(
-                            {
-                                "member_id": member.id,
-                                "member_name": f"{member.first_name} {member.last_name}",
-                                "chamber": member.chamber,
-                                "anomaly_type": "sector_concentration",
-                                "severity": "MEDIUM",
-                                "title": f"Heavy concentration in {sectors}",
-                                "sectors": regulated_trades["sectors"],
-                                "trade_count": regulated_trades["count"],
-                                "computed_value": Decimal(str(regulated_trades["count"])),
-                                "threshold_value": Decimal(str(int(len(trades) * 0.5))),
-                                "description": (
-                                    f"Member concentrated trading in {len(regulated_trades['sectors'])} "
-                                    f"heavily-regulated sectors: {', '.join(regulated_trades['sectors'])}. "
-                                    f"If member serves on related committee, this represents potential conflict of interest."
-                                ),
-                            }
-                        )
-
-                except Exception as e:
-                    logger.debug(f"Error checking conflicts for {member.first_name}: {str(e)[:50]}")
-
-        except Exception as e:
-            logger.error(f"Error in committee conflict detection: {str(e)[:100]}")
-
-        return anomalies
-
-    def _check_regulated_sector_trading(self, trades: List[Transaction]) -> Dict | None:
-        """Check for concentration in regulated sectors."""
-        REGULATED_SECTORS = {
-            "defense": [
-                "defense",
-                "lockheed",
-                "raytheon",
-                "boeing",
-                "northrop",
-                "lmt",
-                "ba",
-                "rtx",
-            ],
-            "pharma": ["pharma", "pfizer", "moderna", "merck", "johnson", "pfe", "mrna", "mrk"],
-            "tech": [
-                "apple",
-                "microsoft",
-                "google",
-                "amazon",
-                "meta",
-                "aapl",
-                "msft",
-                "googl",
-                "amzn",
-            ],
-            "finance": ["jpmorgan", "wells fargo", "goldman", "bank", "jpm", "wfc", "gs", "visa"],
-            "energy": ["exxon", "chevron", "shell", "xom", "cvx"],
-        }
-
-        sector_counts = defaultdict(int)
-
-        for trade in trades:
-            ticker = (trade.ticker or "").lower()
-            description = (trade.description or "").lower()
-
-            for sector, keywords in REGULATED_SECTORS.items():
-                if any(keyword in ticker or keyword in description for keyword in keywords):
-                    sector_counts[sector] += 1
-                    break
-
-        # Flag if 50%+ of trades in single regulated sector
-        if sector_counts:
-            total_trades = len(trades)
-            max_sector_trades = max(sector_counts.values())
-
-            if max_sector_trades / total_trades >= 0.5:
-                return {
-                    "sectors": [s for s, c in sector_counts.items() if c / total_trades >= 0.3],
-                    "count": max_sector_trades,
-                }
-
-        return None
-
-    # ========== ANOMALY 6: LOSS AVOIDANCE PATTERN ==========
-
     def detect_loss_avoidance(self, db: Session) -> List[Dict]:
         """
         Detect members who consistently sell before losses and hold through gains.
-        Suggests insider information or exceptional market timing.
+        Does not consult prices; disabled by default (see docs/DECISIONS.md).
         """
         anomalies = []
 
@@ -408,7 +327,7 @@ class ExtendedAnomalyDetector:
                                 "description": (
                                     f"Member demonstrates loss-avoidance pattern in {total_patterns} trading instances. "
                                     f"Success rate: {rate:.1f}%. "
-                                    f"Suggests ability to predict stock movements or insider information."
+                                    f"No price data is consulted; see docs/DECISIONS.md."
                                 ),
                             }
                         )
@@ -482,12 +401,12 @@ class ExtendedAnomalyDetector:
                         "computed_value": Decimal(str(total_score)),
                         "threshold_value": Decimal("3"),
                         "description": (
-                            f"MULTI-FACTOR INVESTIGATION REQUIRED: "
-                            f"Member shows {len(anomalies_list)} different anomaly patterns "
-                            f"(risk score: {total_score}/10). "
-                            f"Anomalies: {', '.join(set(a.get('anomaly_type', 'unknown') for a in anomalies_list))}. "
-                            f"Pattern suggests systematic financial misconduct. "
-                            f"Recommend immediate ethics investigation."
+                            f"Member matched {len(anomalies_list)} different detectors "
+                            f"(combined score: {total_score}/10). "
+                            f"Detectors: {', '.join(sorted(set(a.get('anomaly_type', 'unknown') for a in anomalies_list)))}. "
+                            f"This counts how many patterns matched; it does not weight them by "
+                            f"confidence and applies no correction for running many detectors "
+                            f"across many members, so some overlap is expected by chance."
                         ),
                     }
                 )
@@ -516,9 +435,11 @@ def run_extended_anomaly_detection(
     timing_anomalies = detector.detect_trade_timing_anomalies(db)
     logger.info(f"   Found {len(timing_anomalies)} anomalies\n")
 
-    logger.info("2. Detecting committee-based conflicts...")
-    conflict_anomalies = detector.detect_committee_conflicts(db)
-    logger.info(f"   Found {len(conflict_anomalies)} anomalies\n")
+    # Committee conflicts moved to src/analysis/committee_conflicts.py, which
+    # joins real assignments from congress-legislators instead of guessing from
+    # ticker substrings. Kept as an empty list so the result shape is unchanged
+    # for callers reading combined_results.
+    conflict_anomalies: List[Dict] = []
 
     logger.info("3. Detecting loss avoidance patterns...")
     loss_anomalies = detector.detect_loss_avoidance(db)

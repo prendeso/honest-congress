@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+
+{% block title %}Filing Compliance &mdash; Honest Congress{% endblock %}
+
+{% block content %}
+{% raw %}
+<div x-data="compliancePage()" x-init="init()" x-cloak>
+    <div class="container mx-auto px-4 py-8">
+        <div class="glass-card rounded-xl shadow-lg p-6">
+            <h2 class="text-3xl font-bold text-gray-800 mb-2">⏱️ Filing Compliance</h2>
+            <p class="text-gray-600 mb-6">
+                The two least interpretive things this project computes. Neither makes
+                any claim about intent, profit or conflict.
+            </p>
+
+            <div class="flex gap-2 mb-6 border-b">
+                <button @click="tab = 'lateness'"
+                        :class="tab === 'lateness' ? 'border-b-2 border-blue-600 text-blue-700' : 'text-gray-500'"
+                        class="px-4 py-2 font-medium">Late filings</button>
+                <button @click="tab = 'opacity'"
+                        :class="tab === 'opacity' ? 'border-b-2 border-blue-600 text-blue-700' : 'text-gray-500'"
+                        class="px-4 py-2 font-medium">Legibility</button>
+            </div>
+
+            <!-- ---------------- late filings ---------------- -->
+            <div x-show="tab === 'lateness'">
+                <div class="mb-6 p-4 bg-blue-50 rounded-lg text-blue-900 text-sm">
+                    <p>
+                        The STOCK Act requires a Periodic Transaction Report within 45 days
+                        of a covered trade. This is the subtraction of two dates that both
+                        appear on the filing, and nothing else. It is the one output here
+                        that does not depend on a threshold anybody chose.
+                    </p>
+                    <p class="mt-2" x-text="compliance.note"></p>
+                </div>
+
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div class="p-4 bg-white rounded-lg border">
+                        <div class="text-2xl font-bold text-gray-900" x-text="compliance.members_ranked ?? '—'"></div>
+                        <div class="text-gray-500 text-sm">members ranked</div>
+                    </div>
+                    <div class="p-4 bg-white rounded-lg border">
+                        <div class="text-2xl font-bold text-gray-900" x-text="compliance.total_transactions_checked ?? '—'"></div>
+                        <div class="text-gray-500 text-sm">trades checked</div>
+                    </div>
+                    <div class="p-4 bg-white rounded-lg border">
+                        <div class="text-2xl font-bold text-gray-900" x-text="compliance.total_filed_late ?? '—'"></div>
+                        <div class="text-gray-500 text-sm">filed late</div>
+                    </div>
+                    <div class="p-4 bg-white rounded-lg border">
+                        <div class="text-2xl font-bold text-gray-900">
+                            <span x-text="compliance.overall_late_rate_percent ?? '—'"></span>%
+                        </div>
+                        <div class="text-gray-500 text-sm">overall late rate</div>
+                    </div>
+                </div>
+
+                <div class="flex items-center gap-3 mb-4 text-sm">
+                    <label class="text-gray-600" for="min-txn">Minimum checkable trades</label>
+                    <!-- Without a floor, one late filing out of one transaction tops a
+                         "100% late" ranking, which says nothing about anybody. -->
+                    <input id="min-txn" type="number" min="1" max="100" x-model.number="minTransactions"
+                           @change="loadCompliance()"
+                           class="border rounded px-2 py-1 w-20">
+                </div>
+
+                <template x-if="loading">
+                    <p class="text-gray-500 py-8 text-center">Loading…</p>
+                </template>
+
+                <template x-if="!loading && (compliance.members || []).length === 0">
+                    <p class="text-gray-500 py-8 text-center">
+                        No member has enough checkable trades yet. Run an ingest and a parse first.
+                    </p>
+                </template>
+
+                <template x-if="!loading && (compliance.members || []).length > 0">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left font-medium text-gray-500">Member</th>
+                                    <th class="px-4 py-3 text-left font-medium text-gray-500">Late rate</th>
+                                    <th class="px-4 py-3 text-right font-medium text-gray-500">Late</th>
+                                    <th class="px-4 py-3 text-right font-medium text-gray-500">Checked</th>
+                                    <th class="px-4 py-3 text-right font-medium text-gray-500"
+                                        title="Days past the 45-day deadline, across the late filings only.">Median days over</th>
+                                    <th class="px-4 py-3 text-right font-medium text-gray-500">Worst</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y">
+                                <template x-for="m in compliance.members" :key="m.member_id">
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-4 py-3">
+                                            <span class="font-medium" x-text="m.member_name"></span>
+                                            <span class="text-gray-400 ml-1"
+                                                  x-text="'(' + (m.party || '?') + '-' + (m.state || '?') + ')'"></span>
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span :class="rateClass(m.late_rate_percent)" class="px-2 py-0.5 rounded text-xs font-medium">
+                                                <span x-text="m.late_rate_percent"></span>%
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-3 text-right" x-text="m.filed_late"></td>
+                                        <td class="px-4 py-3 text-right" x-text="m.transactions_checked"></td>
+                                        <td class="px-4 py-3 text-right" x-text="m.median_days_late"></td>
+                                        <td class="px-4 py-3 text-right text-gray-600"
+                                            :title="m.worst_filing ? (m.worst_filing.ticker || 'no ticker') + ' traded ' + m.worst_filing.transaction_date + ', filed ' + m.worst_filing.filing_date : ''"
+                                            x-text="m.max_days_late ? m.max_days_late + ' d' : '—'"></td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </template>
+            </div>
+
+            <!-- ---------------- legibility ---------------- -->
+            <div x-show="tab === 'opacity'">
+                <div class="mb-6 p-4 bg-amber-50 rounded-lg text-amber-900 text-sm">
+                    <p>
+                        How clearly a member discloses, not how they behave. A member whose
+                        filings cannot be read will show few findings under every other
+                        measure here, for reasons that have nothing to do with their trading
+                        — so this is published to bound the rest of the site rather than to
+                        say anything about the people in it.
+                    </p>
+                    <p class="mt-2" x-text="opacity.note"></p>
+                </div>
+
+                <template x-if="loading">
+                    <p class="text-gray-500 py-8 text-center">Loading…</p>
+                </template>
+
+                <template x-if="!loading && (opacity.members || []).length === 0">
+                    <p class="text-gray-500 py-8 text-center">
+                        Nothing to score yet. Run an ingest and a parse first.
+                    </p>
+                </template>
+
+                <template x-if="!loading && (opacity.members || []).length > 0">
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-4 py-3 text-left font-medium text-gray-500">Member</th>
+                                    <th class="px-4 py-3 text-left font-medium text-gray-500"
+                                        title="Mean of the components that apply: missing tickers, vague descriptions, unreadable amounts, and filings that yielded nothing.">Opacity</th>
+                                    <th class="px-4 py-3 text-right font-medium text-gray-500">No ticker</th>
+                                    <th class="px-4 py-3 text-right font-medium text-gray-500">Vague</th>
+                                    <th class="px-4 py-3 text-right font-medium text-gray-500">No amount</th>
+                                    <th class="px-4 py-3 text-right font-medium text-gray-500"
+                                        title="Filings nothing could be extracted from: never parsed, a scan with no text, or parsed and empty.">Unreadable filings</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y">
+                                <template x-for="m in opacity.members" :key="m.member_id">
+                                    <tr class="hover:bg-gray-50">
+                                        <td class="px-4 py-3">
+                                            <span class="font-medium" x-text="m.member_name"></span>
+                                            <span class="text-gray-400 ml-1"
+                                                  x-text="'(' + (m.party || '?') + '-' + (m.state || '?') + ')'"></span>
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span :class="rateClass(m.opacity_score)" class="px-2 py-0.5 rounded text-xs font-medium"
+                                                  x-text="m.opacity_score"></span>
+                                        </td>
+                                        <td class="px-4 py-3 text-right"><span x-text="m.components.transactions_missing_ticker_percent"></span>%</td>
+                                        <td class="px-4 py-3 text-right"><span x-text="m.components.items_vaguely_described_percent"></span>%</td>
+                                        <td class="px-4 py-3 text-right"><span x-text="m.components.items_with_unreadable_amount_percent"></span>%</td>
+                                        <td class="px-4 py-3 text-right"
+                                            :title="m.components.disclosures_scanned + ' scanned, ' + m.components.disclosures_unparsed + ' never parsed'">
+                                            <span x-text="m.components.filings_unreadable_percent"></span>%
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
+</div>
+{% endraw %}
+{% endblock %}
+
+{% block scripts %}
+{% raw %}
+<script>
+    function compliancePage() {
+        return {
+            tab: 'lateness',
+            loading: false,
+            minTransactions: 5,
+            compliance: {},
+            opacity: {},
+
+            async init() {
+                await this.loadAll();
+            },
+
+            async loadAll() {
+                this.loading = true;
+                try {
+                    const [c, o] = await Promise.all([
+                        fetch(`/api/compliance/?min_transactions=${this.minTransactions}&limit=200`).then(r => r.json()),
+                        fetch('/api/compliance/opacity/?limit=200').then(r => r.json())
+                    ]);
+                    this.compliance = c;
+                    this.opacity = o;
+                } catch (e) {
+                    console.error('Compliance load failed:', e);
+                } finally {
+                    this.loading = false;
+                }
+            },
+
+            async loadCompliance() {
+                this.loading = true;
+                try {
+                    this.compliance = await fetch(
+                        `/api/compliance/?min_transactions=${this.minTransactions}&limit=200`
+                    ).then(r => r.json());
+                } catch (e) {
+                    console.error('Compliance load failed:', e);
+                } finally {
+                    this.loading = false;
+                }
+            },
+
+            // Both tables are percentages where higher is worse, so one scale
+            // serves both. No threshold here is a claim -- it is shading.
+            rateClass(value) {
+                if (value === null || value === undefined) return 'bg-gray-100 text-gray-600';
+                if (value >= 50) return 'bg-red-100 text-red-800';
+                if (value >= 20) return 'bg-amber-100 text-amber-900';
+                if (value > 0) return 'bg-yellow-50 text-yellow-800';
+                return 'bg-emerald-100 text-emerald-800';
+            }
+        }
+    }
+</script>
+{% endraw %}
+{% endblock %}

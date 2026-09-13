@@ -1,0 +1,72 @@
+{
+ "0": {
+  "cik_str": 320193,
+  "ticker": "AAPL",
+  "title": "Apple Inc."
+ },
+ "1": {
+  "cik_str": 789019,
+  "ticker": "MSFT",
+  "title": "MICROSOFT CORP"
+ },
+ "2": {
+  "cik_str": 18230,
+  "ticker": "CAT",
+  "title": "CATERPILLAR INC"
+ },
+ "3": {
+  "cik_str": 101829,
+  "ticker": "RTX",
+  "title": "RTX Corp"
+ },
+ "4": {
+  "cik_str": 732717,
+  "ticker": "T",
+  "title": "AT&T INC."
+ },
+ "5": {
+  "cik_str": 12927,
+  "ticker": "BA",
+  "title": "BOEING CO"
+ },
+ "6": {
+  "cik_str": 936468,
+  "ticker": "LMT",
+  "title": "LOCKHEED MARTIN CORP"
+ },
+ "7": {
+  "cik_str": 40533,
+  "ticker": "GD",
+  "title": "GENERAL DYNAMICS CORP"
+ },
+ "8": {
+  "cik_str": 66740,
+  "ticker": "MMM",
+  "title": "3M CO"
+ },
+ "9": {
+  "cik_str": 1133421,
+  "ticker": "NOC",
+  "title": "NORTHROP GRUMMAN CORP /DE/"
+ },
+ "10": {
+  "cik_str": 49071,
+  "ticker": "HUM",
+  "title": "HUMANA INC"
+ },
+ "11": {
+  "cik_str": 1824502,
+  "ticker": "ACHR",
+  "title": "Archer Aviation Inc."
+ },
+ "12": {
+  "cik_str": 9999999,
+  "ticker": "",
+  "title": "NO TICKER HOLDING CO"
+ },
+ "13": {
+  "cik_str": 102037,
+  "ticker": "UVV",
+  "title": "UNIVERSAL CORP /VA/"
+ }
+}

@@ -1,0 +1,67 @@
+{
+ "cosponsoredLegislation": [
+  {
+   "congress": 119,
+   "type": "HR",
+   "number": "6729",
+   "title": "Auto Reenroll Act of 2025",
+   "policyArea": {
+    "name": "Taxation"
+   },
+   "introducedDate": "2026-09-10",
+   "latestAction": {
+    "actionDate": "2025-12-15",
+    "text": "Referred to the Committee on Ways and Means, and in addition to the Committee on Education and Workforce, for a period to be subsequently determined by the Speaker, in each case for consideration of such provisions as fall within the jurisdiction of the committee concerned."
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 119,
+   "type": "HR",
+   "number": "5091",
+   "title": "To amend section 5545 of title 5, United States Code, to provide hazard pay for carrying out prescribed burns, and for other purposes.",
+   "policyArea": {
+    "name": "Government Operations and Politics"
+   },
+   "introducedDate": "2026-09-03",
+   "latestAction": {
+    "actionDate": "2025-09-02",
+    "text": "Referred to the House Committee on Oversight and Government Reform."
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 119,
+   "type": "HR",
+   "number": "10293",
+   "title": "Rural Emergency Hospital Designation Improvement Act",
+   "policyArea": {
+    "name": "Health"
+   },
+   "introducedDate": "2026-09-03",
+   "latestAction": {
+    "actionDate": "2026-09-03",
+    "text": "Referred to the Committee on Energy and Commerce, and in addition to the Committee on Ways and Means, for a period to be subsequently determined by the Speaker, in each case for consideration of such provisions as fall within the jurisdiction of the committee concerned."
+   },
+   "originChamber": null
+  },
+  {
+   "congress": 119,
+   "type": "HR",
+   "number": "1886",
+   "title": "Affordable College Textbook Act",
+   "policyArea": {
+    "name": "Education"
+   },
+   "introducedDate": "2026-09-02",
+   "latestAction": {
+    "actionDate": "2025-03-05",
+    "text": "Referred to the House Committee on Education and Workforce."
+   },
+   "originChamber": null
+  }
+ ],
+ "pagination": {
+  "count": 4
+ }
+}

@@ -82,7 +82,9 @@
                                     <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('filing_date')">
                                         Filing Date <span x-show="sortField === 'filing_date'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                     </th>
-                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500">Status</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500">Trades read</th>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500"
+                                        title="A green Parsed badge used to appear here for filings nothing was extracted from. This says how much was.">Status</th>
                                     <th class="px-4 py-3 text-left text-sm font-medium text-gray-500">Actions</th>
                                 </tr>
                             </thead>
@@ -95,10 +97,25 @@
                                             <span class="px-2 py-1 bg-purple-100 text-purple-800 rounded text-sm" x-text="trade.filing_type"></span>
                                         </td>
                                         <td class="px-4 py-3" x-text="trade.filing_date ? new Date(trade.filing_date).toLocaleDateString() : '-'"></td>
+                                        <td class="px-4 py-3 text-center" x-text="trade.transaction_count"></td>
+                                        <!-- `parsed` means the parser ran, and a scanned paper
+                                             form clears that bar while yielding nothing. This
+                                             badge used to read a confident green "Parsed" on a
+                                             filing with no trades in it at all. -->
                                         <td class="px-4 py-3">
-                                            <span :class="trade.parsed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'"
-                                                  class="px-2 py-1 rounded text-sm font-medium"
-                                                  x-text="trade.parsed ? 'Parsed' : 'Pending'"></span>
+                                            <template x-if="!trade.parsed">
+                                                <span class="px-2 py-1 rounded text-sm font-medium bg-yellow-100 text-yellow-800">Pending</span>
+                                            </template>
+                                            <template x-if="trade.parsed && trade.has_text_layer === false">
+                                                <span class="px-2 py-1 rounded text-sm font-medium bg-slate-200 text-slate-700"
+                                                      title="A photograph of a paper form. There is no text in it to extract, and this project does not do OCR. About one House trade report in eight is like this.">scanned image</span>
+                                            </template>
+                                            <template x-if="trade.parsed && trade.has_text_layer !== false">
+                                                <span :class="readClass(trade.parse_confidence)"
+                                                      class="px-2 py-1 rounded text-sm font-medium"
+                                                      :title="trade.parse_warnings || 'No warnings recorded.'"
+                                                      x-text="readLabel(trade.parse_confidence)"></span>
+                                            </template>
                                         </td>
                                         <td class="px-4 py-3">
                                             <template x-if="trade.document_url">
@@ -198,6 +215,21 @@
                     } finally {
                         this.loading = false;
                     }
+                },
+
+                // Same wording as the Parsed Documents page, deliberately: the
+                // two pages list overlapping filings and must not disagree
+                // about how well one was read.
+                readLabel(value) {
+                    if (value === null || value === undefined) return 'not scored';
+                    return 'read ' + Math.round(value * 100) + '%';
+                },
+
+                readClass(value) {
+                    if (value === null || value === undefined) return 'bg-gray-100 text-gray-600';
+                    if (value === 0) return 'bg-red-100 text-red-800';
+                    if (value < 0.8) return 'bg-amber-100 text-amber-900';
+                    return 'bg-emerald-100 text-emerald-800';
                 },
 
                 sortBy(field) {

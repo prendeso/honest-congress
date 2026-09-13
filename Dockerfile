@@ -8,7 +8,9 @@
 # Run:    docker run -p 8000:8000 -e DATABASE_URL=... honest-congress
 
 # ---------- builder ----------
-FROM python:3.12-slim AS builder
+# 3.11 to match CI and `target-version` in pyproject.toml. The image used to
+# build on 3.12, so the tests had never run on the version that shipped.
+FROM python:3.11-slim AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -29,7 +31,7 @@ COPY requirements.txt ./
 RUN pip install --prefix=/install -r requirements.txt
 
 # ---------- runtime ----------
-FROM python:3.12-slim AS runtime
+FROM python:3.11-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

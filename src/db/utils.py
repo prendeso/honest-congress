@@ -1,149 +1,46 @@
-"""
-Utility functions to maintain materialized count columns on the Member model.
+"""Maintenance for the materialized count columns on :class:`Member`.
 
-These functions should be called whenever disclosures or anomalies are added/deleted.
+``Member.disclosure_count`` and ``Member.anomaly_count`` are denormalized so
+the members API can sort and filter on them without a correlated subquery per
+row. Nothing kept them in sync -- this module had no callers at all -- so those
+columns read as zero while `/api/members` filtered, sorted and returned them.
+
+`recalculate_member_counts` is the only maintenance entry point. It is a full
+idempotent recompute rather than incremental bookkeeping: the previous
+per-member increment/decrement helpers were unused, and two of them called
+``func.greatest``, which does not exist on SQLite.
 """
 
-from sqlalchemy import func
+from typing import Dict
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.db import Anomaly, Disclosure, Member
 
 
-def update_member_disclosure_count(db: Session, member_id: int) -> None:
+def recalculate_member_counts(db: Session) -> Dict[str, int]:
+    """Recompute both materialized counts for every member.
+
+    Uses one UPDATE per column with a correlated subquery, so members with no
+    disclosures or no anomalies are reset to zero in the same statement rather
+    than needing a separate pass. Safe to run repeatedly.
+
+    Returns a summary of what was recomputed.
     """
-    Recalculate and update the disclosure_count for a specific member.
-
-    Args:
-        db: Database session
-        member_id: ID of the member to update
-    """
-    count = db.query(func.count(Disclosure.id)).filter(Disclosure.member_id == member_id).scalar()
-
-    db.query(Member).filter(Member.id == member_id).update({"disclosure_count": count or 0})
-    db.commit()
-
-
-def update_member_anomaly_count(db: Session, member_id: int) -> None:
-    """
-    Recalculate and update the anomaly_count for a specific member.
-
-    Args:
-        db: Database session
-        member_id: ID of the member to update
-    """
-    count = db.query(func.count(Anomaly.id)).filter(Anomaly.member_id == member_id).scalar()
-
-    db.query(Member).filter(Member.id == member_id).update({"anomaly_count": count or 0})
-    db.commit()
-
-
-def update_all_member_counts(db: Session) -> dict:
-    """
-    Recalculate and update counts for all members.
-
-    This is useful for bulk updates or data corrections.
-
-    Args:
-        db: Database session
-
-    Returns:
-        Dictionary with update statistics
-    """
-    # Update disclosure counts
-    disclosure_counts = (
-        db.query(Disclosure.member_id, func.count(Disclosure.id).label("count"))
-        .group_by(Disclosure.member_id)
-        .all()
+    disclosure_count = (
+        select(func.count(Disclosure.id)).where(Disclosure.member_id == Member.id).scalar_subquery()
+    )
+    anomaly_count = (
+        select(func.count(Anomaly.id)).where(Anomaly.member_id == Member.id).scalar_subquery()
     )
 
-    disclosure_updates = 0
-    for member_id, count in disclosure_counts:
-        db.query(Member).filter(Member.id == member_id).update({"disclosure_count": count})
-        disclosure_updates += 1
-
-    # Reset to 0 for members with no disclosures
-    db.query(Member).filter(~Member.id.in_([m_id for m_id, _ in disclosure_counts])).update(
-        {"disclosure_count": 0}, synchronize_session=False
-    )
-
-    # Update anomaly counts
-    anomaly_counts = (
-        db.query(Anomaly.member_id, func.count(Anomaly.id).label("count"))
-        .group_by(Anomaly.member_id)
-        .all()
-    )
-
-    anomaly_updates = 0
-    for member_id, count in anomaly_counts:
-        db.query(Member).filter(Member.id == member_id).update({"anomaly_count": count})
-        anomaly_updates += 1
-
-    # Reset to 0 for members with no anomalies
-    db.query(Member).filter(~Member.id.in_([m_id for m_id, _ in anomaly_counts])).update(
-        {"anomaly_count": 0}, synchronize_session=False
-    )
-
+    db.query(Member).update({"disclosure_count": disclosure_count}, synchronize_session=False)
+    db.query(Member).update({"anomaly_count": anomaly_count}, synchronize_session=False)
     db.commit()
 
     return {
-        "disclosure_updates": disclosure_updates,
-        "anomaly_updates": anomaly_updates,
-        "total_members": db.query(Member).count(),
+        "members": db.query(func.count(Member.id)).scalar() or 0,
+        "disclosures": db.query(func.count(Disclosure.id)).scalar() or 0,
+        "anomalies": db.query(func.count(Anomaly.id)).scalar() or 0,
     }
-
-
-def increment_member_disclosure_count(db: Session, member_id: int) -> None:
-    """
-    Increment the disclosure_count for a member (faster than recounting).
-
-    Args:
-        db: Database session
-        member_id: ID of the member to update
-    """
-    db.query(Member).filter(Member.id == member_id).update(
-        {"disclosure_count": Member.disclosure_count + 1}
-    )
-    db.commit()
-
-
-def decrement_member_disclosure_count(db: Session, member_id: int) -> None:
-    """
-    Decrement the disclosure_count for a member (faster than recounting).
-
-    Args:
-        db: Database session
-        member_id: ID of the member to update
-    """
-    db.query(Member).filter(Member.id == member_id).update(
-        {"disclosure_count": func.greatest(Member.disclosure_count - 1, 0)}
-    )
-    db.commit()
-
-
-def increment_member_anomaly_count(db: Session, member_id: int) -> None:
-    """
-    Increment the anomaly_count for a member (faster than recounting).
-
-    Args:
-        db: Database session
-        member_id: ID of the member to update
-    """
-    db.query(Member).filter(Member.id == member_id).update(
-        {"anomaly_count": Member.anomaly_count + 1}
-    )
-    db.commit()
-
-
-def decrement_member_anomaly_count(db: Session, member_id: int) -> None:
-    """
-    Decrement the anomaly_count for a member (faster than recounting).
-
-    Args:
-        db: Database session
-        member_id: ID of the member to update
-    """
-    db.query(Member).filter(Member.id == member_id).update(
-        {"anomaly_count": func.greatest(Member.anomaly_count - 1, 0)}
-    )
-    db.commit()

@@ -1,422 +1,255 @@
-# Honest Congress - System Architecture
+# Architecture
 
-**Version**: 1.0  
-**Last Updated**: February 1, 2026
-
----
-
-## Overview
-
-Honest Congress is a Congressional financial disclosure analyzer that detects anomalies in wealth accumulation, stock trading patterns, and asset appreciation among members of the U.S. Congress.
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         HONEST CONGRESS ARCHITECTURE                        │
-└─────────────────────────────────────────────────────────────────────────────┘
-
-    ┌──────────────────┐     ┌──────────────────┐     ┌──────────────────┐
-    │   DATA SOURCES   │     │   DATA SOURCES   │     │   DATA SOURCES   │
-    │  (House Clerk)   │     │  (QuiverQuant)   │     │  (Congress.gov)  │
-    │   FD XML/PDF     │     │   API ($10/mo)   │     │   Members CSV    │
-    └────────┬─────────┘     └────────┬─────────┘     └────────┬─────────┘
-             │                        │                        │
-             ▼                        ▼                        ▼
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                         INGESTION LAYER                                 │
-    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-    │  │   house.py  │  │ quiverquant │  │  members.py │  │ orchestrator│    │
-    │  │  (FD XML)   │  │    .py      │  │ (Congress)  │  │    .py      │    │
-    │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘    │
-    └─────────────────────────────────────────────────────────────────────────┘
-             │                        │                        │
-             ▼                        ▼                        ▼
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                         PARSING LAYER                                   │
-    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                     │
-    │  │ pdf_parser  │  │ fd_asset    │  │ fd_income   │                     │
-    │  │    .py      │  │  _parser.py │  │  _parser.py │                     │
-    │  └─────────────┘  └─────────────┘  └─────────────┘                     │
-    └─────────────────────────────────────────────────────────────────────────┘
-             │                        │                        │
-             ▼                        ▼                        ▼
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                         DATABASE LAYER (SQLite)                         │
-    │  ┌─────────┐ ┌─────────────┐ ┌────────────┐ ┌────────┐ ┌─────────┐     │
-    │  │ Members │ │ Disclosures │ │Transactions│ │ Assets │ │Anomalies│     │
-    │  │  (547)  │ │   (5,690)   │ │   (9,777)  │ │(6,308) │ │  (184)  │     │
-    │  └─────────┘ └─────────────┘ └────────────┘ └────────┘ └─────────┘     │
-    └─────────────────────────────────────────────────────────────────────────┘
-             │                        │                        │
-             ▼                        ▼                        ▼
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                         ANALYSIS LAYER                                  │
-    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-    │  │   wealth    │  │   trade     │  │  advanced   │  │  extended   │    │
-    │  │ _analyzer   │  │ _analyzer   │  │ _anomaly    │  │ _anomaly    │    │
-    │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘    │
-    │                                                                         │
-    │  7 Anomaly Types:                                                       │
-    │  1. Net Worth vs Salary    5. Committee Conflicts                       │
-    │  2. Asset Appreciation     6. Loss Avoidance                            │
-    │  3. Stock Outperformance   7. Multi-Factor Risk                         │
-    │  4. Trade Timing                                                        │
-    └─────────────────────────────────────────────────────────────────────────┘
-             │
-             ▼
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                         API LAYER (FastAPI)                             │
-    │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-    │  │  /members   │  │/disclosures │  │ /anomalies  │  │ /dashboard  │    │
-    │  │    API      │  │    API      │  │    API      │  │   (HTML)    │    │
-    │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘    │
-    └─────────────────────────────────────────────────────────────────────────┘
-             │
-             ▼
-    ┌─────────────────────────────────────────────────────────────────────────┐
-    │                         PRESENTATION LAYER                              │
-    │  ┌─────────────────────────────────────────────────────────────────┐   │
-    │  │                    Web Dashboard (localhost:8001)                │   │
-    │  │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐            │   │
-    │  │  │ Members │  │Disclos- │  │ Trades  │  │Anomalies│            │   │
-    │  │  │   Tab   │  │ures Tab │  │   Tab   │  │   Tab   │            │   │
-    │  │  └─────────┘  └─────────┘  └─────────┘  └─────────┘            │   │
-    │  └─────────────────────────────────────────────────────────────────┘   │
-    └─────────────────────────────────────────────────────────────────────────┘
-```
+How Honest Congress is put together, and why. For *what* was decided and why
+it stands, see [docs/DECISIONS.md](docs/DECISIONS.md).
 
 ---
 
-## Directory Structure
+## Shape
 
 ```
-honest-congress/
-├── src/
-│   ├── analysis/                 # Anomaly detection modules
-│   │   ├── advanced_anomaly_detector.py   # Net worth, asset, stock anomalies
-│   │   ├── extended_anomaly_detector.py   # Timing, conflicts, risk scoring
-│   │   ├── trade_analyzer.py              # Trade pattern analysis
-│   │   ├── wealth_analyzer.py             # Wealth growth analysis
-│   │   └── performance_analyzer.py        # Benchmark comparison
-│   │
-│   ├── api/                      # FastAPI web server
-│   │   ├── main.py               # API entry point
-│   │   └── routes/               # API endpoints
-│   │       ├── anomalies.py      # /api/anomalies
-│   │       ├── dashboard.py      # Web dashboard HTML
-│   │       ├── disclosures.py    # /api/disclosures
-│   │       ├── members.py        # /api/members
-│   │       └── performance.py    # /api/performance
-│   │
-│   ├── db/                       # Database layer
-│   │   ├── database.py           # SQLAlchemy session
-│   │   └── models.py             # Data models
-│   │
-│   ├── ingestion/                # Data collection
-│   │   ├── house.py              # House Clerk FD XML
-│   │   ├── members.py            # Congress members CSV
-│   │   ├── quiverquant.py        # QuiverQuant API trades
-│   │   └── orchestrator.py       # Ingestion coordinator
-│   │
-│   ├── parsing/                  # Data extraction
-│   │   ├── pdf_parser.py         # PDF parsing
-│   │   ├── fd_asset_parser.py    # Asset extraction
-│   │   ├── fd_income_parser.py   # Income extraction
-│   │   └── committee_conflict_mapper.py  # Committee mapping
-│   │
-│   ├── cli.py                    # Command-line interface
-│   └── config.py                 # Configuration
-│
-├── scripts/                      # Utility scripts
-│   └── run_complete_anomaly_detection.py
-│
-├── data/                         # Data storage
-│   ├── congress.db               # SQLite database
-│   └── pdfs/                     # Downloaded PDFs
-│
-├── docs/                         # Documentation
-│   └── QUIVERQUANT_REGISTRATION.md
-│
-├── ARCHITECTURE.md               # This file
-├── IMPLEMENTATION_PLAN.md        # Implementation roadmap
-├── README.md                     # Quick start guide
-└── requirements.txt              # Python dependencies
+official sources ──► ingestion ──► parsing ──► Postgres/SQLite ──► analysis ──► API + dashboard
 ```
 
----
+Ingestion and analysis are batch jobs driven by `src/cli.py` (and a nightly
+GitHub Actions workflow). The API only reads. That separation matters: read
+endpoints used to trigger writes, which cost three COUNT queries per request
+and — because nothing in that path committed — wrote nothing at all.
 
-## Data Models
+## Layers
 
-### Core Entities
+### `src/ingestion/` — fetch and upsert
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           DATABASE SCHEMA                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
+| Module | Source | Notes |
+|---|---|---|
+| `house.py` | House Clerk `{year}FD.xml` / `{year}PTR.xml` | Primary. Official bulk XML plus PDF links. |
+| `house_clerk_historical.py` | House Clerk, 2004+ | Historical backfill. Overlaps `house.py`; a merge candidate. |
+| `senate.py` | efdsearch.senate.gov AJAX | CSRF handshake then a DataTables JSON endpoint. Parses by column position, so it is fragile. Anti-bot protection is a live risk. |
+| `congress_gov.py` | unitedstates.io `congress-legislators`, Congress.gov | Member roster. The GitHub dataset is primary and needs no key; Congress.gov is the fallback. |
+| `committees.py` | unitedstates.io `committee-membership` | Committee rosters, for the jurisdiction detectors. |
+| `bills.py` | Congress.gov | Bills, sponsorships and committee referrals. Key in `CONGRESS_GOV_API_KEY`. |
+| `fec.py` | api.open.fec.gov | Campaign donations. Key in `FEC_API_KEY` (api.data.gov, 1,000/hour). |
+| `lda.py` | lda.senate.gov | Lobbying disclosures. Works anonymously (~15/min); `LDA_API_KEY` raises it to 120/min. |
+| `usaspending.py` | api.usaspending.gov | Federal contract award *actions*. No key, no registration. |
+| `sec_tickers.py` | SEC `company_tickers.json` | Company name → ticker. Every source above publishes names; only this turns them into something a trade can join to. |
+| `sec_industries.py` | SEC EDGAR browse | SIC codes per ticker, feeding the sector taxonomy. |
+| `rate_limit.py` | — | `RateLimiter` (count per rolling window, so bursts are free) and `ThrottledClient` (retries, `Retry-After`, per-run request budget). Shared by the four keyed clients. |
+| `orchestrator.py` | — | Coordinates the above, downloads PDFs, dispatches parsing. The largest module in the tree and the least tested. |
+| `_helpers.py`, `date_utils.py`, `base.py` | — | Pure functions and the shared ingester base, extracted for testability. |
 
-┌─────────────┐       ┌─────────────────┐       ┌─────────────────┐
-│   Member    │       │   Disclosure    │       │   Transaction   │
-├─────────────┤       ├─────────────────┤       ├─────────────────┤
-│ id (PK)     │──┐    │ id (PK)         │──┐    │ id (PK)         │
-│ bioguide_id │  │    │ member_id (FK)  │◀─┘    │ disclosure_id   │
-│ first_name  │  │    │ filing_type     │       │ member_id (FK)  │
-│ last_name   │  │    │ filing_year     │       │ ticker          │
-│ party       │  │    │ filing_date     │       │ type (buy/sell) │
-│ chamber     │  │    │ document_id     │       │ amount          │
-│ state       │  │    │ parsed          │       │ transaction_date│
-│ district    │  │    │ source          │       │ source          │
-│ in_office   │  │    └─────────────────┘       └─────────────────┘
-└─────────────┘  │
-                 │    ┌─────────────────┐       ┌─────────────────┐
-                 │    │      Asset      │       │    Anomaly      │
-                 │    ├─────────────────┤       ├─────────────────┤
-                 │    │ id (PK)         │       │ id (PK)         │
-                 └───▶│ disclosure_id   │       │ member_id (FK)  │◀─┘
-                      │ asset_type      │       │ disclosure_id   │
-                      │ description     │       │ anomaly_type    │
-                      │ value_min       │       │ severity        │
-                      │ value_max       │       │ title           │
-                      │ income_min      │       │ description     │
-                      │ income_max      │       │ computed_value  │
-                      └─────────────────┘       │ detected_at     │
-                                               └─────────────────┘
-```
+Every source in that table is official and public domain. The vendor feed the
+project started on is gone (D2), and the Tier-2 tables it used to fill are now
+filled by FEC, the Senate LDA and USASpending directly.
 
-### Data Counts (Current)
+Ingestion for those three is **demand-driven**: it starts from the tickers
+members have actually traded and asks each source about those, rather than
+walking the source's own universe. Asking USASpending for every federal award
+would be millions of rows, almost none of them tradeable.
 
-| Table | Records | Description |
-|-------|---------|-------------|
-| Members | 547 | Current Congress members |
-| Disclosures | 5,690 | FD + PTR filings (2015-2026) |
-| Transactions | 9,777 | Stock trades (House + Senate) |
-| Assets | 6,308 | From parsed disclosures |
-| Anomalies | 184 | Detected anomalies |
+`ProPublicaClient` in `src/ingestion/__init__.py` is a backwards-compatibility
+alias for `CongressGovClient`, not a ProPublica integration. ProPublica's
+Congress API was deprecated.
 
----
+### `src/parsing/` — extract structure from filings
 
-## Anomaly Detection System
+`pdf_parser.py` and `ptr_parser.py` both try `pdfplumber.extract_tables()`
+first and fall back to line-by-line regex. Table-first is the right instinct;
+everything after it is brittle. Column identification sniffs header keywords
+with hardcoded positional defaults, so a layout change can misassign columns.
 
-### 7 Anomaly Types
+`confidence.py` is what stops that being silent. Every parse now returns a
+completeness ratio — rows read over rows that looked like records, times fields
+extracted over fields required — stored on the filing as `parse_confidence`
+with named `parse_warnings` beside it. `parsed` still means only that the
+parser ran without raising; the score is what says whether it worked.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                         ANOMALY DETECTION PIPELINE                          │
-└─────────────────────────────────────────────────────────────────────────────┘
+`has_text_layer` is recorded separately, because 12.7% of House PTRs are scans
+of paper forms and a scan is a property of the document rather than a failure
+of the parser (D13).
 
-                    ┌─────────────────────────────────────┐
-                    │        ADVANCED DETECTOR            │
-                    │   (advanced_anomaly_detector.py)    │
-                    └─────────────────────────────────────┘
-                                    │
-          ┌─────────────────────────┼─────────────────────────┐
-          ▼                         ▼                         ▼
-┌─────────────────┐       ┌─────────────────┐       ┌─────────────────┐
-│   ANOMALY 1     │       │   ANOMALY 2     │       │   ANOMALY 3     │
-│ Net Worth vs    │       │    Asset        │       │    Stock        │
-│    Salary       │       │ Appreciation    │       │ Outperformance  │
-├─────────────────┤       ├─────────────────┤       ├─────────────────┤
-│ Compares wealth │       │ Tracks assets   │       │ Compares trades │
-│ growth to total │       │ year-over-year  │       │ to S&P 500      │
-│ possible salary │       │ for >100%/year  │       │ benchmark       │
-│                 │       │                 │       │                 │
-│ Threshold: 1.5x │       │ Threshold: 100% │       │ Threshold: 50%  │
-│ salary growth   │       │ annual growth   │       │ excess return   │
-└─────────────────┘       └─────────────────┘       └─────────────────┘
+`tests/fixtures/ptr/` holds golden fixtures captured from real filings —
+extracted tables and text, never the PDFs — and `tests/test_ptr_parser_golden.py`
+pins the transactions, the direction of each one, and the survival of company
+names that contain transaction keywords. Treat parser output as
+lower-confidence than ingested XML, and read the score before trusting a
+filing.
 
-                    ┌─────────────────────────────────────┐
-                    │        EXTENDED DETECTOR            │
-                    │   (extended_anomaly_detector.py)    │
-                    └─────────────────────────────────────┘
-                                    │
-    ┌───────────────┬───────────────┼───────────────┬───────────────┐
-    ▼               ▼               ▼               ▼               ▼
-┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐
-│ANOMALY 4│   │ANOMALY 5│   │ANOMALY 6│   │ANOMALY 7│   │  RISK   │
-│  Trade  │   │Committee│   │  Loss   │   │ Multi-  │   │ SCORING │
-│ Timing  │   │Conflicts│   │Avoidance│   │ Factor  │   │  SYSTEM │
-├─────────┤   ├─────────┤   ├─────────┤   ├─────────┤   ├─────────┤
-│ Perfect │   │ Trading │   │ 80%+    │   │ 3+ diff │   │ CRITICAL│
-│ timing, │   │ in over-│   │ success │   │ anomaly │   │ HIGH    │
-│ consecu-│   │ sight   │   │ rate on │   │ types = │   │ MEDIUM  │
-│ tive    │   │ sectors │   │ trades  │   │ priority│   │ LOW     │
-│ trades  │   │         │   │         │   │         │   │         │
-└─────────┘   └─────────┘   └─────────┘   └─────────┘   └─────────┘
-```
+`fd_asset_parser.py` and `fd_income_parser.py` handle annual FD schedules and
+run via `cli parse-fd`.
 
-### Severity Levels
+### `src/db/` — schema
 
-| Severity | Risk Score | Action Required |
-|----------|------------|-----------------|
-| CRITICAL | 6+ | Immediate investigation |
-| HIGH | 4-5 | Detailed investigation |
-| MEDIUM | 2-3 | Monitor and verify |
-| LOW | 0-1 | Note for trends |
-
----
-
-## Data Sources
-
-### Active Sources
-
-| Source | Type | Cost | Data |
-|--------|------|------|------|
-| **House Clerk XML** | FD Reports | Free | 4,742 disclosures |
-| **QuiverQuant API** | Stock Trades | $10/mo | 9,777 trades |
-| **congress-legislators** | Member Data | Free | 547 members |
-
-### Data Flow
+Fourteen tables. SQLAlchemy 2.0 typed declarative (`Mapped[]`, `DeclarativeBase`),
+Alembic for migrations. Postgres in production, SQLite locally and in tests;
+`database.py` normalizes the `postgres://` URL scheme Railway and Heroku hand
+out.
 
 ```
-┌────────────────┐    ┌────────────────┐    ┌────────────────┐
-│  House Clerk   │    │  QuiverQuant   │    │ Congress.gov   │
-│   XML/PDF      │    │     API        │    │    CSV         │
-└───────┬────────┘    └───────┬────────┘    └───────┬────────┘
-        │                     │                     │
-        ▼                     ▼                     ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Ingestion Layer (orchestrator.py)              │
-│                                                             │
-│  1. Fetch XML index  →  2. Download PDFs  →  3. Import     │
-│  4. Match members    →  5. Store records  →  6. Dedupe     │
-└─────────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    SQLite Database                          │
-│  Members(547) + Disclosures(5,690) + Transactions(9,777)   │
-└─────────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│                  Analysis Layer                             │
-│  Advanced Detector (3 types) + Extended Detector (4 types) │
-└─────────────────────────────────────────────────────────────┘
-        │
-        ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Web Dashboard                             │
-│  Members | Disclosures | Trades | Anomalies (detailed)     │
-└─────────────────────────────────────────────────────────────┘
+members ─┬─< disclosures ─┬─< assets
+         │                ├─< transactions
+         │                └─< liabilities
+         └─< anomalies
+
+members ──< committee_assignments
+
+campaign_donations / lobbying_disclosures / government_contracts   (trigger events)
+bills ─┬─< bill_sponsorships                                       (trigger events)
+       └─< bill_committees
+company_industries                                                 (ticker → SIC → sector)
 ```
 
----
+The four Tier-2 event tables all carry `(source, external_id)`. The natural key
+cannot do that job: Boeing's PAC gave the same committee $5,000 twice on
+2024-12-31 — primary and general — and a natural key merged two real donations
+into one.
 
-## API Endpoints
+Two things about this schema are load-bearing:
 
-### Members API
+**Money is a range, never a point.** `amount_min` / `amount_max` and
+`value_min` / `value_max` are `Numeric(15, 2)` pairs because STOCK Act filings
+report bands ($1,001–$15,000), not figures. Collapsing a band to its midpoint
+and presenting the result as fact is the single easiest way to make this
+project dishonest. Filings also carry no share counts.
 
-```
-GET /api/members                    List members with filters
-GET /api/members/{id}               Get member details
-GET /api/members/{id}/disclosures   Get member's disclosures
-GET /api/members/{id}/anomalies     Get member's anomalies
-```
+**`Member.disclosure_count` / `anomaly_count` are denormalized** so the members
+API can sort and filter without a per-row subquery. They are maintained *only*
+by `recalculate_member_counts()` in `db/utils.py`, which runs after every
+ingest, analyze and purge. Nothing else may write them.
 
-### Disclosures API
+`Anomaly.severity` is free text normalized to `low` / `medium` / `high` by a
+model-level `@validates` hook — on the model rather than in `persist_anomalies`
+because `TradeAnalyzer` and `WealthAnalyzer` construct `Anomaly()` directly.
+`(member_id, anomaly_type, title)` is a unique index, declared both on the model
+and in migration `c3a7f1d92b04` so `create_all` and Alembic agree.
 
-```
-GET /api/disclosures                List disclosures
-GET /api/disclosures/{id}           Get disclosure details
-GET /api/disclosures/{id}/assets    Get disclosure assets
-```
+### `src/analysis/` — detectors
 
-### Anomalies API
+Seventeen live anomaly types across eight modules. `persist_anomalies()` in
+`src/analysis/__init__.py` is the chokepoint: it normalizes severity,
+deduplicates, and drops any type listed in `DISABLED_ANOMALY_TYPES`.
 
-```
-GET /api/anomalies                  List anomalies with filters
-GET /api/anomalies/summary          Get anomaly statistics
-GET /api/anomalies/{id}             Get anomaly details
-POST /api/anomalies/{id}/review     Mark anomaly reviewed
-POST /api/anomalies/analyze         Trigger analysis
-```
+| Module | Emits |
+|---|---|
+| `trade_analyzer.py` | `large_trade`, `late_filing`, `sector_concentration`, `high_trading_frequency` |
+| `wealth_analyzer.py` | `excessive_wealth_growth` |
+| `advanced_anomaly_detector.py` | `wealth_vs_salary`, `rapid_asset_appreciation`, `outperforming_trades`* |
+| `extended_anomaly_detector.py` | `trade_clustering`, `volume_spikes`, `perfect_timing`*, `loss_avoidance`*, `multi_factor_risk` |
+| `tier2_detectors.py` | `donor_conflict`, `lobbying_overlap`, `contract_front_run` |
+| `legislation.py` | `sponsorship_conflict`, `bill_jurisdiction_conflict` |
+| `committee_conflicts.py` | `committee_jurisdiction_conflict` |
+| `clustering.py` | `cross_member_cluster` |
 
-### Dashboard
+`*` disabled by default (D3) — dropped by `persist_anomalies`, never written,
+never served, and not described anywhere a reader can see (D14).
 
-```
-GET /                               Web dashboard
-GET /docs                           API documentation (Swagger)
-```
+The split that matters: **detectors that count things work; detectors that
+claimed to infer profit or intent did not.** `late_filing` is a statutory
+deadline in date arithmetic. `volume_spikes` computes a real standard
+deviation. The disabled three asserted returns, success rates and
+probabilities they never computed, and the price-based performance analyzer
+that made the same class of claim on a live endpoint was deleted outright
+(D10) — which is why nothing in the tree imports `yfinance` any more.
 
----
+The event-window detectors — trades joined to donations, lobbying filings,
+contract awards, sponsored bills and committee referrals by date window — are
+the differentiated idea here. Their windows (90/30/30/30 days) are asserted
+rather than calibrated, and they are the six types a null model exists for.
 
-## Technology Stack
+Three modules support the detectors rather than being ones:
 
-| Component | Technology | Version |
-|-----------|------------|---------|
-| **Language** | Python | 3.10+ |
-| **Web Framework** | FastAPI | 0.100+ |
-| **Database** | SQLite | 3.x |
-| **ORM** | SQLAlchemy | 2.0+ |
-| **PDF Parsing** | PyPDF2, pdfplumber | Latest |
-| **HTTP Client** | httpx | Latest |
-| **Market Data** | yfinance | Latest |
-| **Frontend** | Tailwind CSS, Alpine.js | CDN |
+- **`significance.py`** builds that null. For each (member, detector) pair it
+  circular-shifts the member's whole trading calendar ~1,000 times, re-counts
+  coincidences, and applies Benjamini–Hochberg across every test in the run.
+  `NO_NULL_MODEL` lists the eleven magnitude detectors explicitly, so their
+  absence from the correction is a decision on the record rather than an
+  oversight (D11).
+- **`baselines.py`** ranks each finding against others of its own type,
+  reports which detectors could not run because their source table is empty,
+  and summarises parse quality — a detector that silently returns zero is
+  otherwise indistinguishable from one that ran and found nothing.
+- **`sectors.py`** is the single sector taxonomy: a curated ticker map, CRS
+  policy areas, and SIC prefixes from `company_industries`, in that precedence.
+- **`catalog.py`** is what each detector means, in the form a reader gets it.
+  Served at `/api/anomalies/types` and rendered by the dashboard, derived from
+  `NO_NULL_MODEL` and the disabled-types setting so the site cannot describe a
+  detector it does not run (D14).
 
----
+`compliance.py` and `opacity.py` are the two least interpretive things the
+project computes — filing lateness, and what share of a member's filings are
+missing a ticker or an amount. Neither claims anything about intent, and
+`opacity.py` bounds what every other detector can see: a member whose filings
+cannot be read will look clean under all of them for reasons that have nothing
+to do with their conduct.
 
-## Deployment
+Two analyzers (`TradeAnalyzer.analyze_all_members`,
+`WealthAnalyzer.analyze_all_members`) write `Anomaly()` rows directly instead
+of going through `persist_anomalies`. The disabled-type guard is repeated in
+both; consolidating them onto `persist_anomalies` would remove that duplication.
 
-### Local Development
+### `src/api/` — HTTP
 
-```bash
-# 1. Create virtual environment
-python -m venv venv
-.\venv\Scripts\Activate.ps1  # Windows
+`main.py` is thin: app setup, CORS from env, request-ID middleware, router
+includes. Routers split by resource; `anomalies/` is further decomposed into
+`_shared` (schemas), `query` (read), `detect` (run detectors), `admin`
+(mutating, behind `require_admin`).
 
-# 2. Install dependencies
-pip install -r requirements.txt
+`dashboard_v2.py` is a misnomer — there is no v1. It was ~1,800 lines of HTML
+inside Python f-strings before the templates were extracted; the name is all
+that survives.
 
-# 3. Configure environment
-cp .env.example .env
-# Edit .env with your QuiverQuant API key
+Admin auth issues process-local bearer tokens with an 8-hour TTL. That does not
+survive a restart or span multiple workers — fine for a single-instance admin
+panel, inadequate for the metered API the project is heading toward.
 
-# 4. Initialize database
-python -m src.cli init
+### `src/templates/` — dashboard
 
-# 5. Ingest data
-python -m src.cli ingest -y 2024 2025
-python -m src.cli ingest-trades
+Eight Jinja pages, Tailwind and Alpine from CDN, no build step. Sorting,
+filtering and pagination are server-side.
 
-# 6. Run analysis
-python -m src.cli analyze
+The pages hold no copy of anything the API knows. The anomalies page renders
+its legend, its type filter and every finding card from `/api/anomalies/types`,
+after its own hand-kept copy drifted into advertising three deleted detectors
+to visitors beside named members of Congress (D14). `tests/test_templates_read_served_fields.py`
+fails when a page binds a field the API does not serve — the failure mode is
+otherwise invisible, because a missing field is `undefined`, `|| 0` makes it a
+zero, and the page renders a confident answer nobody computed.
 
-# 7. Start server
-python -m src.cli serve --port 8001
-```
+## Operations
 
-### Production Considerations
+`Dockerfile` is two-stage on `python:3.11-slim`, drops build dependencies from
+the runtime image, runs as non-root uid 10001, and health-checks `/health`. Its
+`CMD` uses `sh -c` deliberately so `$PORT` expands — exec form passes it as the
+literal string and uvicorn rejects it.
 
-- [ ] Migrate to PostgreSQL for better concurrency
-- [ ] Add authentication/authorization
-- [ ] Set up cron job for daily data refresh
-- [ ] Add logging and monitoring
-- [ ] Deploy behind reverse proxy (nginx)
+`railway.toml` runs `alembic upgrade head` as a pre-deploy step.
+`.github/workflows/ci.yml` runs ruff, mypy (advisory, `continue-on-error`) and
+pytest on every PR. `daily-update.yml` runs nightly: migrate → ingest →
+sync-committees → the four Tier-2 feeds → analyze → stats. It is a top-up, not
+a rebuild — it never runs `parse`, because a runner starts from a fresh
+checkout and nothing persists between runs. `rebuild.yml` is the manual
+`workflow_dispatch` that does build the dataset, chunked by a `limit` input
+because a runner is capped at six hours.
 
----
+`/health` pings the database and returns 503 if it is unreachable;
+`/health/live` always returns 200 for liveness probes.
 
-## Security Considerations
+## Known weak points
 
-| Concern | Mitigation |
-|---------|------------|
-| API Key Exposure | Store in `.env`, never commit |
-| SQL Injection | SQLAlchemy ORM parameterization |
-| XSS | No user-generated content |
-| Rate Limiting | Respect QuiverQuant limits |
+Ranked by how much they would cost to be wrong about:
 
----
-
-## Future Enhancements
-
-1. **Real-time Alerts** - Email on new high-severity anomalies
-2. **Legislative Correlation** - Match trades to committee votes
-3. **Historical Analysis** - Import historical data beyond current window
-4. **Export Features** - CSV/PDF report generation
-5. **Public API** - Rate-limited public access to anomaly data
-
----
-
-## Support
-
-- **Documentation**: See `/docs` on running server
-- **Issues**: GitHub Issues
-- **Data Questions**: Refer to official House/Senate disclosure offices
-
+1. **Senate coverage.** With the vendor feed gone, Senate trades come only from
+   the `senate.py` scraper, which parses by column position and faces anti-bot
+   protection. House coverage is official bulk XML and is not at risk this way.
+2. **One House PTR in eight is a photograph.** 12.7% of 2024–25 House trade
+   reports are scans with no text layer, so they are absent from every trade
+   detector. A member who files on paper looks clean, and that is a limit of
+   the record rather than a finding about them (D13).
+3. **`orchestrator.py`** is the largest module and the least tested — the
+   fetch → match → dedupe → store pipeline is barely covered.
+4. **Asset identity** is matched on `description.lower().strip()`, so a wording
+   change between filings invents a new asset and a phantom appreciation event.
+5. **Liabilities are ingested and never read.** `wealth_analyzer` computes gross
+   assets and calls it net worth.
+6. **The event windows are asserted, not calibrated.** The FDR correction (D11)
+   says a coincidence is unlikely by chance; it says nothing about whether 30
+   days was the right window to have looked in.

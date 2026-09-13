@@ -293,21 +293,6 @@ class TestTradeTiming:
             assert spikes[0].get("member_id") == member.id
 
 
-class TestCommitteeConflicts:
-    def test_concentration_in_regulated_sector(self, db_session):
-        member = _make_member(db_session, bioguide="K000001", last="Conflict")
-        d = _make_disclosure(db_session, member, 2024, "K1", is_ptr=True)
-        # 6 defense-sector trades, 1 random
-        for ticker in ["LMT", "RTX", "BA", "lockheed corp", "raytheon", "northrop"]:
-            _make_txn(db_session, d, TransactionType.PURCHASE, ticker, 1000, 5000)
-        _make_txn(db_session, d, TransactionType.PURCHASE, "FOO", 1000, 5000)
-
-        detector = ExtendedAnomalyDetector()
-        anomalies = detector.detect_committee_conflicts(db_session)
-        types = [a["anomaly_type"] for a in anomalies]
-        assert "sector_concentration" in types
-
-
 class TestLossAvoidance:
     def test_flags_strong_buy_then_sell_pattern(self, db_session):
         member = _make_member(db_session, bioguide="L000001", last="Lucky")
@@ -408,7 +393,8 @@ class TestEdgeCases:
         assert adv.detect_asset_appreciation_anomalies(db_session) == []
         assert adv.detect_stock_outperformance_anomalies(db_session) == []
         assert ext.detect_trade_timing_anomalies(db_session) == []
-        assert ext.detect_committee_conflicts(db_session) == []
+        # Committee conflicts moved to src/analysis/committee_conflicts.py;
+        # covered by tests/test_committee_conflicts.py.
         assert ext.detect_loss_avoidance(db_session) == []
 
     def test_member_with_no_trades_skipped(self, db_session):

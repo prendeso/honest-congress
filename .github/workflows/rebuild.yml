@@ -1,0 +1,209 @@
+name: Rebuild
+
+# Manual only. `daily-update.yml` is an incremental top-up against a database
+# that already holds parsed transactions -- it never runs `parse`, so it cannot
+# build the dataset, only keep it current. This is the one that builds it.
+#
+# Two reasons it is a separate workflow rather than a flag on the nightly:
+#
+#  * It writes destructively in `full-reset` mode, and a scheduled job must
+#    never be one typo away from dropping the schema.
+#  * `ENV` is unset on a GitHub runner, so `Settings.env` falls back to "dev"
+#    and `is_production` is False -- which means `cli reset`'s production guard
+#    does NOT protect this path even though it points at the production
+#    database. The `confirm` input below is the guard that the environment
+#    cannot provide.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type REBUILD to proceed'
+        required: true
+        default: ''
+      mode:
+        description: 'reparse = re-read filings, destroys nothing. full-reset = drop the schema first.'
+        required: true
+        default: reparse
+        type: choice
+        options:
+          - reparse
+          - full-reset
+      years:
+        description: 'Filing years to ingest, space separated'
+        required: true
+        default: '2024 2025'
+      limit:
+        description: 'Filings to parse in this run. A runner is capped at 6h; re-dispatch until parse reports nothing left.'
+        required: true
+        default: '500'
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    # GitHub hard-kills a job at 360 minutes. Stopping at 350 lets the summary
+    # step run, so a truncated rebuild still reports where it got to.
+    timeout-minutes: 350
+
+    steps:
+      - name: Refuse unless the confirmation matches
+        if: ${{ inputs.confirm != 'REBUILD' }}
+        run: |
+          echo "::error::Type REBUILD in the confirm box to run this workflow. It writes to the production database, and in full-reset mode it drops the schema."
+          exit 1
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check the database secret is configured
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::RAILWAY_DATABASE_URL is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "DATABASE_URL is set (${#DATABASE_URL} characters)."
+
+      # Always, in both modes: the inventory is the record of what this run
+      # started from. Without --yes this only reports.
+      - name: Report what is in the database now
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli reset
+
+      - name: Drop and rebuild the schema
+        if: ${{ inputs.mode == 'full-reset' }}
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli reset --yes
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli init
+
+      # Findings written by a detector that is now disabled survive in the
+      # database and keep being served. Merging stops them being WRITTEN; this
+      # is what removes the ones already there.
+      - name: Delete findings from disabled detectors
+        if: ${{ inputs.mode == 'reparse' }}
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli purge-disabled
+
+      - name: Ingest disclosures and the member roster
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli ingest -y ${{ inputs.years }}
+
+      # No `download-pdfs` step on purpose. A runner starts from a fresh
+      # checkout, so data/disclosures/ never persists between runs and a
+      # separate download pass would be thrown away. `parse` fetches each PDF
+      # on demand when it is missing, which is the same work in one pass.
+      #
+      # Both modes are resumable, which is what makes the --limit chunking
+      # work: plain `parse` picks up only filings never read, and
+      # `--min-confidence 1.0` picks up any filing read at less than a perfect
+      # score, including every filing parsed before the score existed.
+      #
+      # The re-parse case converges only because the queue is ordered by
+      # `updated_at` ascending. A filing that re-parses to less than 1.0 still
+      # matches the filter, so without that ordering a limited run would take
+      # the same arbitrary rows every dispatch and never reach the rest of the
+      # corpus. See `parse_disclosures` in src/ingestion/orchestrator.py.
+      - name: Parse filings
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          if [ "${{ inputs.mode }}" = "reparse" ]; then
+            python -m src.cli parse --min-confidence 1.0 --limit ${{ inputs.limit }}
+          else
+            python -m src.cli parse --limit ${{ inputs.limit }}
+          fi
+
+      - name: Sync committee assignments
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli sync-committees
+
+      # The Tier-2 feeds run AFTER parse, and that order is load-bearing rather
+      # than stylistic: each one starts from the tickers members have actually
+      # traded, so against an empty transactions table they fetch nothing at
+      # all. Each is allowed to fail without stopping the run -- a throttled
+      # FEC cycle must not block analysis of data already ingested -- and the
+      # `stats` step at the end names anything left empty.
+      - name: Ingest federal contract awards
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli ingest-contracts
+
+      - name: Ingest corporate PAC donations
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli ingest-donations --cycle 2024 --max-requests 800
+
+      - name: Ingest lobbying disclosures
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli ingest-lobbying --year 2024
+
+      # Must precede analyze: three detectors join a bill or a committee remit
+      # to a sector, and without these codes they see only the ~70 large caps
+      # in the hand-written list.
+      - name: Sync SEC industry codes
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli sync-industries
+
+      - name: Ingest bill sponsorship and committee referrals
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
+        run: python -m src.cli ingest-bills --sponsored-only
+
+      - name: Run detectors, FDR correction and percentile ranks
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli analyze
+
+      # Runs even when an earlier step failed: a partial rebuild is exactly
+      # when you most need to know how far it got.
+      - name: Report coverage
+        if: always()
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          echo "## Rebuild — $(date -u +%Y-%m-%d\ %H:%M) UTC" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Mode \`${{ inputs.mode }}\`, years \`${{ inputs.years }}\`, parse limit \`${{ inputs.limit }}\`." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          python -m src.cli stats >> $GITHUB_STEP_SUMMARY 2>&1 || echo "stats failed" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "If the parse step hit the limit, dispatch this workflow again with the same inputs — it resumes." >> $GITHUB_STEP_SUMMARY

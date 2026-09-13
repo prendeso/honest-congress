@@ -1,8 +1,11 @@
+import logging
 from functools import lru_cache
 from typing import List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -20,15 +23,23 @@ class Settings(BaseSettings):
 
     database_url: str = Field(default="sqlite:///./honest_congress.db", alias="DATABASE_URL")
 
-    # CORS. Comma-separated origins. "*" is allowed for local/dev only —
-    # in production set this to your dashboard origin(s).
+    # CORS. Comma-separated origins. The "*" default applies to local
+    # development only -- `allowed_origins_list` refuses it in production. See
+    # the note there for why.
     allowed_origins: str = Field(default="*", alias="ALLOWED_ORIGINS")
 
     # Congress.gov API key (optional - get free key at https://api.congress.gov/sign-up/)
     congress_gov_api_key: str = Field(default="", alias="CONGRESS_GOV_API_KEY")
 
-    # QuiverQuant API key (for congressional trading data)
-    quiverquant_api_key: str = Field(default="", alias="QUIVERQUANT_API_KEY")
+    # FEC API key, for corporate PAC donations. Free from
+    # https://api.data.gov/signup/ and allows 1,000 requests/hour, which is the
+    # binding constraint on `ingest-donations` -- see src/ingestion/fec.py.
+    fec_api_key: str = Field(default="", alias="FEC_API_KEY")
+
+    # Senate LDA key, for lobbying disclosures. OPTIONAL: the API serves
+    # anonymous callers at roughly 15 requests/minute and keyed callers at 120.
+    # Registration is free at https://lda.senate.gov/api/register/
+    lda_api_key: str = Field(default="", alias="LDA_API_KEY")
 
     wealth_growth_threshold_percent: float = Field(
         default=200.0, alias="WEALTH_GROWTH_THRESHOLD_PERCENT"
@@ -42,15 +53,100 @@ class Settings(BaseSettings):
     late_filing_min_days: int = Field(default=60, alias="LATE_FILING_MIN_DAYS")
     late_filing_min_amount_usd: int = Field(default=50000, alias="LATE_FILING_MIN_AMOUNT_USD")
 
+    # Detectors whose output is not currently defensible and must not be
+    # written or served. See docs/DECISIONS.md.
+    #   outperforming_trades - benchmarks against a hardcoded flat 10%, and
+    #     computes "return" as (sells - buys)/buys with no position matching.
+    #   perfect_timing       - counts buy/sell date pairs without ever reading a
+    #     price; the O(n^2) numerator over a linear denominator yields rates >100%.
+    #   loss_avoidance       - increments numerator and denominator on the same
+    #     branch, so its rate is always exactly 100%.
+    # Re-enabling requires real price history; see the plan's "Price data" note.
+    disabled_anomaly_types: str = Field(
+        default="outperforming_trades,perfect_timing,loss_avoidance",
+        alias="DISABLED_ANOMALY_TYPES",
+    )
+
+    @property
+    def disabled_anomaly_types_set(self) -> set[str]:
+        raw = (self.disabled_anomaly_types or "").strip()
+        if not raw:
+            return set()
+        return {t.strip() for t in raw.split(",") if t.strip()}
+
+    # Multiple-comparisons control. The suite runs sixteen detectors against
+    # every member, so some of what it flags is what running thousands of tests
+    # over hundreds of people produces. `fdr_alpha` is the false-discovery rate
+    # the API filters at; `significance_permutations` is how many shifted
+    # calendars the null is built from -- more is slower and gives a finer
+    # p-value floor of 1/(n+1). See src/analysis/significance.py.
+    fdr_alpha: float = Field(default=0.05, alias="FDR_ALPHA")
+    significance_permutations: int = Field(default=1000, alias="SIGNIFICANCE_PERMUTATIONS")
+
+    # SEC refuses requests whose User-Agent does not carry a contact email --
+    # a bare descriptive string gets a 403. Set this to a real address you
+    # monitor before running any SEC-backed ingestion in production; the
+    # default is a placeholder and SEC may rate-limit or block it.
+    sec_contact_email: str = Field(default="contact@example.com", alias="SEC_CONTACT_EMAIL")
+
+    @property
+    def database_url_display(self) -> str:
+        """The database URL with any password redacted.
+
+        `reset` prints its target before destroying it, and DATABASE_URL
+        carries credentials -- so this must never reach a terminal or a CI log
+        intact.
+        """
+        raw = self.database_url or ""
+        if "://" not in raw:
+            return raw
+
+        scheme, _, rest = raw.partition("://")
+        if "@" not in rest:
+            return raw
+
+        credentials, _, host = rest.rpartition("@")
+        user, sep, _password = credentials.partition(":")
+        if not sep:
+            return f"{scheme}://{credentials}@{host}"
+        return f"{scheme}://{user}:***@{host}"
+
     @property
     def is_production(self) -> bool:
         return self.env.lower() in {"production", "prod"}
 
     @property
     def allowed_origins_list(self) -> List[str]:
+        """Origins the API answers cross-origin requests from.
+
+        The wildcard is a development convenience and is refused in production.
+        `src/api/main.py` pairs this with `allow_headers=["*"]`, so a wildcard
+        on a deployed host lets any page on the internet send `X-Admin-Token`
+        to the mutating endpoints. `allow_credentials` self-disables on "*",
+        which stops cookies but not a header an attacker sets deliberately.
+
+        Falling back to "no cross-origin allowed" rather than raising is the
+        deliberate choice. `ADMIN_PASSWORD` raises in `get_settings()` because
+        the app genuinely cannot serve its admin routes without one; a missing
+        origin list is different -- raising would take a running site down at
+        the moment someone deployed a security fix. Nothing legitimate breaks
+        here either way: the dashboard fetches its own `/api/*` from the same
+        origin, and same-origin requests never go through CORS at all. Only a
+        separate front end on another domain would notice, and that is exactly
+        the case that should have to be declared.
+        """
         raw = (self.allowed_origins or "").strip()
+
         if raw in ("", "*"):
+            if self.is_production:
+                logger.warning(
+                    "ALLOWED_ORIGINS is %s in production; refusing cross-origin "
+                    "requests. Set it to your dashboard origin(s) to allow them.",
+                    "unset" if not raw else "'*'",
+                )
+                return []
             return ["*"]
+
         return [o.strip() for o in raw.split(",") if o.strip()]
 
     @field_validator("env")

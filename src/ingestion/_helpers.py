@@ -18,7 +18,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from src.db.models import Disclosure
+from src.db.models import Disclosure, Transaction
 
 logger = logging.getLogger(__name__)
 
@@ -99,3 +99,15 @@ def record_failed_download(data_dir: Path, disclosure: Disclosure, reason: str) 
 
     logger.error("Failed to download %s: %s", disclosure.document_url, reason)
     return reason
+
+
+def traded_tickers(db: Session) -> set[str]:
+    """Tickers appearing in at least one disclosed transaction.
+
+    Both the FEC and LDA ingesters start from this set rather than from the
+    external source's own universe. A donation or lobbying filing for a company
+    no member holds cannot produce a finding, and asking about it costs a
+    request against a quota that is the binding constraint on both.
+    """
+    rows = db.query(Transaction.ticker).filter(Transaction.ticker.isnot(None)).distinct().all()
+    return {(t[0] or "").strip().upper() for t in rows if (t[0] or "").strip()}

@@ -11,8 +11,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-import pytest
-
 from src.analysis.tier2_detectors import (
     detect_contract_front_runs,
     detect_donor_conflicts,
@@ -354,91 +352,3 @@ class TestRunTier2Detection:
 
 
 # ---------------- client methods (Tier 2 + Tier 3 endpoint routing) ----------------
-
-
-class TestClientEndpointRouting:
-    """Tier-2 and Tier-3 client methods build the right URLs and pass the
-    right query params. Same pattern as the existing test_quiverquant.py."""
-
-    @pytest.fixture(autouse=True)
-    def _no_sleep(self, monkeypatch):
-        monkeypatch.setattr("src.ingestion.quiverquant.time.sleep", lambda *_: None)
-
-    @pytest.fixture
-    def client(self, monkeypatch):
-        from src.ingestion.quiverquant import QuiverQuantClient
-
-        monkeypatch.setenv("QUIVERQUANT_API_KEY", "test-token")
-        return QuiverQuantClient()
-
-    def _mock_response(self, payload, status_code=200):
-        from unittest.mock import MagicMock
-
-        r = MagicMock()
-        r.status_code = status_code
-        r.headers = {}
-        r.json.return_value = payload
-        return r
-
-    def test_corporate_donors_passes_filters(self, client):
-        from unittest.mock import patch
-
-        with patch.object(client.session, "get", return_value=self._mock_response([])) as mock_get:
-            client.get_corporate_donors(bioguide_id="A000001", cycle="2024")
-
-        url = mock_get.call_args.args[0]
-        params = mock_get.call_args.kwargs.get("params") or {}
-        assert "/bulk/corporatedonors" in url
-        assert params == {"bioguide_id": "A000001", "cycle": "2024"}
-
-    def test_lobbying_with_ticker_uses_historical(self, client):
-        from unittest.mock import patch
-
-        with patch.object(client.session, "get", return_value=self._mock_response([])) as mock_get:
-            client.get_lobbying(ticker="AAPL")
-        assert "/historical/lobbying/AAPL" in mock_get.call_args.args[0]
-
-    def test_lobbying_without_ticker_uses_live(self, client):
-        from unittest.mock import patch
-
-        with patch.object(client.session, "get", return_value=self._mock_response([])) as mock_get:
-            client.get_lobbying()
-        assert "/live/lobbying" in mock_get.call_args.args[0]
-
-    def test_government_contracts_routing(self, client):
-        from unittest.mock import patch
-
-        with patch.object(client.session, "get", return_value=self._mock_response([])) as mock_get:
-            client.get_government_contracts(ticker="LMT")
-        assert "/historical/govcontractsall/LMT" in mock_get.call_args.args[0]
-
-    def test_insiders_passes_ticker_as_query_param(self, client):
-        from unittest.mock import patch
-
-        with patch.object(client.session, "get", return_value=self._mock_response([])) as mock_get:
-            client.get_insiders(ticker="NVDA")
-        assert "/live/insiders" in mock_get.call_args.args[0]
-        assert mock_get.call_args.kwargs.get("params") == {"ticker": "NVDA"}
-
-    def test_top_shareholders_uses_path_param(self, client):
-        from unittest.mock import patch
-
-        with patch.object(client.session, "get", return_value=self._mock_response([])) as mock_get:
-            client.get_top_shareholders("MSFT")
-        assert "/live/topshareholders/MSFT" in mock_get.call_args.args[0]
-
-    def test_news_passes_pagination_params(self, client):
-        from unittest.mock import patch
-
-        with patch.object(client.session, "get", return_value=self._mock_response([])) as mock_get:
-            client.get_news(ticker="AAPL", page=2, page_size=50)
-        params = mock_get.call_args.kwargs.get("params") or {}
-        assert params == {"ticker": "AAPL", "page": "2", "page_size": "50"}
-
-    def test_sec13f_owner_filter(self, client):
-        from unittest.mock import patch
-
-        with patch.object(client.session, "get", return_value=self._mock_response([])) as mock_get:
-            client.get_sec13f(owner="Berkshire Hathaway")
-        assert "/live/sec13f" in mock_get.call_args.args[0]
-        assert mock_get.call_args.kwargs.get("params") == {"owner": "Berkshire Hathaway"}

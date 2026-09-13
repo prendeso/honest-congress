@@ -1,0 +1,33 @@
+<company-info>
+      <addresses>
+        <address type="mailing">
+          <city>BETHESDA</city>
+          <state>MD</state>
+          <street1>6801 ROCKLEDGE DRIVE</street1>
+          <zip>20817</zip>
+        </address>
+        <address type="business">
+          <city>BETHESDA</city>
+          <phone>3018976000</phone>
+          <state>MD</state>
+          <street1>6801 ROCKLEDGE DR</street1>
+          <zip>20817</zip>
+        </address>
+      </addresses>
+      <assigned-sic>3760</assigned-sic>
+      <assigned-sic-desc>GUIDED MISSILES &amp;amp; SPACE VEHICLES &amp;amp; PARTS</assigned-sic-desc>
+      <assigned-sic-href>https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;SIC=3760&amp;owner=include&amp;count=10</assigned-sic-href>
+      <cik>0000936468</cik>
+      <cik-href>https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;CIK=0000936468&amp;owner=include&amp;count=10</cik-href>
+      <conformed-name>LOCKHEED MARTIN CORP</conformed-name>
+      <fiscal-year-end>1231</fiscal-year-end>
+      <formerly-names count="1">
+        <names>
+          <date>2026-08-28</date>
+          <name>LOCKHEED MARTIN CORP</name>
+        </names>
+      </formerly-names>
+      <state-location>MD</state-location>
+      <state-location-href>https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&amp;State=MD&amp;owner=include&amp;count=10</state-location-href>
+      <state-of-incorporation>MD</state-of-incorporation>
+    </company-info>

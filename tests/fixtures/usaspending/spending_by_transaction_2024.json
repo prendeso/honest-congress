@@ -1,0 +1,128 @@
+{
+ "results": [
+  {
+   "Award ID": "N0001923C0003",
+   "Recipient Name": "LOCKHEED MARTIN CORPORATION",
+   "Transaction Amount": 7384655472.0,
+   "Action Date": "2024-12-20",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "THE PURPOSE OF THIS CONTRACT IS TO PROCURE LOT 18 AIRCRAFT, RED GEAR, AND TOOLING FOR U.S. SERVICE, INTERNATIONAL PARTNER, AND FMS CUSTOMER JETS.",
+   "generated_internal_id": "CONT_AWD_N0001923C0003_9700_-NONE-_-NONE-",
+   "internal_id": 309498654
+  },
+  {
+   "Award ID": "N0002417C2117",
+   "Recipient Name": "ELECTRIC BOAT CORPORATION",
+   "Transaction Amount": 2644813959.0,
+   "Action Date": "2024-11-20",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "INCREMENTAL AND INSTALLMENT FUNDING",
+   "generated_internal_id": "CONT_AWD_N0002417C2117_9700_-NONE-_-NONE-",
+   "internal_id": 309506843
+  },
+  {
+   "Award ID": "FA868224CB001",
+   "Recipient Name": "LOCKHEED MARTIN CORPORATION",
+   "Transaction Amount": 2423365242.0,
+   "Action Date": "2024-09-27",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "LONG RANGE ANTI-SHIP MISSILE/JOINT AIR-TO-SURFACE STANDOFF MISSILE LARGE LOT PROCUREMENT",
+   "generated_internal_id": "CONT_AWD_FA868224CB001_9700_-NONE-_-NONE-",
+   "internal_id": 298582152
+  },
+  {
+   "Award ID": "FA862511C6600",
+   "Recipient Name": "THE BOEING COMPANY",
+   "Transaction Amount": 2389323828.0,
+   "Action Date": "2024-11-21",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "KC-46 ENGINEERING, MANUFACTURING, DEVELOPMENT, PRODUCTION.",
+   "generated_internal_id": "CONT_AWD_FA862511C6600_9700_-NONE-_-NONE-",
+   "internal_id": 298557808
+  },
+  {
+   "Award ID": "89233218CNA000001",
+   "Recipient Name": "TRIAD NATIONAL SECURITY, LLC",
+   "Transaction Amount": 2251068455.34,
+   "Action Date": "2024-04-30",
+   "Awarding Agency": "Department of Energy",
+   "Transaction Description": "INCREMENTAL FUNDING FOR LOS ALAMOS NATIONAL LABORATORY MANAGEMENT AND OPERATING CONTRACT",
+   "generated_internal_id": "CONT_AWD_89233218CNA000001_8900_-NONE-_-NONE-",
+   "internal_id": 292027610
+  },
+  {
+   "Award ID": "FA863423F0048",
+   "Recipient Name": "THE BOEING COMPANY",
+   "Transaction Amount": 2223793610.3,
+   "Action Date": "2024-07-30",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "F-15EX LOT 5 ADVANCED PROCUREMENT",
+   "generated_internal_id": "CONT_AWD_FA863423F0048_9700_FA863420D2704_9700",
+   "internal_id": 298560098
+  },
+  {
+   "Award ID": "HT940216C0001",
+   "Recipient Name": "HUMANA GOVERNMENT BUSINESS INC",
+   "Transaction Amount": 1864542520.76,
+   "Action Date": "2024-04-30",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "MANAGED CARE SUPPORT SERVICES - EAST REGION",
+   "generated_internal_id": "CONT_AWD_HT940216C0001_9700_-NONE-_-NONE-",
+   "internal_id": 307885715
+  },
+  {
+   "Award ID": "FA821920C0006",
+   "Recipient Name": "NORTHROP GRUMMAN SYSTEMS CORP",
+   "Transaction Amount": 1857000000.0,
+   "Action Date": "2024-04-26",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "GROUND-BASED STRATEGIC DETERRENT (GBSD) ENGINEERING AND MANUFACTURING DEVELOPMENT (EMD) AND EARLY PRODUCTION AND DEPLOYMENT (P D)",
+   "generated_internal_id": "CONT_AWD_FA821920C0006_9700_-NONE-_-NONE-",
+   "internal_id": 298461744
+  },
+  {
+   "Award ID": "DEAC0908SR22470",
+   "Recipient Name": "SAVANNAH RIVER NUCLEAR SOLUTIONS LLC",
+   "Transaction Amount": 1746291822.45,
+   "Action Date": "2024-08-29",
+   "Awarding Agency": "Department of Energy",
+   "Transaction Description": "SAVANNAH RIVER OPERATIONS OFFICE MANAGEMENT & OPERATING (M&O) CONTRACT/OBLIGATE NNSA FUNDS FOR FINPLAN 143 FOR FY24.",
+   "generated_internal_id": "CONT_AWD_DEAC0908SR22470_8900_-NONE-_-NONE-",
+   "internal_id": 295476437
+  },
+  {
+   "Award ID": "DENA0003525",
+   "Recipient Name": "NATIONAL TECHNOLOGY & ENGINEERING SOLUTIONS OF SANDIA, LLC",
+   "Transaction Amount": 1731167127.81,
+   "Action Date": "2024-04-29",
+   "Awarding Agency": "Department of Energy",
+   "Transaction Description": "INCREMENTAL FUNDING FOR MANAGEMENT AND OPERATION OF SANDIA NATIONAL LABORATORIES",
+   "generated_internal_id": "CONT_AWD_DENA0003525_8900_-NONE-_-NONE-",
+   "internal_id": 295527116
+  },
+  {
+   "Award ID": "N0002423C2305",
+   "Recipient Name": "BATH IRON WORKS CORPORATION",
+   "Transaction Amount": 1496372021.0,
+   "Action Date": "2024-05-21",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "CONSTRUCTION OF DDG 51 SHIP",
+   "generated_internal_id": "CONT_AWD_N0002423C2305_9700_-NONE-_-NONE-",
+   "internal_id": 309512931
+  },
+  {
+   "Award ID": "N0001918C1037",
+   "Recipient Name": "NORTHROP GRUMMAN SYSTEMS CORPORATION",
+   "Transaction Amount": 1456019386.0,
+   "Action Date": "2024-07-19",
+   "Awarding Agency": "Department of Defense",
+   "Transaction Description": "ADD 9 E-2D AIRCRAFT",
+   "generated_internal_id": "CONT_AWD_N0001918C1037_9700_-NONE-_-NONE-",
+   "internal_id": 309495115
+  }
+ ],
+ "page_metadata": {
+  "page": 1,
+  "hasNext": false
+ }
+}

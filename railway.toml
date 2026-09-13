@@ -7,8 +7,16 @@
 #   ALLOWED_ORIGINS    — your dashboard domain(s); comma-separated
 #   ENV=production     — enables production-mode validation
 # Optional:
-#   CONGRESS_GOV_API_KEY, QUIVERQUANT_API_KEY
+#   CONGRESS_GOV_API_KEY  — Congress.gov; required by `cli ingest-bills`
+#   FEC_API_KEY           — api.data.gov; required by `cli ingest-donations`
+#   LDA_API_KEY           — Senate LDA; raises the rate limit, not required
+#   SEC_CONTACT_EMAIL     — SEC 403s a User-Agent with no real contact address
 #   LATE_FILING_MIN_DAYS (default 60), LATE_FILING_MIN_AMOUNT_USD (default 50000)
+#
+# The ingestion keys matter to the deployed service only for the admin sync
+# endpoints; the scheduled ingestion runs in GitHub Actions and reads its own
+# secrets. QUIVERQUANT_API_KEY was listed here and no longer exists — that
+# vendor was replaced by the official sources above.
 
 [build]
 builder = "DOCKERFILE"

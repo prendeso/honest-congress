@@ -4,9 +4,10 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import exists
+from sqlalchemy import exists, or_
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.db import Anomaly, Chamber, Disclosure, Member, Party, get_db_session
 
 router = APIRouter()
@@ -232,10 +233,18 @@ async def get_member(
         .all()
     )
 
-    # Get recent anomalies
+    # Get recent anomalies, under the same false-discovery filter the anomaly
+    # list uses. This is the page that names one individual, so it is the last
+    # place that should show a coincidence the correction rejected.
+    #
+    # `q_value IS NULL OR q_value <= alpha`, not a bare threshold: most
+    # detectors measure a magnitude and have no null model, and dropping them
+    # here would empty the page. NULL means untested, never failed.
+    alpha = get_settings().fdr_alpha
     recent_anomalies = (
         db.query(Anomaly)
         .filter(Anomaly.member_id == member.id)
+        .filter(or_(Anomaly.q_value.is_(None), Anomaly.q_value <= alpha))
         .order_by(Anomaly.detected_at.desc())
         .limit(5)
         .all()

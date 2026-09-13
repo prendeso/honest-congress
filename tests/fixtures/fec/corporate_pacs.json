@@ -1,0 +1,32 @@
+{
+ "results": [
+  {
+   "committee_id": "C00084475",
+   "name": "3M COMPANY PAC"
+  },
+  {
+   "committee_id": "C00214148",
+   "name": "AMERICAN PEANUT SHELLERS ASSOCIATION POLITICAL ACTION COMMITTEE"
+  },
+  {
+   "committee_id": "C00103697",
+   "name": "BECHTEL GROUP, INC. POLITICAL ACTION COMMITTEE (BECHTEL POLITICAL ACTION COMMITTEE)"
+  },
+  {
+   "committee_id": "C00148031",
+   "name": "CATERPILLAR INC. POLITICAL ACTION COMMITTEE (CATPAC)"
+  },
+  {
+   "committee_id": "C00303024",
+   "name": "LOCKHEED MARTIN CORPORATION EMPLOYEES' POLITICAL ACTION COMMITTEE"
+  },
+  {
+   "committee_id": "C00142711",
+   "name": "THE BOEING COMPANY PAC"
+  }
+ ],
+ "pagination": {
+  "pages": 1,
+  "count": 6
+ }
+}

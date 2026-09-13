@@ -153,10 +153,23 @@
                                         <td class="px-4 py-3">
                                             <span class="px-2 py-1 bg-green-100 text-green-800 rounded text-sm" x-text="disc.filing_type"></span>
                                         </td>
+                                        <!-- `parsed` means the parser ran, and a scanned paper
+                                             form clears that bar while yielding nothing. The same
+                                             status the Trades and Parsed Documents pages show. -->
                                         <td class="px-4 py-3">
-                                            <span :class="disc.parsed ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'"
-                                                  class="px-2 py-1 rounded text-sm font-medium"
-                                                  x-text="disc.parsed ? 'Parsed' : 'Pending'"></span>
+                                            <template x-if="!disc.parsed">
+                                                <span class="px-2 py-1 rounded text-sm font-medium bg-yellow-100 text-yellow-800">Pending</span>
+                                            </template>
+                                            <template x-if="disc.parsed && disc.has_text_layer === false">
+                                                <span class="px-2 py-1 rounded text-sm font-medium bg-slate-200 text-slate-700"
+                                                      title="A photograph of a paper form. There is no text in it to extract, and this project does not do OCR.">scanned image</span>
+                                            </template>
+                                            <template x-if="disc.parsed && disc.has_text_layer !== false">
+                                                <span :class="readClass(disc.parse_confidence)"
+                                                      class="px-2 py-1 rounded text-sm font-medium"
+                                                      :title="disc.parse_warnings || 'No warnings recorded.'"
+                                                      x-text="readLabel(disc.parse_confidence)"></span>
+                                            </template>
                                         </td>
                                         <td class="px-4 py-3">
                                             <template x-if="disc.document_url">
@@ -257,6 +270,21 @@
                     } finally {
                         this.loading = false;
                     }
+                },
+
+                // Identical to the Trades and Parsed Documents pages on purpose:
+                // the three list overlapping filings and must not disagree about
+                // how well one was read.
+                readLabel(value) {
+                    if (value === null || value === undefined) return 'not scored';
+                    return 'read ' + Math.round(value * 100) + '%';
+                },
+
+                readClass(value) {
+                    if (value === null || value === undefined) return 'bg-gray-100 text-gray-600';
+                    if (value === 0) return 'bg-red-100 text-red-800';
+                    if (value < 0.8) return 'bg-amber-100 text-amber-900';
+                    return 'bg-emerald-100 text-emerald-800';
                 },
 
                 sortBy(field) {

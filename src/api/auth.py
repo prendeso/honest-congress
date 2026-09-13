@@ -11,6 +11,9 @@ from fastapi import Header, HTTPException
 from src.config import get_settings
 
 _TOKEN_TTL_SECONDS = 8 * 60 * 60
+
+# Accepted only when ENV is not production. See require_admin().
+DEV_TOKEN = "local-dev-token"
 _admin_tokens: Dict[str, float] = {}
 
 
@@ -40,11 +43,14 @@ def validate_admin_token(token: str | None) -> bool:
 
 
 def require_admin(x_admin_token: str | None = Header(None)) -> str:
-    # Auto-accept for local development
-    if x_admin_token == "local-dev-token":
+    settings = get_settings()
+
+    # Local-development convenience. This MUST stay below the settings read and
+    # behind the is_production check: without the guard, anyone who knows the
+    # literal string gets admin on every mutating endpoint in production.
+    if not settings.is_production and x_admin_token == DEV_TOKEN:
         return x_admin_token
 
-    settings = get_settings()
     if not settings.admin_password:
         raise HTTPException(status_code=503, detail="Admin password not configured")
     if not validate_admin_token(x_admin_token):

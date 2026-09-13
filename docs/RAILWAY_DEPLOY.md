@@ -6,13 +6,13 @@ Step-by-step guide. Skim the prerequisites, then walk through the steps in order
 
 - A **GitHub** account that owns (or can be granted access to) `prendeso/honest-congress`.
 - A **Railway** account at <https://railway.com>. The free trial gives you $5 of usage credit, which covers a small instance running 24/7 for ~3 weeks.
-- Optionally: a **Congress.gov API key** (free, <https://api.congress.gov/sign-up/>) and a **QuiverQuant API key** ($10/mo, <https://www.quiverquant.com>). Both unlock additional data sources but the app boots fine without them.
+- Optionally: a **Congress.gov API key** (free, <https://api.congress.gov/sign-up/>). Only needed as a fallback for the member roster, which otherwise comes from the public-domain congress-legislators dataset. The app boots fine without it.
 
 ## What's already set up in the repo
 
 You don't need to write any deploy config — it's all in the repo:
 
-- `Dockerfile` — multi-stage, `python:3.12-slim` base, runs as non-root, includes `/health` healthcheck
+- `Dockerfile` — multi-stage, `python:3.11-slim` base, runs as non-root, includes `/health` healthcheck
 - `railway.toml` — points Railway at the Dockerfile, runs `alembic upgrade head` before each deploy
 - `.dockerignore` — keeps the build context lean
 - `alembic/` — Postgres schema migrations
@@ -45,14 +45,20 @@ Still in **Variables** on the app service, add the following. **Required** ones 
 |---|---|---|
 | `ENV` | `production` | Enables prod-mode validation in `src/config.py` |
 | `ADMIN_PASSWORD` | A strong random string | Required by `src/config.get_settings()` when `ENV=production`. Used for `/admin` panel login. Generate with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
-| `ALLOWED_ORIGINS` | Your app's public URL, e.g. `https://honest-congress-production.up.railway.app` | CORS. After Railway assigns a domain (Step 5) come back and update this |
+| `ALLOWED_ORIGINS` | Your app's public URL, e.g. `https://honest-congress-production.up.railway.app` | CORS. After Railway assigns a domain (Step 5) come back and update this. **Leaving it unset is not neutral**: the default is `*`, which allows every origin with every header — `X-Admin-Token` included — so any web page can drive the admin endpoints with a token it has obtained. |
 
 ### Optional
 
 | Variable | Default | What it does |
 |---|---|---|
-| `CONGRESS_GOV_API_KEY` | empty | Backup data source for member metadata |
-| `QUIVERQUANT_API_KEY` | empty | Live trade data ingestion via `/api/anomalies/sync-trades` |
+| `CONGRESS_GOV_API_KEY` | empty | Backup source for member metadata; required by `cli ingest-bills` |
+| `FEC_API_KEY` | empty | Required by `cli ingest-donations`. Free at https://api.data.gov/signup/ |
+| `LDA_API_KEY` | empty | Raises the Senate LDA rate limit from ~15/min to ~120/min. Not required — `cli ingest-lobbying` runs anonymously without it |
+| `SEC_CONTACT_EMAIL` | `contact@example.com` | Goes in the User-Agent for SEC's company register. SEC returns **403** for the placeholder, so set a real address you monitor before any SEC-backed ingestion |
+| `DISABLED_ANOMALY_TYPES` | `outperforming_trades,perfect_timing,loss_avoidance` | Detectors that are never written or served. Leave it alone unless you have real price history — see D3 and D10 in `docs/DECISIONS.md` |
+| `FDR_ALPHA` | `0.05` | False-discovery rate the API filters findings at |
+| `SIGNIFICANCE_PERMUTATIONS` | `1000` | Shifted calendars per test; the p-value floor is 1/(n+1) |
+| `CONGRESSIONAL_SALARY` | `174000` | Baseline for the wealth-vs-salary detector |
 | `LATE_FILING_MIN_DAYS` | `60` | Days past the 45-day STOCK Act deadline before a late-PTR anomaly is flagged |
 | `LATE_FILING_MIN_AMOUNT_USD` | `50000` | Minimum transaction size for late-filing flags |
 | `WEALTH_GROWTH_THRESHOLD_PERCENT` | `200.0` | Wealth-vs-salary detector threshold |
@@ -118,8 +124,30 @@ The repo already has `.github/workflows/daily-update.yml` that runs the ingestio
 3. Add:
    - Name: `RAILWAY_DATABASE_URL`
    - Value: the public connection string from step 1
-4. Optionally add `CONGRESS_GOV_API_KEY` and `QUIVERQUANT_API_KEY` as repo secrets too (the workflow references them).
+4. Add the rest of the secrets the workflow reads. Every one is a *repository*
+   secret under the same settings page, named exactly as below:
+
+   | Secret | Required | Without it |
+   |---|---|---|
+   | `RAILWAY_DATABASE_URL` | **yes** | The job fails at its preflight step; nothing runs |
+   | `SEC_CONTACT_EMAIL` | effectively | SEC returns 403 for the placeholder, so four ingest steps resolve no tickers |
+   | `CONGRESS_GOV_API_KEY` | for `ingest-bills` | That step exits 1; the rest of the run continues |
+   | `FEC_API_KEY` | for `ingest-donations` | That step exits 1; the rest of the run continues |
+   | `LDA_API_KEY` | no | Lobbying ingestion paces itself at ~15 req/min instead of ~120 |
+
+   The four ingest steps are `continue-on-error: true`, so a missing optional
+   key degrades the run rather than failing it. `cli stats` at the end names
+   any detector whose source table is still empty, which is how a silently
+   skipped feed surfaces.
+
 5. Trigger the workflow manually the first time: **Actions** tab → **Daily Disclosure Update** → **Run workflow**. After that it runs daily.
+6. The nightly job is a **top-up**, not a rebuild — it never runs `parse`,
+   because a runner starts from a fresh checkout and `data/disclosures/` does
+   not survive between runs. To build the dataset, or to re-read every filing
+   after a parser change, dispatch **Rebuild** instead (`rebuild.yml`): type
+   `REBUILD` to confirm, leave the mode on `reparse`, and re-dispatch until the
+   parse step reports nothing left. It is chunked by a `limit` input because a
+   runner is capped at six hours.
 
 ## Step 8 — Operational checks
 
@@ -216,6 +244,5 @@ Expected on Railway. The filesystem is **ephemeral** — locally-stored PDFs don
 | `ALLOWED_ORIGINS` | recommended | manually, after Step 5 |
 | `PORT` | auto-injected by Railway | — |
 | `CONGRESS_GOV_API_KEY` | optional | <https://api.congress.gov/sign-up/> |
-| `QUIVERQUANT_API_KEY` | optional | <https://www.quiverquant.com> |
 
 Full list of tunable knobs lives in `src/config.py`.

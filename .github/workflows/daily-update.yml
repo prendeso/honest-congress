@@ -28,6 +28,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Every scheduled run from at least 2026-09-05 to 2026-09-12 failed here
+      # with "Could not parse SQLAlchemy URL", because RAILWAY_DATABASE_URL is
+      # not configured and DATABASE_URL arrived empty. A stack trace twenty
+      # frames deep is a bad way to learn that a secret is missing, so this
+      # says it in one line instead.
+      - name: Check the database secret is configured
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::RAILWAY_DATABASE_URL is not set. Add it under Settings -> Secrets and variables -> Actions. Until then this workflow cannot reach the database and every run fails."
+            exit 1
+          fi
+          echo "DATABASE_URL is set (${#DATABASE_URL} characters)."
+
       # We point at Railway's external Postgres URL so each daily run
       # ingests into the *same* database the deployed app reads from.
       # Configure the secret in repo settings → Secrets → Actions.
@@ -36,23 +51,90 @@ jobs:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli init
 
+      # `cli ingest` drives IngestionOrchestrator, which covers House Clerk
+      # disclosures and the member roster.
       - name: Ingest disclosure data
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
-          QUIVERQUANT_API_KEY: ${{ secrets.QUIVERQUANT_API_KEY }}
         run: python -m src.cli ingest
+
+      - name: Sync committee assignments
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli sync-committees
+
+      # The three Tier-2 feeds. Each is a separate official source, and each is
+      # allowed to fail without stopping the run: a throttled FEC cycle or an
+      # LDA outage must not block the analysis of data already ingested. The
+      # `stats` command reports any detector left with an empty source table,
+      # so a silent zero here still surfaces.
+      - name: Ingest federal contract awards
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli ingest-contracts
+
+      # FEC allows 1,000 requests/hour and a full cycle costs more than that,
+      # so the run is capped and resumes tomorrow where it stopped.
+      - name: Ingest corporate PAC donations
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          FEC_API_KEY: ${{ secrets.FEC_API_KEY }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli ingest-donations --cycle 2024 --max-requests 800
+
+      # LDA_API_KEY is optional: without it the ingester paces itself down to
+      # the anonymous rate rather than failing.
+      - name: Ingest lobbying disclosures
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli ingest-lobbying --year 2024
+
+      # Sector classification for every traded ticker. Must run before analyze:
+      # three detectors join a bill or a committee remit to a sector, and
+      # without this they see only the ~70 large caps in the hand-written list.
+      # Incremental -- only tickers not already cached.
+      - name: Sync SEC industry codes
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli sync-industries
+
+      # The join to legislative action. `--sponsored-only` because cosponsorship
+      # is ~20x more voluminous (one member: 71 sponsored, 1,562 cosponsored)
+      # and no detector reads it yet -- fetching it nightly would spend roughly
+      # ten thousand requests on data nothing looks at. Drop the flag for a
+      # backfill when a cosponsorship detector exists.
+      - name: Ingest bill sponsorship and committee referrals
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
+        run: python -m src.cli ingest-bills --sponsored-only
 
       - name: Run anomaly analysis
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli analyze
 
-      - name: Generate summary report
+      # Names any detector whose source table is empty, so "no findings" stays
+      # distinguishable from "no data" in the run log.
+      - name: Report detector coverage
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: |
           echo "## Disclosure Update Summary - $(date -u +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Ingestion and analysis completed successfully." >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          python -m src.cli stats >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Notify on failure
         if: failure()

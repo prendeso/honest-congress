@@ -208,6 +208,22 @@ ones known to be shaky would compound that silently.
 `python -m src.cli parse --min-confidence 0.8` re-reads the filings the parser
 did worst on, and filings never scored at all.
 
+### One House trade report in eight is a photograph
+
+`has_text_layer` is recorded separately from the score, because a scan of a
+paper form is a property of the document and not a failure of the parser.
+**123 of the 966 House PTRs filed in 2024–25 — 12.7% — have no text layer at
+all**, and a 7-digit document ID predicted it with 100% accuracy across the 200
+sampled. Nothing in them is readable without OCR, which this project does not
+do.
+
+They score 0.0, which is honest, but counting them as parse failures overstates
+the parser's failure rate roughly eightfold and hides the coverage statement
+that matters. So `parse_quality_summary` reports `filings_that_yielded_nothing`
+(had text, read nothing — a bug) apart from `filings_with_no_text_layer` (a
+scan — a limit), `--min-confidence` re-parses skip the scans, and
+`GET /api/disclosures/?has_text_layer=false` lists them.
+
 ### What building it found
 
 pdfplumber sometimes collapses an entire table row into its first cell. Read by
@@ -216,10 +232,30 @@ the six real filings in the test corpus that was **18 transactions lost against
 16 kept**, with two filings parsing to nothing at all while recorded as parsed
 successfully. The corpus now yields 34.
 
+Scaling that corpus to **200 real PTRs** sampled across filers found three more
+classes, and two of them were recording trades backwards:
+
+- `"Best Buy Co., Inc. Common Stock S"` parsed as a **purchase**, because "Buy"
+  is in the company name. The Transaction Type cell `"S (partial)"` parsed as a
+  **purchase**, because a substring test found the "p" inside "partial". Both
+  recorded a disclosed sale as a purchase, and direction is not cosmetic:
+  `contract_front_run` only inspects purchases, and the cross-member cluster
+  detector groups by it.
+- 107 rows were counted as unread transactions that were nothing of the kind —
+  a wrapped `Cap. Gains > $200?` header and the footnote block under each
+  record — which marked clean filings as bad.
+- 60 of the 200 filings had a transaction with no readable amount, because a
+  wrapped amount band arrives with the asset name wrapped alongside it.
+
+Over the same 200 filings, mean confidence went **0.854 → 0.902**, filings
+scoring ≥0.99 went **108 → 178**, and filings below 0.8 went **23 → 2**, with
+one net transaction removed: a phantom built from an asset-class code beside
+the wrapped half of an amount.
+
 ## Multiple comparisons
 
-Sixteen detectors run against every member, so some of what gets flagged is what
-running thousands of tests over hundreds of people produces. Six of them ask a
+Seventeen detectors run against every member, so some of what gets flagged is
+what running thousands of tests over hundreds of people produces. Six of them ask a
 *timing* question — donations, lobbying filings, contract awards, bill
 sponsorship, committee referrals, cross-member clusters — and those have a
 well-posed null: the same trades, the same events, no relationship between them.
@@ -233,7 +269,7 @@ Shifting rather than resampling is deliberate: disclosed trades arrive in
 same-day PTR batches, and a null that scattered them would make ordinary
 clustering look extraordinary.
 
-The other ten detectors measure a magnitude (`sector_concentration`,
+The other eleven detectors measure a magnitude (`sector_concentration`,
 `late_filing`, …). There is no coincidence to destroy, so **they carry no
 q-value at all** — `has_null_model: false` in the API. A null `q_value` means
 *no null model exists*, never *passed one*. They keep `percentile_rank`, which
@@ -247,6 +283,12 @@ different rate without re-detecting anything.
 What surviving this means: the timing alignment is unlikely by chance. Not that
 the member acted on anything, and not that the detector's threshold is
 calibrated.
+
+`GET /api/anomalies/types` serves what each detector looks for, what it
+**cannot** show, and whether it carries a q-value at all — read from the same
+declarations the detectors are registered in, so a detector that is disabled
+cannot still be described to a reader. The dashboard renders that rather than
+keeping its own copy; see D14 for what its own copy had drifted into saying.
 
 ## API endpoints
 

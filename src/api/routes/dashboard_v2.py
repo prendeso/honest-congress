@@ -118,28 +118,74 @@ async def get_insights(db: Session = Depends(get_db_session)) -> list[dict[str, 
     try:
         filings = db.query(func.count(Disclosure.id)).scalar() or 0
         if filings:
-            unreadable = (
+            # Three different things, and lumping them together made the page
+            # claim something untrue. A filing nobody has parsed YET is not a
+            # filing that could not be read: during a chunked rebuild the whole
+            # remaining queue counted as unreadable and was described to the
+            # public as scans of paper forms. Only the middle count below is
+            # actually a scan -- no text layer at all -- and only the first two
+            # are "could not be read", because the parser has been near them.
+            unread = (
+                db.query(func.count(Disclosure.id)).filter(Disclosure.parsed.is_(False)).scalar()
+                or 0
+            )
+            scans = (
                 db.query(func.count(Disclosure.id))
                 .filter(
-                    or_(
-                        Disclosure.parsed.is_(False),
-                        Disclosure.has_text_layer.is_(False),
-                        Disclosure.parse_confidence == 0.0,
-                    )
+                    Disclosure.parsed.is_(True),
+                    Disclosure.has_text_layer.is_(False),
                 )
                 .scalar()
                 or 0
             )
+            # Read, has text, and still yielded nothing: a limit of this
+            # parser, not a property of the document. Saying so is the point.
+            yielded_nothing = (
+                db.query(func.count(Disclosure.id))
+                .filter(
+                    Disclosure.parsed.is_(True),
+                    or_(
+                        Disclosure.has_text_layer.is_(True),
+                        Disclosure.has_text_layer.is_(None),
+                    ),
+                    Disclosure.parse_confidence == 0.0,
+                )
+                .scalar()
+                or 0
+            )
+
+            clauses = []
+            if scans:
+                clauses.append(
+                    f"{scans:,} {'is a scan' if scans == 1 else 'are scans'} of paper "
+                    "forms, which hold no machine-readable text"
+                )
+            if yielded_nothing:
+                clauses.append(
+                    f"{yielded_nothing:,} {'was' if yielded_nothing == 1 else 'were'} "
+                    "read but yielded nothing"
+                )
+
+            if clauses:
+                description = (
+                    f"Of these, {' and '.join(clauses)}. Nothing in those filings "
+                    "appears anywhere on this site."
+                )
+            else:
+                description = "Every filing counted here was read."
+
+            if unread:
+                description += (
+                    f" A further {unread:,} {'filing has' if unread == 1 else 'filings have'} "
+                    "not been read yet — queued, not unreadable."
+                )
+
             insights.append(
                 {
                     "id": 1,
                     "icon": "📄",
                     "title": "Filings analysed",
-                    "description": (
-                        f"{unreadable:,} of them could not be read at all — scans of paper "
-                        "forms, mostly, which hold no machine-readable text. Nothing in "
-                        "those filings appears anywhere on this site."
-                    ),
+                    "description": description,
                     "value": f"{filings:,} filings",
                 }
             )

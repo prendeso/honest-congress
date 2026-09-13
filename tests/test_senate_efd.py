@@ -148,6 +148,71 @@ class TestTradeReportsAreMarkedAsSuch:
         assert not any(row["is_ptr"] for row in rows)
 
 
+class TestParsedRowsFitTheColumnsTheyAreStoredIn:
+    """SQLite ignores declared string lengths. PostgreSQL does not.
+
+    `filing_type` was taken straight from the cell containing the link -- which
+    is markup, not a label -- and the first real Senate ingest died on
+
+        DataError: value too long for type character varying(50)
+        filing_type: '<a href="/search/view/annual/14c0.../">Annual Report for
+        CY 2023 (Amendment 1)</a>'
+
+    Every test in this file passed, because the whole suite runs on SQLite,
+    which accepts an over-length string without complaint. This is the same
+    blind spot that hid the NUL byte, so the check is written against the
+    model's own column widths rather than against one field.
+    """
+
+    def _string_limits(self):
+        from src.db.models import Disclosure
+
+        limits = {}
+        for column in Disclosure.__table__.columns:
+            length = getattr(column.type, "length", None)
+            if length:
+                limits[column.name] = length
+        assert limits, "no bounded string columns found — this test would pass on nothing"
+        return limits
+
+    def test_no_field_exceeds_its_column(self, captured):
+        limits = self._string_limits()
+        rows = SenateIngester()._parse_ajax_results(
+            {"data": captured["ptr"]["data"] + captured["annual"]["data"]}, 2025
+        )
+        assert rows
+
+        for row in rows:
+            for field, limit in limits.items():
+                value = row.get(field)
+                if not isinstance(value, str):
+                    continue
+                assert len(value) <= limit, (
+                    f"{field}={value!r} is {len(value)} characters; the column holds "
+                    f"{limit} and PostgreSQL will refuse the insert"
+                )
+
+    def test_filing_type_is_a_label_not_markup(self, captured):
+        rows = SenateIngester()._parse_ajax_results(
+            {"data": captured["ptr"]["data"] + captured["annual"]["data"]}, 2025
+        )
+
+        for row in rows:
+            assert "<" not in row["filing_type"], (
+                f"filing_type carries HTML: {row['filing_type']!r}"
+            )
+
+    def test_it_still_says_something_useful(self, captured):
+        """The guard against fixing this by storing a constant."""
+        annual = SenateIngester()._parse_ajax_results({"data": captured["annual"]["data"]}, 2025)
+        ptr = SenateIngester()._parse_ajax_results({"data": captured["ptr"]["data"]}, 2025)
+
+        assert all(r["filing_type"] == "PTR" for r in ptr)
+        assert any("Annual" in r["filing_type"] for r in annual), (
+            f"the annual label lost its meaning: {sorted({r['filing_type'] for r in annual})}"
+        )
+
+
 class TestTheRequestShape:
     @pytest.mark.parametrize(
         "given,expected",

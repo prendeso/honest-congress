@@ -191,3 +191,86 @@ class TestSyncSenateDisclosures:
 
         assert synced == 0
         assert db_session.query(Disclosure).filter(Disclosure.document_id == "SEN-1").count() == 1
+
+
+class TestScannedFilingsAreRecordedAsSuch:
+    """`has_text_layer` is written on every parse, and re-parses skip the scans.
+
+    12.7% of 2024-25 House PTRs are scans with no extractable text. They score
+    0.0 and always will. Without the flag, every `--min-confidence` re-parse run
+    downloads and re-reads one filing in eight to arrive at the same answer, and
+    the failure count reported to a reader blames the parser for the form.
+    """
+
+    def _orchestrator(self, tmp_path, *, text_extracted: bool):
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        orch.download_disclosure_pdf = lambda d: tmp_path / "x.pdf"  # type: ignore[method-assign]
+        (tmp_path / "x.pdf").write_bytes(b"%PDF-1.4")
+        orch.ptr_parser.parse_ptr = lambda path: {  # type: ignore[method-assign]
+            "quality": {
+                "text_extracted": text_extracted,
+                "rows_detected": 1 if text_extracted else 0,
+                "rows_parsed": 1 if text_extracted else 0,
+            },
+            "transactions": (
+                [
+                    {
+                        "transaction_date": datetime(2024, 3, 1),
+                        "transaction_type": "purchase",
+                        "amount_min": 1001,
+                        "amount_max": 15000,
+                        "description": "AAPL",
+                        "ticker": "AAPL",
+                    }
+                ]
+                if text_extracted
+                else []
+            ),
+        }
+        return orch
+
+    def _ptr(self, db, member, doc_id):
+        d = Disclosure(
+            member_id=member.id,
+            filing_year=2024,
+            filing_type="PTR",
+            filing_date=datetime(2024, 5, 1),
+            document_id=doc_id,
+            is_ptr=True,
+        )
+        db.add(d)
+        db.commit()
+        db.refresh(d)
+        return d
+
+    def test_a_scan_is_flagged_and_a_readable_filing_is_not(self, db_session, tmp_path):
+        member = _make_member(db_session)
+
+        scan = self._ptr(db_session, member, "SCAN-9")
+        self._orchestrator(tmp_path, text_extracted=False).parse_disclosure(db_session, scan)
+        assert scan.has_text_layer is False
+        assert scan.parse_confidence == 0.0
+
+        readable = self._ptr(db_session, member, "TEXT-9")
+        self._orchestrator(tmp_path, text_extracted=True).parse_disclosure(db_session, readable)
+        assert readable.has_text_layer is True
+        assert readable.parse_confidence and readable.parse_confidence > 0
+
+    def test_reparsing_the_low_scorers_leaves_the_scans_alone(self, db_session, tmp_path):
+        """A scan scores 0.0 forever. Re-reading it every night buys nothing."""
+        member = _make_member(db_session)
+
+        scan = self._ptr(db_session, member, "SCAN-8")
+        scan.parsed, scan.parse_confidence, scan.has_text_layer = True, 0.0, False
+        broken = self._ptr(db_session, member, "BROKEN-8")
+        broken.parsed, broken.parse_confidence, broken.has_text_layer = True, 0.0, True
+        never_checked = self._ptr(db_session, member, "OLD-8")
+        never_checked.parsed = True
+        db_session.commit()
+
+        orch = self._orchestrator(tmp_path, text_extracted=True)
+        result = orch.parse_disclosures(db_session, min_confidence=0.8, delay=0)
+
+        assert result["parsed"] == 2, "the broken filing and the never-checked one, not the scan"
+        assert scan.parse_confidence == 0.0
+        assert scan.has_text_layer is False

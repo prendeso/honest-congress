@@ -135,6 +135,21 @@ class Disclosure(Base):
     # The named reasons behind the score, which is what a person acts on.
     parse_warnings: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Whether the PDF had a text layer at all. Recorded separately from the
+    # score because it is a property of the source document rather than of the
+    # parser, and the two answer different questions.
+    #
+    # 123 of the 966 House PTRs filed in 2024-25 -- 12.7% -- are scans of paper
+    # forms with no extractable text. They score 0.0, which is honest, but
+    # counting them as parser failures overstates the failure rate eightfold and
+    # hides the thing a reader of this data actually needs to know: roughly one
+    # House trade report in eight is not in the machine-readable dataset at all,
+    # and no parser change will ever put it there. Only OCR would, and this
+    # project does not do OCR.
+    #
+    # Null means unknown -- parsed before this was recorded.
+    has_text_layer: Mapped[bool | None] = mapped_column(nullable=True, index=True)
+
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(

@@ -323,6 +323,40 @@ that silently -- and would make a member whose PDFs parse badly look cleaner
 than one whose parse well. This is D9 applied to the parser instead of the
 filer.
 
+## D13. A scan of a paper form is not a parse failure
+
+Running the D12 score over 200 real PTRs sampled from the 966 the House Clerk
+published for 2024 and 2025 turned up something the score alone reported
+misleadingly: **123 of those 966 filings -- 12.7% -- are scans with no text
+layer at all.** A 7-digit document ID predicted it with 100% accuracy across the
+200 sampled.
+
+They score 0.0, and that is the honest score: nothing in them is readable. But
+folding them into "filings the parser read nothing out of" makes the parser's
+failure count roughly eight times the real one, and buries the fact actually
+worth publishing -- about **one House trade report in eight is not in the
+machine-readable dataset**, and no parser change will put it there. Only OCR
+would, and this project does not do OCR.
+
+So `has_text_layer` is recorded on every parse, separately from the score,
+because it is a property of the document rather than of the parser. Three
+things follow from it:
+
+- `parse_quality_summary` reports `filings_that_yielded_nothing` (had text, read
+  nothing -- a bug) and `filings_with_no_text_layer` (a scan -- a coverage
+  limit) as different numbers.
+- `parse_disclosures --min-confidence` skips the scans. They will score 0.0
+  every time, and re-downloading one filing in eight every night to confirm it
+  is waste. `--reparse` still reaches them, and filings whose text layer is
+  unknown are still re-read, because nobody has checked those.
+- The API exposes the flag, and `?has_text_layer=` filters on it, so "show me
+  what the parser did badly on" and "show me what was never machine-readable"
+  are separable questions.
+
+Null means unknown -- parsed before this was recorded -- and is counted with the
+parser's failures rather than excused as a scan. The safe reading of "nobody
+looked" is not "it was fine".
+
 ---
 
 ## Superseded

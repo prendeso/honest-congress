@@ -98,6 +98,10 @@ class DisclosureResponse(BaseModel):
     # Null means never scored, not scored and fine.
     parse_confidence: float | None = None
     parse_warnings: str | None = None
+    # Whether the PDF had any text in it. A false here means the score of 0.0
+    # is the document's doing, not the parser's -- about one House PTR in eight
+    # is a scan of a paper form. Null means nobody has checked.
+    has_text_layer: bool | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -144,6 +148,16 @@ async def list_disclosures(
             "from this filter rather than assumed good."
         ),
     ),
+    has_text_layer: bool | None = Query(
+        None,
+        description=(
+            "Filter by whether the PDF had any extractable text. Pair it with "
+            "`max_confidence`: `has_text_layer=true` gives the filings the "
+            "parser genuinely did badly on, and `has_text_layer=false` gives "
+            "the scanned paper forms, which score 0 because there is nothing "
+            "in them to read. Roughly one House PTR in eight is the latter."
+        ),
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=100),
     db: Session = Depends(get_db_session),
@@ -177,6 +191,9 @@ async def list_disclosures(
             Disclosure.parse_confidence.isnot(None),
             Disclosure.parse_confidence <= max_confidence,
         )
+
+    if has_text_layer is not None:
+        query = query.filter(Disclosure.has_text_layer.is_(has_text_layer))
 
     # Get total count
     total = query.count()
@@ -224,6 +241,7 @@ async def list_disclosures(
                 is_ptr=d.is_ptr,
                 parse_confidence=d.parse_confidence,
                 parse_warnings=d.parse_warnings,
+                has_text_layer=d.has_text_layer,
             )
             for d in disclosures
         ],
@@ -268,6 +286,7 @@ async def get_disclosure(
         parsed=disclosure.parsed,
         parse_confidence=disclosure.parse_confidence,
         parse_warnings=disclosure.parse_warnings,
+        has_text_layer=disclosure.has_text_layer,
         total_assets_min=total_min,
         total_assets_max=total_max,
         assets=[

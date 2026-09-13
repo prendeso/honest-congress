@@ -239,6 +239,10 @@ def cmd_parse(args):
         f"  Yielded nothing at all: {quality['filings_that_yielded_nothing']}"
         "  - a PTR with no transactions is a failed parse, not a quiet quarter"
     )
+    print(
+        f"  Scans with no text layer: {quality['filings_with_no_text_layer']}"
+        "  - not a parse failure; there is nothing in them to read"
+    )
 
 
 def cmd_download_pdfs(args):

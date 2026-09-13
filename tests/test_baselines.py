@@ -8,6 +8,7 @@ against every member, so a flag count needs its denominator reported alongside.
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 
 import pytest
@@ -16,9 +17,10 @@ from src.analysis.baselines import (
     MIN_POPULATION_FOR_PERCENTILE,
     annotate_percentile_ranks,
     detection_summary,
+    parse_quality_summary,
     percentile_rank,
 )
-from src.db.models import Anomaly, Chamber, Member, Party
+from src.db.models import Anomaly, Chamber, Disclosure, Member, Party
 
 
 class TestPercentileRank:
@@ -267,3 +269,55 @@ class TestDetectorsWithoutSourceData:
 
         assert summary["detectors_without_source_data"], "empty DB should report starved detectors"
         assert "detectors_without_source_data" in str(summary["caveat"])
+
+
+class TestScansAreNotParserFailures:
+    """A scanned paper form and a botched parse both score 0.0. Only one is a bug.
+
+    123 of the 966 House PTRs filed in 2024-25 -- 12.7% -- are images with no
+    text layer. Counting them as parse failures overstates the parser's failure
+    rate roughly eightfold and hides the thing worth publishing: about one House
+    trade report in eight is not in the machine-readable dataset at all, and no
+    parser change will put it there.
+    """
+
+    def _disclosure(self, db_session, member, doc_id, *, confidence, text_layer):
+        d = Disclosure(
+            member_id=member.id,
+            filing_year=2024,
+            filing_type="PTR",
+            filing_date=datetime(2024, 5, 1),
+            document_id=doc_id,
+            is_ptr=True,
+            parsed=True,
+            parse_confidence=confidence,
+            has_text_layer=text_layer,
+        )
+        db_session.add(d)
+        db_session.commit()
+        return d
+
+    def test_the_two_zeroes_are_counted_separately(self, db_session, member):
+        self._disclosure(db_session, member, "SCAN-1", confidence=0.0, text_layer=False)
+        self._disclosure(db_session, member, "SCAN-2", confidence=0.0, text_layer=False)
+        self._disclosure(db_session, member, "BROKEN-1", confidence=0.0, text_layer=True)
+        self._disclosure(db_session, member, "FINE-1", confidence=1.0, text_layer=True)
+
+        summary = parse_quality_summary(db_session)
+
+        assert summary["filings_with_no_text_layer"] == 2
+        assert summary["filings_that_yielded_nothing"] == 1, (
+            "only the filing that HAD text and still yielded nothing is the parser's fault"
+        )
+
+    def test_an_unchecked_filing_counts_as_the_parsers_problem(self, db_session, member):
+        """Null means nobody looked, and the safe reading of that is not 'a scan'.
+
+        Filings parsed before this was recorded have a null here. Excusing them
+        as scans would quietly shrink the failure count on exactly the filings
+        least is known about.
+        """
+        self._disclosure(db_session, member, "OLD-1", confidence=0.0, text_layer=None)
+
+        assert parse_quality_summary(db_session)["filings_that_yielded_nothing"] == 1
+        assert parse_quality_summary(db_session)["filings_with_no_text_layer"] == 0

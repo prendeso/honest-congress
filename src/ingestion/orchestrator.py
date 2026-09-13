@@ -529,6 +529,7 @@ class IngestionOrchestrator:
             if disclosure.is_ptr:
                 parsed = self.ptr_parser.parse_ptr(str(pdf_path))
                 self._store_ptr_data(db, disclosure, parsed)
+                text_extracted = bool((parsed.get("quality") or {}).get("text_extracted"))
                 score = score_ptr_parse(
                     parsed.get("quality") or {},
                     parsed.get("transactions") or [],
@@ -537,10 +538,11 @@ class IngestionOrchestrator:
             else:
                 parsed = self.disclosure_parser.parse_pdf(str(pdf_path))
                 self._store_fd_data(db, disclosure, parsed)
+                text_extracted = bool(
+                    parsed.get("raw_text") or parsed.get("assets") or parsed.get("liabilities")
+                )
                 score = score_fd_parse(
-                    bool(
-                        parsed.get("raw_text") or parsed.get("assets") or parsed.get("liabilities")
-                    ),
+                    text_extracted,
                     len(parsed.get("assets") or []),
                     len(parsed.get("liabilities") or []),
                     parsed.get("parse_errors") or [],
@@ -552,6 +554,9 @@ class IngestionOrchestrator:
             disclosure.parse_error = None
             disclosure.parse_confidence = score.confidence
             disclosure.parse_warnings = score.summary
+            # A property of the document, not of the parse. Recorded so that a
+            # scan and a genuine parser failure stop counting as the same thing.
+            disclosure.has_text_layer = text_extracted
 
             if parsed.get("parse_errors"):
                 disclosure.parse_error = "; ".join(parsed["parse_errors"])
@@ -717,6 +722,18 @@ class IngestionOrchestrator:
                 or_(
                     Disclosure.parse_confidence.is_(None),
                     Disclosure.parse_confidence < min_confidence,
+                )
+            )
+            # Except the scans. They score 0.0 and always will: there is no
+            # text in them to read. Without this, every re-parse run downloads
+            # and re-reads 12.7% of the House corpus to reach the same answer
+            # it reached last time. `--reparse` still reaches them; filings
+            # whose text layer is unknown are still included, because nobody
+            # has checked those.
+            query = query.filter(
+                or_(
+                    Disclosure.has_text_layer.is_(None),
+                    Disclosure.has_text_layer.is_(True),
                 )
             )
         elif not reparse:

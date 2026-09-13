@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Sequence
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from src.db.models import (
@@ -283,8 +283,22 @@ def parse_quality_summary(db: Session) -> Dict[str, object]:
         db.query(func.count(Disclosure.id)).filter(Disclosure.parse_confidence.isnot(None)).scalar()
         or 0
     )
+    scanned = (
+        db.query(func.count(Disclosure.id)).filter(Disclosure.has_text_layer.is_(False)).scalar()
+        or 0
+    )
+    # A filing that had text in it and still yielded nothing. This is the
+    # parser's own failure count, and separating the scans out is the only way
+    # it means anything: they are 12.7% of the House corpus and they score 0.0
+    # by definition.
     empty = (
-        db.query(func.count(Disclosure.id)).filter(Disclosure.parse_confidence == 0.0).scalar() or 0
+        db.query(func.count(Disclosure.id))
+        .filter(
+            Disclosure.parse_confidence == 0.0,
+            or_(Disclosure.has_text_layer.is_(None), Disclosure.has_text_layer.is_(True)),
+        )
+        .scalar()
+        or 0
     )
     poor = (
         db.query(func.count(Disclosure.id))
@@ -306,6 +320,12 @@ def parse_quality_summary(db: Session) -> Dict[str, object]:
         "mean_confidence": round(float(average), 3) if average is not None else None,
         "filings_below_0_8": poor,
         # The number that says whether the dataset can be trusted at all: a
-        # filing the parser read nothing out of.
+        # filing that HAD text and the parser still read nothing out of.
         "filings_that_yielded_nothing": empty,
+        # Not a parser failure. A scan of a paper form has no text to read, so
+        # it scores 0.0 whatever the parser does. Reported on its own because
+        # it is a coverage statement about the source -- roughly one House
+        # trade report in eight -- and reading it as a bug count is wrong in
+        # both directions: it flatters no one and blames the wrong thing.
+        "filings_with_no_text_layer": scanned,
     }

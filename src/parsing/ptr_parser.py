@@ -35,6 +35,13 @@ BUY_KEYWORDS = ["purchase", "buy", "bought", "p"]
 SELL_KEYWORDS = ["sale", "sell", "sold", "s"]
 EXCHANGE_KEYWORDS = ["exchange", "ex"]
 
+_DATE_PATTERN = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}")
+
+# The footnote block under each record. Its labels render with the small-caps
+# glyphs as NUL bytes, so once those are stripped they read "F S:", "S O:",
+# "D:", "L:" -- Filing Status, Subholding Of, Description, Location.
+_FOOTNOTE_PREFIX = re.compile(r"^\s*(?:F\s+S\s*:|S\s+O\s*:|D\s*:|L\s*:)")
+
 # Common ticker pattern
 TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
 
@@ -285,15 +292,35 @@ class PTRParser:
     def _is_candidate_row(row: List[Any]) -> bool:
         """Whether a row looks like it should yield a transaction.
 
-        A record always carries a date or an amount somewhere; the footnote
-        rows that follow it carry neither. This is the denominator the
-        confidence score divides by, so getting it wrong would either hide
-        dropped rows or invent them.
+        This is the denominator the confidence score divides by, so getting it
+        wrong either hides dropped rows or invents them. Measured across 200
+        real filings, an earlier rule -- "has a date OR a dollar sign" -- marked
+        107 rows as unread transactions that were nothing of the kind:
+
+        * the "Cap. Gains > $200?" header, which wraps onto its own rows and
+          carries a dollar sign; and
+        * the footnote block beneath each record ("Filing Status", "Subholding
+          Of", "Description"), whose prose mentions figures like "$500,000" and
+          option strike prices.
+
+        A transaction always carries a trade date, and neither of those does, so
+        the date is the requirement and an amount alone is not enough. Tightening
+        it dropped 107 false candidates and exactly one "transaction": a row
+        reading `["[ST]", "$50,000"]` -- an asset-class code and the wrapped half
+        of an amount -- with no date, no type, and a $50,000 band invented from
+        one bound.
         """
-        joined = " ".join(str(cell) for cell in row if cell)
+        joined = " ".join(str(cell) for cell in row if cell).replace("\x00", "")
         if not joined.strip():
             return False
-        return bool(re.search(r"\d{1,2}/\d{1,2}/\d{2,4}", joined) or "$" in joined)
+
+        if not _DATE_PATTERN.search(joined):
+            return False
+
+        # A footnote block can still quote a date in its prose, so the date has
+        # to appear on a line that is not itself a footnote.
+        dated = [line for line in joined.split("\n") if _DATE_PATTERN.search(line)]
+        return any(not _FOOTNOTE_PREFIX.match(line) for line in dated)
 
     @staticmethod
     def _headers_recognised(headers: List[str]) -> bool:
@@ -406,9 +433,11 @@ class PTRParser:
         # Parse amount range
         amount_min, amount_max = self._parse_amount_range(amount_raw)
 
-        # A real transaction row always carries a date, and a row with neither a
-        # date nor an amount cannot be one whatever else it contains.
-        if txn_date is None and amount_min is None and amount_max is None:
+        # A real transaction row always carries a date. Accepting an amount
+        # instead let `["[ST]", "$50,000"]` -- an asset-class code and the
+        # wrapped half of a band -- through as a transaction with a $50,000
+        # amount and nothing else.
+        if txn_date is None:
             return None
 
         # Extract ticker
@@ -530,10 +559,21 @@ class PTRParser:
         for raw in lines:
             line = raw.rstrip()
             if pending is not None:
-                # The continuation carries the upper bound, sometimes prefixed
-                # by the asset-class tag that also wrapped.
+                # The continuation carries the upper bound, but rarely on its
+                # own: the asset name wraps too, so the line reads
+                # "Common Stock (ACI) [ST] $50,000" or "D Cumulative Perpetual
+                # Redeemable $50,000". Taking the whole tail leaves the two
+                # halves of the band separated by that text, and the range never
+                # matches -- which is why 60 of 200 real filings had a
+                # transaction with no amount at all. Take the first figure
+                # instead, and keep the rest so the description is not lost.
                 tail = re.sub(r"^\s*\[[A-Z]{1,5}\]\s*", "", line).strip()
-                joined.append(f"{pending} {tail}".strip())
+                bound = re.search(r"\$[\d,]+", tail)
+                if bound:
+                    rest = (tail[: bound.start()] + " " + tail[bound.end() :]).strip()
+                    joined.append(f"{pending} {bound.group(0)} {rest}".strip())
+                else:
+                    joined.append(f"{pending} {tail}".strip())
                 pending = None
                 continue
 
@@ -574,12 +614,23 @@ class PTRParser:
             re.IGNORECASE,
         )
 
-        # Extract transaction type
+        # Extract transaction type. Positionally first: the type column sits
+        # immediately before the date, so the token just before the first date
+        # is the type. Scanning the whole line for keywords instead made
+        # "Best Buy Co., Inc. Common Stock S 02/23/2024" a PURCHASE, because
+        # "Buy" is in the company name -- a disclosed sale recorded backwards.
         txn_type = None
-        for kw in BUY_KEYWORDS:
-            if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
-                txn_type = "purchase"
-                break
+        if date_match:
+            before = line[: date_match.start()].rstrip()
+            trailing = re.search(r"([A-Za-z]+)\s*$", before)
+            if trailing:
+                txn_type = self._parse_transaction_type(trailing.group(1))
+
+        if not txn_type:
+            for kw in BUY_KEYWORDS:
+                if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
+                    txn_type = "purchase"
+                    break
         if not txn_type:
             for kw in SELL_KEYWORDS:
                 if re.search(rf"\b{kw}\b", line, re.IGNORECASE):
@@ -605,9 +656,21 @@ class PTRParser:
         elif amount_match:
             description = line[: amount_match.start()].strip()
 
-        # Clean up description
-        for kw in BUY_KEYWORDS + SELL_KEYWORDS:
-            description = re.sub(rf"\b{kw}\b", "", description, flags=re.IGNORECASE)
+        # Strip the transaction-type token, and ONLY it. This used to remove
+        # every occurrence of every keyword anywhere in the description, so
+        # "Best Buy Co., Inc." became "Best Co., Inc." and "Purchase Point Media
+        # Corp" became "Point Media Corp" -- a company name mangled by the word
+        # it happens to contain, in a field that feeds sector classification and
+        # the opacity index.
+        #
+        # The type column sits immediately before the date, so the token to
+        # remove is the last one in the description and nothing else.
+        description = re.sub(
+            rf"\s*\b(?:{'|'.join(BUY_KEYWORDS + SELL_KEYWORDS + EXCHANGE_KEYWORDS)})\b\s*$",
+            "",
+            description,
+            flags=re.IGNORECASE,
+        )
         description = re.sub(r"\s+", " ", description).strip()
 
         if not description:
@@ -629,23 +692,36 @@ class PTRParser:
         }
 
     def _parse_transaction_type(self, text: str) -> str | None:
-        """Parse transaction type from text."""
+        """Parse transaction type from a Transaction Type cell.
+
+        The cell holds a one-letter code, sometimes with a qualifier: "P", "S",
+        "E", "S (partial)". The code is the first token, and reading it that way
+        is the whole fix here.
+
+        This used to test `keyword in text.lower()` as a plain substring, so
+        "S (partial)" matched the "p" of BUY_KEYWORDS inside the word "partial"
+        and a disclosed **sale was recorded as a purchase**. Direction is not
+        cosmetic: `contract_front_run` only looks at purchases, and the
+        cross-member cluster detector groups by it.
+        """
         if not text:
             return None
 
-        text_lower = text.lower().strip()
+        cleaned = text.lower().strip()
+        first = next((token for token in re.split(r"[^a-z]+", cleaned) if token), "")
 
-        for kw in BUY_KEYWORDS:
-            if kw in text_lower or text_lower == kw[0]:
-                return "purchase"
+        codes = {"p": "purchase", "s": "sale", "e": "exchange"}
+        if first in codes:
+            return codes[first]
 
-        for kw in SELL_KEYWORDS:
-            if kw in text_lower or text_lower == kw[0]:
-                return "sale"
-
-        for kw in EXCHANGE_KEYWORDS:
-            if kw in text_lower:
-                return "exchange"
+        for keywords, kind in (
+            (BUY_KEYWORDS, "purchase"),
+            (SELL_KEYWORDS, "sale"),
+            (EXCHANGE_KEYWORDS, "exchange"),
+        ):
+            for kw in keywords:
+                if re.search(rf"\b{re.escape(kw)}\b", cleaned):
+                    return kind
 
         return None
 

@@ -146,7 +146,7 @@ class TestGoldenFilings:
 
         parsed = _parse_tables(parser, filing)
         for txn, want in zip(parsed, expected, strict=True):
-            if want["amount"] is None:
+            if want["amount"] is None:  # pragma: no cover - none left in the corpus
                 # Two records in the corpus have an asset name that wraps across
                 # three lines, which interleaves it with the amount column and
                 # leaves no legible band. The parser must return nothing rather
@@ -159,6 +159,50 @@ class TestGoldenFilings:
                 assert txn["amount_min"] is not None or txn["amount_max"] is not None, (
                     f"{filing['document_id']}: no amount for {want['amount']!r}"
                 )
+
+    def test_the_direction_matches_the_filing(self, parser, filing):
+        """A sale recorded as a purchase is worse than a dropped row.
+
+        Two ways this went wrong on real filings, both fixed by reading the
+        type from where the form puts it rather than scanning for keywords:
+
+        * "Best Buy Co., Inc. Common Stock S 02/23/2024" parsed as a PURCHASE,
+          because "Buy" is in the company name.
+        * The Transaction Type cell "S (partial)" parsed as a PURCHASE, because
+          a substring test found the "p" inside "partial".
+
+        Direction is not cosmetic: `contract_front_run` only looks at purchases,
+        and the cross-member cluster detector groups by it.
+        """
+        codes = {"P": "purchase", "S": "sale", "E": "exchange"}
+        for txn, want in zip(
+            _parse_tables(parser, filing), filing["expected_transactions"], strict=True
+        ):
+            expected = codes.get((want["type"] or "")[:1])
+            if expected:
+                assert txn["transaction_type"] == expected, (
+                    f"{filing['document_id']}: filing says {want['type']}, "
+                    f"parsed {txn['transaction_type']} for {txn['description'][:40]!r}"
+                )
+
+    def test_a_company_name_containing_a_keyword_survives(self, parser):
+        """ "Best Buy" must keep the word Buy.
+
+        The description used to have every transaction keyword stripped from it
+        wherever it appeared, so "Best Buy Co., Inc." became "Best Co., Inc."
+        and "Purchase Point Media Corp" became "Point Media Corp" -- a company
+        name mangled by a word it happens to contain, in a field that feeds
+        sector classification and the opacity index.
+        """
+        got = parser._parse_text_line(
+            "Best Buy Co., Inc. Common Stock S 02/23/2024 $1,001 - $15,000"
+        )
+        assert got["description"] == "Best Buy Co., Inc. Common Stock"
+        assert got["transaction_type"] == "sale"
+
+        got = parser._parse_text_line("Purchase Point Media Corp S 01/02/2024 $1,001 - $15,000")
+        assert got["description"] == "Purchase Point Media Corp"
+        assert got["transaction_type"] == "sale"
 
     def test_no_asset_class_code_is_stored_as_a_ticker(self, parser, filing):
         for txn in _parse_tables(parser, filing):

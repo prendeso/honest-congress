@@ -51,7 +51,7 @@ from typing import Any, Dict, List, Set
 
 from sqlalchemy.orm import Session
 
-from src.analysis.sectors import SECTOR_TICKERS, classify, policy_area_sectors
+from src.analysis.sectors import SectorIndex, policy_area_sectors
 from src.db.models import (
     Bill,
     BillCommittee,
@@ -120,6 +120,7 @@ def _matching_trades(
     sectors: Set[str],
     event_date: Any,
     window_days: int,
+    index: SectorIndex,
 ) -> List[Transaction]:
     """Trades in `sectors` falling within `window_days` either side of the event."""
     delta = timedelta(days=window_days)
@@ -128,7 +129,7 @@ def _matching_trades(
     for txn in transactions:
         if txn.transaction_date is None or not (start <= txn.transaction_date <= end):
             continue
-        if classify(txn.ticker, txn.description) & sectors:
+        if index.classify(txn.ticker, txn.description) & sectors:
             matched.append(txn)
     return matched
 
@@ -145,6 +146,7 @@ def detect_sponsorship_conflicts(
     anomalies: List[Dict[str, Any]] = []
     by_member = _member_transactions(db)
     members = {m.id: m for m in db.query(Member).all()}
+    index = SectorIndex.from_db(db)
 
     sponsorships = (
         db.query(BillSponsorship, Bill)
@@ -165,7 +167,7 @@ def detect_sponsorship_conflicts(
         if member is None or not transactions:
             continue
 
-        matched = _matching_trades(transactions, sectors, bill.introduced_date, window_days)
+        matched = _matching_trades(transactions, sectors, bill.introduced_date, window_days, index)
         if not matched:
             continue
 
@@ -215,6 +217,7 @@ def detect_bill_jurisdiction_conflicts(
     anomalies: List[Dict[str, Any]] = []
     by_member = _member_transactions(db)
     members = {m.id: m for m in db.query(Member).all()}
+    index = SectorIndex.from_db(db)
 
     # member_id -> parent committee code -> the name to cite in the finding.
     seats: Dict[int, Dict[str, str]] = defaultdict(dict)
@@ -247,7 +250,9 @@ def detect_bill_jurisdiction_conflicts(
             if member is None or not transactions:
                 continue
 
-            matched = _matching_trades(transactions, sectors, referral.activity_date, window_days)
+            matched = _matching_trades(
+                transactions, sectors, referral.activity_date, window_days, index
+            )
             if not matched:
                 continue
 
@@ -308,6 +313,7 @@ def bills_worth_committee_lookup(
     FEC and LDA ingesters use.
     """
     by_member = _member_transactions(db)
+    index = SectorIndex.from_db(db)
 
     rows = (
         db.query(Bill, BillSponsorship.member_id)
@@ -330,7 +336,7 @@ def bills_worth_committee_lookup(
         transactions = by_member.get(member_id) or []
         # Widened, because the referral date is not yet known and sits somewhere
         # after introduction.
-        if _matching_trades(transactions, sectors, anchor, window_days * 2):
+        if _matching_trades(transactions, sectors, anchor, window_days * 2, index):
             candidates[bill.id] = bill
 
     selected = list(candidates.values())
@@ -355,12 +361,13 @@ def coverage_report(db: Session) -> Dict[str, Any]:
         if policy_area_sectors(area)
     )
 
+    index = SectorIndex.from_db(db)
     traded = {
         (t[0] or "").strip().upper()
         for t in db.query(Transaction.ticker).filter(Transaction.ticker.isnot(None)).distinct()
         if (t[0] or "").strip()
     }
-    known = {t for t in traded if any(t in symbols for symbols in SECTOR_TICKERS.values())}
+    known = {t for t in traded if index.classify(t)}
 
     return {
         "bills": total_bills,
@@ -368,6 +375,7 @@ def coverage_report(db: Session) -> Dict[str, Any]:
         "bills_mapped_to_a_sector": mapped,
         "distinct_traded_tickers": len(traded),
         "traded_tickers_with_a_known_sector": len(known),
+        "industry_codes_cached": len(index),
         "sponsorships": db.query(BillSponsorship)
         .filter(BillSponsorship.is_sponsor.is_(True))
         .count(),

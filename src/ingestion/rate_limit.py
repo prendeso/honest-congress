@@ -69,7 +69,14 @@ class RateLimiter:
 
         if len(self._times) >= self.limit:
             wait = self.window_seconds - (now - self._times[0])
-            logger.warning("%s quota reached; waiting %.0fs", self.name, wait)
+            # A per-second limiter fills its window constantly and by design;
+            # a per-hour one filling up is worth knowing about. Log on the size
+            # of the wait rather than on the fact of it, or a routine run buries
+            # the real warnings under hundreds of sub-second ones.
+            if wait >= 1:
+                logger.warning("%s quota reached; waiting %.0fs", self.name, wait)
+            else:
+                logger.debug("%s pacing; waiting %.2fs", self.name, wait)
             self._sleeper(wait)
             now = self._clock()
             self._evict(now)
@@ -119,6 +126,17 @@ class ThrottledClient:
         return {}
 
     def get(self, path: str, params: Dict[str, Any] | None = None) -> Dict[str, Any]:
+        """Fetch and decode JSON. Most of these APIs speak JSON; one does not."""
+        payload: Dict[str, Any] = self._request(path, params).json()
+        return payload
+
+    def _request(self, path: str, params: Dict[str, Any] | None = None) -> requests.Response:
+        """The throttled, retried request itself, decoded by the caller.
+
+        Separate from `get` because EDGAR's browse endpoint serves atom XML, and
+        the rate limiting and 429 handling should not have to be written twice
+        to accommodate that.
+        """
         if self.max_requests is not None and self.requests_made >= self.max_requests:
             raise RequestBudgetExhausted(
                 f"stopped after {self.requests_made} requests (--max-requests)"
@@ -151,8 +169,7 @@ class ThrottledClient:
                 continue
 
             response.raise_for_status()
-            payload: Dict[str, Any] = response.json()
-            return payload
+            return response
 
         raise requests.exceptions.RetryError(
             f"{self.name} still throttling after {MAX_RETRIES} attempts"

@@ -25,7 +25,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from src.analysis.sectors import classify, committee_sectors
+from src.analysis.sectors import SectorIndex, committee_sectors
 from src.db.models import CommitteeAssignment, Disclosure, Member, Transaction
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]
     anomalies: List[Dict[str, Any]] = []
 
     members = db.query(Member).all()
+    index = SectorIndex.from_db(db)
 
     for member in members:
         assignments = (
@@ -73,7 +74,7 @@ def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]
 
         by_sector: Dict[str, List[Transaction]] = defaultdict(list)
         for txn in transactions:
-            for sector in classify(txn.ticker, txn.description):
+            for sector in index.classify(txn.ticker, txn.description):
                 by_sector[sector].append(txn)
 
         total_trades = len(transactions)

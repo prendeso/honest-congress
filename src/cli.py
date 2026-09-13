@@ -485,6 +485,33 @@ def cmd_ingest_donations(args):
         )
 
 
+def cmd_sync_industries(args):
+    """Cache SEC industry codes for traded tickers."""
+    from src.ingestion.sec_industries import ingest_company_industries
+
+    scope = "every SEC registrant" if args.all else "tickers members have traded"
+    print(f"Looking up SEC industry codes for {scope}...")
+
+    with get_db() as db:
+        result = ingest_company_industries(
+            db, all_registrants=args.all, max_requests=args.max_requests
+        )
+
+    print("\nIndustry lookup complete:")
+    print(f"  Looked up: {result['looked_up']}")
+    print(
+        f"  Symbols that are not SEC registrants: {result['not_sec_registrants']}"
+        "  - funds, foreign listings, or symbols the PDF parser misread"
+    )
+    print(
+        f"  Tickers now carrying a sector: {result['tickers_with_a_sector']}"
+        f" of {result['cached_tickers']} cached"
+    )
+    print(f"  SEC requests used: {result['requests_made']}")
+    if result["stopped_early"]:
+        print("\n  Stopped at the request cap. Rerun to continue where it left off.")
+
+
 def cmd_ingest_bills(args):
     """Ingest bill sponsorship and committee referrals from Congress.gov."""
     from src.analysis.legislation import bills_worth_committee_lookup, coverage_report
@@ -974,6 +1001,23 @@ def main():
         help="Re-scan PACs already stored for this cycle (use after filings are amended)",
     )
     donations_parser.set_defaults(func=cmd_ingest_donations)
+
+    industries_parser = subparsers.add_parser(
+        "sync-industries",
+        help="Cache SEC industry codes so sector detectors see past ~70 large caps",
+    )
+    industries_parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Look up every SEC registrant (~8,000) rather than only traded tickers",
+    )
+    industries_parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="Stop after this many SEC requests; rerun to continue",
+    )
+    industries_parser.set_defaults(func=cmd_sync_industries)
 
     bills_parser = subparsers.add_parser(
         "ingest-bills",

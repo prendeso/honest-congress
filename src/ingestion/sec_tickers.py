@@ -161,6 +161,7 @@ class TickerResolver:
         self.session = session or requests.Session()
         self._index: Dict[str, str] = {}
         self._names: Dict[str, str] = {}
+        self._ciks: Dict[str, int] = {}
         self._loaded = False
 
     def load(self) -> int:
@@ -175,6 +176,7 @@ class TickerResolver:
 
         index: Dict[str, str] = {}
         names: Dict[str, str] = {}
+        ciks: Dict[str, int] = {}
         for entry in payload.values():
             ticker = (entry.get("ticker") or "").strip().upper()
             # The incorporation marker is stripped here too, not just in the
@@ -187,9 +189,14 @@ class TickerResolver:
                 # the larger issuer keeps an ambiguous name.
                 index.setdefault(key, ticker)
                 names.setdefault(ticker, title)
+                try:
+                    ciks.setdefault(ticker, int(entry["cik_str"]))
+                except (KeyError, TypeError, ValueError):
+                    pass
 
         self._index = index
         self._names = names
+        self._ciks = ciks
         self._loaded = True
         logger.info("Indexed %d companies from the SEC register", len(index))
         return len(index)
@@ -290,3 +297,13 @@ class TickerResolver:
         if not self._loaded:
             self.load()
         return self._names.get((ticker or "").strip().upper())
+
+    def ciks(self) -> Dict[str, int]:
+        """Ticker -> CIK, from the same register the name index is built from.
+
+        The CIK is what EDGAR's company endpoints are keyed on, so the industry
+        ingester needs it; the register already carries it and was discarding it.
+        """
+        if not self._loaded:
+            self.load()
+        return dict(self._ciks)

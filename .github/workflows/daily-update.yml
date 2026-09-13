@@ -96,6 +96,17 @@ jobs:
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
         run: python -m src.cli ingest-lobbying --year 2024
 
+      # Sector classification for every traded ticker. Must run before analyze:
+      # three detectors join a bill or a committee remit to a sector, and
+      # without this they see only the ~70 large caps in the hand-written list.
+      # Incremental -- only tickers not already cached.
+      - name: Sync SEC industry codes
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+          SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL }}
+        run: python -m src.cli sync-industries
+
       # The join to legislative action. `--sponsored-only` because cosponsorship
       # is ~20x more voluminous (one member: 71 sponsored, 1,562 cosponsored)
       # and no detector reads it yet -- fetching it nightly would spend roughly

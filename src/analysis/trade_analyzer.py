@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.analysis.sectors import SectorIndex
 from src.config import get_settings
 from src.db.models import Anomaly, Disclosure, Member, Transaction
 
@@ -14,69 +15,13 @@ logger = logging.getLogger(__name__)
 _settings = get_settings()
 
 # Sector keywords for classification
-SECTOR_KEYWORDS = {
-    "technology": [
-        "tech",
-        "software",
-        "computer",
-        "semiconductor",
-        "chip",
-        "apple",
-        "microsoft",
-        "google",
-        "meta",
-        "nvidia",
-        "amd",
-        "intel",
-    ],
-    "healthcare": [
-        "health",
-        "pharma",
-        "biotech",
-        "medical",
-        "drug",
-        "pfizer",
-        "moderna",
-        "johnson",
-        "merck",
-        "hospital",
-    ],
-    "finance": [
-        "bank",
-        "financial",
-        "insurance",
-        "capital",
-        "goldman",
-        "jpmorgan",
-        "wells fargo",
-        "citibank",
-        "visa",
-        "mastercard",
-    ],
-    "energy": ["oil", "gas", "energy", "exxon", "chevron", "shell", "solar", "wind", "renewable"],
-    "defense": [
-        "defense",
-        "military",
-        "aerospace",
-        "lockheed",
-        "raytheon",
-        "boeing",
-        "northrop",
-        "general dynamics",
-    ],
-    "telecom": ["telecom", "communications", "at&t", "verizon", "t-mobile", "comcast"],
-    "retail": ["retail", "amazon", "walmart", "target", "costco", "home depot"],
-    "real_estate": ["real estate", "reit", "property", "housing"],
-}
-
-# Committee to sector mapping
-COMMITTEE_SECTORS = {
-    "finance": ["finance", "banking"],
-    "technology": ["science", "technology", "commerce"],
-    "healthcare": ["health", "labor", "veterans"],
-    "defense": ["armed services", "defense", "intelligence", "homeland"],
-    "energy": ["energy", "natural resources", "environment"],
-}
+# Sector classification lives in one place: src/analysis/sectors.py. This module
+# used to carry its own keyword table -- a fifth copy, with sectors "retail" and
+# "real_estate" that exist nowhere else -- and matched it as an unanchored
+# substring against description + ticker concatenated together, so "gas" hit
+# "Las Vegas Sands". It also carried a COMMITTEE_SECTORS map with no callers at
+# all. Both are gone; `SectorIndex` classifies on the issuer's own SEC industry
+# code, which covers every registrant rather than a remembered handful.
 
 
 class TradeAnalyzer:
@@ -102,6 +47,8 @@ class TradeAnalyzer:
     ):
         self.ptr_deadline_days = ptr_deadline_days
         self.min_trades_for_concentration = min_trades_for_concentration
+        # Loaded lazily on first use, then reused across every member.
+        self._index: SectorIndex | None = None
         self.concentration_threshold_percent = concentration_threshold_percent
         self.frequency_threshold_per_month = frequency_threshold_per_month
         # The "late filing" detector previously fired on every PTR more than
@@ -215,7 +162,11 @@ class TradeAnalyzer:
         self._sync_large_trade_anomalies(db, member_id=member_id)
 
         anomalies.extend(self._check_late_filings(db, member_id, member))
-        anomalies.extend(self._check_sector_concentration(transactions, member_id, member))
+        anomalies.extend(
+            self._check_sector_concentration(
+                transactions, member_id, member, self._sector_index(db)
+            )
+        )
         anomalies.extend(self._check_trading_frequency(transactions, member_id, member))
         anomalies.extend(self._check_large_trades(transactions, member_id, member))
 
@@ -297,8 +248,22 @@ class TradeAnalyzer:
 
         return anomalies
 
+    def _sector_index(self, db: Session) -> SectorIndex:
+        """Load the industry codes once per analyzer, not once per member.
+
+        `analyze_all_members` walks every member in turn, and rebuilding this
+        for each of ~550 of them would turn one query into 550.
+        """
+        if self._index is None:
+            self._index = SectorIndex.from_db(db)
+        return self._index
+
     def _check_sector_concentration(
-        self, transactions: List[Transaction], member_id: int, member: Member
+        self,
+        transactions: List[Transaction],
+        member_id: int,
+        member: Member,
+        index: SectorIndex,
     ) -> List[Dict[str, Any]]:
         """Check if trades are unusually concentrated in a specific sector, per disclosure year."""
         anomalies = []
@@ -315,17 +280,17 @@ class TradeAnalyzer:
             if len(txns) < self.min_trades_for_concentration:
                 continue
 
-            # Classify transactions by sector
-            sector_counts = defaultdict(int)
+            # Classify transactions by sector. A trade spanning two sectors
+            # counts toward both rather than toward whichever the old table
+            # happened to list first.
+            sector_counts: Dict[str, int] = defaultdict(int)
             total_trades = 0
 
             for txn in txns:
-                desc = (txn.description or "").lower() + " " + (txn.ticker or "").lower()
-
-                for sector, keywords in SECTOR_KEYWORDS.items():
-                    if any(kw in desc for kw in keywords):
+                sectors = index.classify(txn.ticker, txn.description)
+                if sectors:
+                    for sector in sectors:
                         sector_counts[sector] += 1
-                        break
                 else:
                     sector_counts["other"] += 1
 

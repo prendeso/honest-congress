@@ -614,3 +614,44 @@ class BillCommittee(Base):
             unique=True,
         ),
     )
+
+
+class CompanyIndustry(Base):
+    """The industry code SEC has assigned an issuer.
+
+    Exists to lift the ceiling on every detector that joins a trade to a
+    committee remit or a bill's policy area. Those all ask what sector a holding
+    belongs to, and the answer came from a hand-written list of about 70
+    large-cap tickers -- so a member trading a mid-cap defense supplier was
+    invisible to all of them.
+
+    `sic` is SEC's own Standard Industrial Classification for the filer, read
+    from EDGAR. `sector` is this project's reading of it, via
+    `sectors.sector_for_sic`, cached here so a detector run is a dict lookup
+    rather than 440 prefix comparisons per trade. It is nullable: most SIC codes
+    describe industries no committee oversees, and storing the miss is what
+    stops the next run paying for the same lookup again.
+    """
+
+    __tablename__ = "company_industries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+
+    ticker: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    cik: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
+    sic: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    sic_description: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    company_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Null means "looked up, belongs to no sector we track" -- distinct from a
+    # ticker absent from this table, which means "never looked up".
+    sector: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<CompanyIndustry {self.ticker} sic={self.sic} sector={self.sector}>"

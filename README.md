@@ -51,6 +51,7 @@ python -m src.cli ingest-contracts   # USASpending (free, no key)
 python -m src.cli ingest-donations   # FEC (free key: api.data.gov/signup)
 python -m src.cli ingest-lobbying    # Senate LDA (key optional)
 python -m src.cli ingest-bills       # Congress.gov (free key: api.congress.gov/sign-up)
+python -m src.cli sync-industries    # SEC industry codes -> sector classification
 
 python -m src.cli analyze
 python -m src.cli stats              # what ran, and against how much data
@@ -71,6 +72,7 @@ anywhere in the pipeline, which is what makes the output redistributable.
 | FEC | `campaign_donations` | free, [api.data.gov](https://api.data.gov/signup/) — 1,000 requests/hour |
 | Senate LDA | `lobbying_disclosures` | optional, [lda.senate.gov](https://lda.senate.gov/api/register/) — raises ~15 req/min to ~120 |
 | Congress.gov | `bills`, `bill_sponsorships`, `bill_committees` | free, [api.congress.gov](https://api.congress.gov/sign-up/) — 20,000 requests/hour |
+| SEC EDGAR | `company_industries` | none, same `SEC_CONTACT_EMAIL` |
 
 `ingest-donations` costs more requests than one FEC hour allows, so it caps
 itself and resumes: rerunning skips the PACs already stored. Pass
@@ -83,6 +85,14 @@ detector reads it yet, so `--sponsored-only` is what the nightly job runs.
 Committee referrals cost one request per bill, so they are fetched only for
 bills that already matched a member's trading — on real data that narrowed
 10,980 bills to 26.
+
+`sync-industries` is what lets any of the sector-based detectors see past
+mega-caps. Three of them — `sponsorship_conflict`, `bill_jurisdiction_conflict`
+and `committee_jurisdiction_conflict` — join a bill or a committee remit to a
+*sector*, and the answer used to come from a hand-written list of about 70
+large-cap tickers. Measured on 300 unselected SEC-registered tickers, that list
+classifies 4 of them; the industry codes classify 156. It is incremental, so
+only new tickers cost a request.
 
 `/health` returns 503 if the database is unreachable; `/health/live`
 always returns 200 and is intended for liveness probes.

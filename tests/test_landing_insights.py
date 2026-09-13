@@ -145,11 +145,88 @@ class TestAmountsAreBands:
 
 
 class TestTheReadableShareIsStated:
-    def test_the_filings_card_says_how_many_could_not_be_read(self, client, seeded):
+    def test_the_filings_card_names_the_scan(self, client, seeded):
         card = next(c for c in _cards(client) if "iling" in c["title"])
 
         assert card["value"] == "2 filings"
-        assert card["description"].startswith("1 of them could not be read"), card["description"]
+        assert "1 is a scan of paper forms" in card["description"], card["description"]
+
+
+class TestAFilingNotYetReadIsNotCalledUnreadable:
+    """The card counted `parsed IS FALSE` as "could not be read at all — scans
+    of paper forms". A filing nobody has parsed yet is neither.
+
+    This is not hypothetical. `parse --limit` chunks the corpus deliberately,
+    so between dispatches the entire remaining queue sat in that count, and the
+    landing page told visitors those filings were unreadable scans. On a site
+    whose whole argument is that its numbers are checkable, the count of what
+    it admits it cannot read has to be true.
+    """
+
+    @pytest.fixture
+    def with_an_unread_filing(self, seeded):
+        db = SessionLocal()
+        member = db.query(Member).first()
+        db.add(
+            Disclosure(
+                member_id=member.id,
+                filing_year=2024,
+                filing_type="PTR",
+                filing_date=datetime(2024, 4, 1),
+                document_id="LI-QUEUED-1",
+                is_ptr=True,
+                parsed=False,
+            )
+        )
+        db.commit()
+        db.close()
+
+    def test_it_is_reported_as_queued_rather_than_unreadable(self, client, with_an_unread_filing):
+        card = next(c for c in _cards(client) if "iling" in c["title"])
+
+        assert card["value"] == "3 filings"
+        assert "not been read yet" in card["description"], card["description"]
+        assert "queued, not unreadable" in card["description"]
+
+    def test_it_is_not_counted_among_the_scans(self, client, with_an_unread_filing):
+        """The seeded corpus holds exactly one real scan. Adding an unparsed
+        filing must not make that two."""
+        card = next(c for c in _cards(client) if "iling" in c["title"])
+
+        assert "1 is a scan of paper forms" in card["description"], card["description"]
+        assert "2 are scans" not in card["description"]
+
+
+class TestAFilingReadWithoutResultIsNotCalledAScan:
+    """`has_text_layer` is a property of the document; a zero confidence score
+    with a text layer present is a limit of this parser. Reporting the second
+    as the first blames the filer for our own gap."""
+
+    @pytest.fixture
+    def with_an_empty_read(self, seeded):
+        db = SessionLocal()
+        member = db.query(Member).first()
+        db.add(
+            Disclosure(
+                member_id=member.id,
+                filing_year=2024,
+                filing_type="PTR",
+                filing_date=datetime(2024, 5, 1),
+                document_id="LI-EMPTY-1",
+                is_ptr=True,
+                parsed=True,
+                parse_confidence=0.0,
+                has_text_layer=True,
+            )
+        )
+        db.commit()
+        db.close()
+
+    def test_it_is_reported_as_read_but_yielding_nothing(self, client, with_an_empty_read):
+        card = next(c for c in _cards(client) if "iling" in c["title"])
+
+        assert "1 was read but yielded nothing" in card["description"], card["description"]
+        assert "1 is a scan of paper forms" in card["description"]
 
 
 class TestTheLateRateIsReported:

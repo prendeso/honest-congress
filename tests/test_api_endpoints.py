@@ -537,3 +537,64 @@ class TestParseConfidenceFiltering:
             for d in client.get("/api/disclosures/?max_confidence=0.5").json()["disclosures"]
         ]
         assert "CONF_UNSCORED" not in ids
+
+
+class TestTheParsedDocumentsPageHasSomethingToShow:
+    """`/api/disclosures` never returned the counts the page was reading.
+
+    The Parsed Documents table has three columns -- Assets, Transactions,
+    Liabilities -- and three sort controls over them, all bound to
+    `doc.asset_count`, `doc.transaction_count` and `doc.liability_count`. None
+    of those fields has ever been in the response, so every row on the page
+    whose entire subject is what was extracted read 0, 0, 0, and all three
+    sorts silently did nothing.
+
+    That is also the exact confusion D12 exists to remove: a filing read
+    cleanly and a filing that yielded nothing displayed identically.
+    """
+
+    def test_the_list_reports_what_was_extracted(self, client, seeded_db):
+        body = client.get("/api/disclosures").json()
+        doc = next(d for d in body["disclosures"] if d["document_id"] == "DOC1")
+
+        # The fixture seeds one transaction and one asset against DOC1, and no
+        # liability -- so this distinguishes a real count from a constant.
+        assert doc["transaction_count"] == 1
+        assert doc["asset_count"] == 1
+        assert doc["liability_count"] == 0
+
+    def test_the_detail_view_agrees_with_the_list(self, client, seeded_db):
+        listed = next(
+            d
+            for d in client.get("/api/disclosures").json()["disclosures"]
+            if d["document_id"] == "DOC1"
+        )
+        detail = client.get(f"/api/disclosures/{listed['id']}").json()
+
+        assert detail["transaction_count"] == len(detail["transactions"])
+        assert detail["asset_count"] == len(detail["assets"])
+        assert detail["liability_count"] == len(detail["liabilities"])
+
+    def test_counting_does_not_cost_a_query_per_row(self, client, seeded_db):
+        """Three grouped queries, not three per filing.
+
+        Fifty rows a page times three counts is a hundred and fifty round trips
+        to render one table, and the naive fix is the one that gets written.
+        """
+        from sqlalchemy import event
+
+        from src.db import engine
+
+        statements: list[str] = []
+
+        def record(conn, cursor, statement, params, context, executemany):
+            statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            client.get("/api/disclosures?page_size=50")
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+
+        counting = [s for s in statements if "count(" in s.lower() and "GROUP BY" in s]
+        assert len(counting) <= 3, f"{len(counting)} grouped count queries: {counting}"

@@ -1,15 +1,58 @@
 """Disclosure API endpoints."""
 
 from datetime import datetime
-from typing import List
+from typing import Any, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.db import Asset, Disclosure, Liability, Member, Transaction, get_db_session
 
 router = APIRouter()
+
+
+def _extracted_counts(db: Session, disclosure_ids: List[int]) -> dict[int, tuple[int, int, int]]:
+    """How many rows were actually extracted from each filing on this page.
+
+    Three grouped queries rather than three per row: the page shows fifty
+    filings, and the N+1 version would be a hundred and fifty round trips to
+    render one table.
+
+    These counts are the page's whole subject and they were never served. The
+    Parsed Documents table read `doc.asset_count`, `doc.transaction_count` and
+    `doc.liability_count` from a response that has never contained any of them,
+    so every row showed 0, 0, 0 and all three column sorts did nothing. A
+    filing read cleanly and a filing that yielded nothing displayed identically
+    -- which is the exact confusion D12 exists to remove, on the one page whose
+    entire subject is what was extracted.
+    """
+    if not disclosure_ids:
+        return {}
+
+    assets = _count_by_disclosure(db, Asset, disclosure_ids)
+    transactions = _count_by_disclosure(db, Transaction, disclosure_ids)
+    liabilities = _count_by_disclosure(db, Liability, disclosure_ids)
+
+    return {
+        doc_id: (
+            assets.get(doc_id, 0),
+            transactions.get(doc_id, 0),
+            liabilities.get(doc_id, 0),
+        )
+        for doc_id in disclosure_ids
+    }
+
+
+def _count_by_disclosure(db: Session, model: Any, disclosure_ids: List[int]) -> dict[int, int]:
+    rows = (
+        db.query(model.disclosure_id, func.count(model.id))
+        .filter(model.disclosure_id.in_(disclosure_ids))
+        .group_by(model.disclosure_id)
+        .all()
+    )
+    return {disclosure_id: count for disclosure_id, count in rows}
 
 
 def _normalized_document_url(disclosure: Disclosure) -> str | None:
@@ -102,6 +145,12 @@ class DisclosureResponse(BaseModel):
     # is the document's doing, not the parser's -- about one House PTR in eight
     # is a scan of a paper form. Null means nobody has checked.
     has_text_layer: bool | None = None
+    # What was actually extracted. Zero transactions on a PTR is a failed parse
+    # rather than a quiet quarter, and these counts beside `parse_confidence`
+    # are how a reader can see that for themselves.
+    asset_count: int = 0
+    transaction_count: int = 0
+    liability_count: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -222,6 +271,7 @@ async def list_disclosures(
 
     # Apply pagination
     disclosures = query.offset((page - 1) * page_size).limit(page_size).all()
+    counts = _extracted_counts(db, [d.id for d in disclosures])
 
     return DisclosureListResponse(
         total=total,
@@ -242,6 +292,9 @@ async def list_disclosures(
                 parse_confidence=d.parse_confidence,
                 parse_warnings=d.parse_warnings,
                 has_text_layer=d.has_text_layer,
+                asset_count=counts.get(d.id, (0, 0, 0))[0],
+                transaction_count=counts.get(d.id, (0, 0, 0))[1],
+                liability_count=counts.get(d.id, (0, 0, 0))[2],
             )
             for d in disclosures
         ],
@@ -287,6 +340,10 @@ async def get_disclosure(
         parse_confidence=disclosure.parse_confidence,
         parse_warnings=disclosure.parse_warnings,
         has_text_layer=disclosure.has_text_layer,
+        # Already in hand from the rows above, so no extra query.
+        asset_count=len(assets),
+        transaction_count=len(transactions),
+        liability_count=len(liabilities),
         total_assets_min=total_min,
         total_assets_max=total_max,
         assets=[

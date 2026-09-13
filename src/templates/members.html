@@ -107,8 +107,9 @@
                                     <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('disclosures')">
                                         Disclosures <span x-show="sortField === 'disclosures'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                     </th>
-                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('anomalies')">
-                                        Anomalies <span x-show="sortField === 'anomalies'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                    <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('anomalies')"
+                                        title="How many patterns this member's filings matched. It counts thresholds crossed, not wrongdoing, and it tracks how much a member trades more than anything else.">
+                                        Flags <span x-show="sortField === 'anomalies'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                     </th>
                                     <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('status')">
                                         Status <span x-show="sortField === 'status'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
@@ -136,7 +137,12 @@
                                         <td class="px-4 py-3" x-text="(member.district && member.district !== -1) ? member.district : '-'"></td>
                                         <td class="px-4 py-3" x-text="member.disclosure_count || 0"></td>
                                         <td class="px-4 py-3">
-                                            <span :class="member.anomaly_count > 0 ? 'bg-red-100 text-red-800 font-bold' : 'text-gray-500'"
+                                            <!-- Not bold red. A flag count is dominated by how
+                                                 much a member trades -- a frequent filer trips
+                                                 large_trade, volume_spikes, trade_clustering and
+                                                 high_trading_frequency repeatedly -- and an alarm
+                                                 colour turns that into a ranking of people. -->
+                                            <span :class="member.anomaly_count > 0 ? 'bg-gray-100 text-gray-800' : 'text-gray-400'"
                                                   class="px-2 py-1 rounded text-sm"
                                                   x-text="member.anomaly_count || 0"></span>
                                         </td>
@@ -218,17 +224,43 @@
                             <div class="space-y-3 max-h-[400px] overflow-y-auto">
                                 <template x-for="anomaly in memberAnomalies" :key="anomaly.id">
                                     <div class="border rounded-lg p-3">
-                                        <div class="flex items-center justify-between">
+                                        <div class="flex items-center justify-between gap-2">
                                             <div class="font-semibold text-gray-800" x-text="anomaly.title || anomaly.anomaly_type"></div>
-                                            <span class="text-xs px-2 py-0.5 rounded" :class="{
-                                                'bg-red-100 text-red-800': anomaly.severity === 'high',
-                                                'bg-yellow-100 text-yellow-800': anomaly.severity === 'medium',
-                                                'bg-green-100 text-green-800': anomaly.severity === 'low'
-                                            }" x-text="anomaly.severity"></span>
+                                            <div class="flex items-center gap-1 shrink-0">
+                                                <!-- The same three badges the anomalies page shows.
+                                                     Severity is a threshold; whether a finding
+                                                     survived correction is the other question, and
+                                                     this list used to answer only the first --
+                                                     so the same finding looked tested there and
+                                                     merely severe here. -->
+                                                <template x-if="anomaly.q_value !== null && anomaly.q_value !== undefined">
+                                                    <span class="text-[11px] px-2 py-0.5 rounded bg-emerald-100 text-emerald-800"
+                                                          title="Survived correction for every test in the run.">
+                                                        q = <span x-text="formatP(anomaly.q_value)"></span>
+                                                    </span>
+                                                </template>
+                                                <template x-if="(anomaly.q_value === null || anomaly.q_value === undefined) && anomaly.has_null_model">
+                                                    <span class="text-[11px] px-2 py-0.5 rounded bg-amber-100 text-amber-900"
+                                                          title="Tested against a shifted-calendar null and did not survive at the run's false-discovery rate.">did not survive</span>
+                                                </template>
+                                                <template x-if="!anomaly.has_null_model">
+                                                    <span class="text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-700"
+                                                          title="No null model exists for this category -- it measures a magnitude, not a coincidence in timing. Untested, not passed.">not tested</span>
+                                                </template>
+                                                <span class="text-xs px-2 py-0.5 rounded" :class="{
+                                                    'bg-red-100 text-red-800': anomaly.severity === 'high',
+                                                    'bg-yellow-100 text-yellow-800': anomaly.severity === 'medium',
+                                                    'bg-green-100 text-green-800': anomaly.severity === 'low'
+                                                }" x-text="anomaly.severity"></span>
+                                            </div>
                                         </div>
                                         <div class="text-sm text-gray-600 mt-1" x-text="anomaly.description || 'No description available.'"></div>
+                                        <div class="text-xs text-gray-500 mt-1">
+                                            <span class="font-medium">Cannot show:</span>
+                                            <span x-text="limitsFor(anomaly.anomaly_type)"></span>
+                                        </div>
                                         <div class="text-xs text-gray-500 mt-2">
-                                            <span x-text="anomaly.anomaly_type"></span>
+                                            <span x-text="nameFor(anomaly.anomaly_type)"></span>
                                             <span class="mx-1">•</span>
                                             <span x-text="anomaly.filing_year || '-'"></span>
                                             <span class="mx-1">•</span>
@@ -355,10 +387,37 @@
                 anomaliesLoading: false,
                 selectedMember: null,
                 memberAnomalies: [],
+                detectorTypes: [],
 
                 async init() {
                     console.log('[Members] Initializing...');
-                    await this.loadMembers();
+                    await Promise.all([this.loadDetectorTypes(), this.loadMembers()]);
+                },
+
+                // The detector catalogue, so this page names a finding the way
+                // the anomalies page does and can say what it cannot show.
+                // Neither is duplicated here; both come from the server.
+                async loadDetectorTypes() {
+                    try {
+                        this.detectorTypes = await fetch('/api/anomalies/types').then(r => r.json());
+                    } catch (e) { console.error('Detector types error:', e); }
+                },
+
+                detectorFor(type) {
+                    return this.detectorTypes.find(d => d.anomaly_type === type) || {
+                        name: type,
+                        limits: 'Unknown -- this category is not in the current catalogue.'
+                    };
+                },
+
+                nameFor(type) { return this.detectorFor(type).name; },
+
+                limitsFor(type) { return this.detectorFor(type).limits; },
+
+                formatP(value) {
+                    if (value === null || value === undefined) return 'n/a';
+                    if (value < 0.001) return '< 0.001';
+                    return value.toPrecision(2);
                 },
 
                 formatDate(value) {

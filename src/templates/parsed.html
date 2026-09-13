@@ -18,7 +18,7 @@
                     </p>
                     <p class="text-teal-800 text-sm mt-2">
                         Appearing here means the parser ran, not that it worked. The
-                        <strong>Read</strong> column says how much of each document it managed to
+                        <strong>Status</strong> column says how much of each document it managed to
                         extract, and names the filings that are scans of paper forms &mdash; those
                         hold no machine-readable text at all, so their zeroes are the form&rsquo;s
                         doing rather than the parser&rsquo;s.
@@ -98,7 +98,7 @@
                                     </th>
                                     <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('confidence')"
                                         title="How much of the document the parser actually read. A filing being listed here only ever meant the parser ran without raising.">
-                                        Read <span x-show="sortField === 'confidence'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
+                                        Status <span x-show="sortField === 'confidence'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
                                     </th>
                                     <th class="px-4 py-3 text-left text-sm font-medium text-gray-500 cursor-pointer hover:bg-gray-100" @click="sortBy('filing_date')">
                                         Filing Date <span x-show="sortField === 'filing_date'" x-text="sortOrder === 'asc' ? '↑' : '↓'"></span>
@@ -135,10 +135,10 @@
                                                 </span>
                                             </template>
                                             <template x-if="doc.has_text_layer !== false">
-                                                <span :class="confidenceClass(doc.parse_confidence)"
+                                                <span :class="readClass(doc.parse_confidence)"
                                                       class="px-2 py-0.5 rounded text-xs"
                                                       :title="doc.parse_warnings || 'No warnings recorded.'"
-                                                      x-text="confidenceLabel(doc.parse_confidence)"></span>
+                                                      x-text="readLabel(doc.parse_confidence)"></span>
                                             </template>
                                         </td>
                                         <td class="px-4 py-3" x-text="doc.filing_date ? new Date(doc.filing_date).toLocaleDateString() : '-'"></td>
@@ -290,15 +290,17 @@
                     }
                 },
 
-                // "Not scored" is its own answer. A filing parsed before scoring
-                // existed has no number, and showing 0% for it would assert a
-                // failure that was never observed.
-                confidenceLabel(value) {
+                // Identical to the Trades and Disclosures pages on purpose: the
+                // three list overlapping filings and must not disagree about
+                // how well one was read. "Not scored" is its own answer -- a
+                // filing parsed before scoring existed has no number, and
+                // showing 0% would assert a failure nobody observed.
+                readLabel(value) {
                     if (value === null || value === undefined) return 'not scored';
-                    return Math.round(value * 100) + '%';
+                    return 'read ' + Math.round(value * 100) + '%';
                 },
 
-                confidenceClass(value) {
+                readClass(value) {
                     if (value === null || value === undefined) return 'bg-gray-100 text-gray-600';
                     if (value === 0) return 'bg-red-100 text-red-800';
                     if (value < 0.8) return 'bg-amber-100 text-amber-900';

@@ -47,3 +47,41 @@ def test_inline_scripts_parse(template):
 def test_at_least_one_template_has_a_script():
     """Guard against the regex silently matching nothing and every test passing."""
     assert any(SCRIPT.search(t.read_text()) for t in TEMPLATES)
+
+
+READ_STATUS_PAGES = ("trades.html", "parsed.html", "disclosures.html")
+
+
+def _helper(source: str, name: str) -> str:
+    """The body of one helper function from an inline script."""
+    start = source.index(f"{name}(value) {{")
+    depth = 0
+    for offset, char in enumerate(source[start:], start):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return re.sub(r"\s+", " ", source[start : offset + 1])
+    raise AssertionError(f"{name} has unbalanced braces")
+
+
+@pytest.mark.parametrize("name", ["readLabel", "readClass"])
+def test_the_three_filing_lists_agree_on_how_well_a_filing_was_read(name):
+    """Trades, Parsed Documents and Disclosures list overlapping filings.
+
+    Each keeps its own copy of these two helpers, because the pages have no
+    build step and no shared script file to put them in. Copies drift, and a
+    drifted copy here means the same filing is 79% on one page and amber-warned
+    on another. This pins them to each other instead.
+    """
+    bodies = {
+        page: _helper((Path("src/templates") / page).read_text(), name)
+        for page in READ_STATUS_PAGES
+    }
+
+    distinct = set(bodies.values())
+    assert len(distinct) == 1, (
+        f"{name} differs between pages that list the same filings: "
+        + "; ".join(f"{page}: {body}" for page, body in bodies.items())
+    )

@@ -154,6 +154,43 @@ class Settings(BaseSettings):
     def _normalize_env(cls, v: str) -> str:
         return (v or "dev").strip().lower()
 
+    @field_validator("sec_contact_email", mode="before")
+    @classmethod
+    def _blank_contact_falls_back_to_the_default(cls, v: object) -> object:
+        """An environment variable set to "" is not the same as one left unset.
+
+        A GitHub workflow that writes `SEC_CONTACT_EMAIL: ${{ secrets.X }}` for a
+        secret that does not exist sets the variable to the EMPTY STRING, which
+        overrides this field's default instead of leaving it in place. The
+        User-Agent then reads "honest-congress " with no address, and SEC answers
+        403 -- a result this repository has already measured and written down in
+        src/ingestion/sec_tickers.py.
+
+        The consequence was not a loud failure. The ticker register came back
+        empty, so TickerResolver resolved nothing, so every USASpending award and
+        every LDA lobbying filing was discarded as unresolvable, so two detectors
+        that need no API key at all sat permanently dark while their workflow
+        steps reported success in about a second each.
+
+        Falling back here rather than only in the workflows covers Railway and
+        any other caller that passes a blank through. The API-key fields need no
+        such treatment: their default is already "", so blank and absent mean the
+        same thing and both fail loudly at the point of use.
+        """
+        if isinstance(v, str) and not v.strip():
+            return "contact@example.com"
+        return v
+
+    @field_validator("congress_gov_api_key", "fec_api_key", "lda_api_key", mode="before")
+    @classmethod
+    def _strip_credential_whitespace(cls, v: object) -> object:
+        """A secret pasted with a trailing newline is not the secret.
+
+        It authenticates as a subtly wrong string and the upstream rejects it,
+        which reads like a bad key rather than a stray character.
+        """
+        return v.strip() if isinstance(v, str) else v
+
 
 @lru_cache
 def get_settings() -> Settings:

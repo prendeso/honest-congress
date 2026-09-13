@@ -74,7 +74,7 @@ class Settings(BaseSettings):
             return set()
         return {t.strip() for t in raw.split(",") if t.strip()}
 
-    # Multiple-comparisons control. The suite runs sixteen detectors against
+    # Multiple-comparisons control. The suite runs seventeen detectors against
     # every member, so some of what it flags is what running thousands of tests
     # over hundreds of people produces. `fdr_alpha` is the false-discovery rate
     # the API filters at; `significance_permutations` is how many shifted

@@ -1,0 +1,82 @@
+{
+  "ptr": {
+    "recordsTotal": 141,
+    "data": [
+      [
+        "David H",
+        "McCormick",
+        "McCormick, David H. (Senator)",
+        "<a href=\"/search/view/ptr/e337e1b4-ff0a-4b83-8a58-1d25a81ea26f/\" target=\"_blank\">Periodic Transaction Report for 12/26/2025</a>",
+        "12/26/2025"
+      ],
+      [
+        "RICHARD ",
+        "BLUMENTHAL",
+        "Senator",
+        "<a href=\"/search/view/paper/13a0fc2a-bbbb-4c1b-b380-d315e198d2a3/\" target=\"_blank\">Periodic Transaction Report for 12/22/2025</a>",
+        "12/22/2025"
+      ],
+      [
+        "A. Mitchell",
+        "McConnell, Jr.",
+        "McConnell, A. Mitchell Jr. (Senator)",
+        "<a href=\"/search/view/ptr/30986bcb-c94b-406a-8c4c-2927590e1d22/\" target=\"_blank\">Periodic Transaction Report for 12/19/2025</a>",
+        "12/19/2025"
+      ],
+      [
+        "John",
+        "Fetterman",
+        "Fetterman, John (Senator)",
+        "<a href=\"/search/view/ptr/f18410ed-0a48-4ed1-ace6-a8b90cf88b7f/\" target=\"_blank\">Periodic Transaction Report for 12/12/2025</a>",
+        "12/12/2025"
+      ],
+      [
+        "RICHARD ",
+        "BLUMENTHAL",
+        "Senator",
+        "<a href=\"/search/view/paper/16afdd38-c0ec-4e37-bc05-cbd82901b43f/\" target=\"_blank\">Periodic Transaction Report for 12/12/2025</a>",
+        "12/12/2025"
+      ]
+    ]
+  },
+  "annual": {
+    "recordsTotal": 119,
+    "data": [
+      [
+        "Marsha",
+        "Blackburn",
+        "Blackburn, Marsha (Senator)",
+        "<a href=\"/search/view/annual/8c41ca4c-ccda-483e-99ed-d7f27f8a5c8f/\" target=\"_blank\">Annual Report for CY 2024 (Amendment 1)</a>",
+        "11/04/2025"
+      ],
+      [
+        "Elissa",
+        "Slotkin",
+        "Slotkin, Elissa (Senator)",
+        "<a href=\"/search/view/annual/25bb47de-6695-4a3e-8714-49df656bc5fa/\" target=\"_blank\">Annual Report for CY 2024 (Amendment 1)</a>",
+        "10/10/2025"
+      ],
+      [
+        "Angela D",
+        "Alsobrooks",
+        "Alsobrooks, Angela (Senator)",
+        "<a href=\"/search/view/annual/784c560e-2a5a-404a-8dcc-387a2f726ce7/\" target=\"_blank\">Annual Report for CY 2024 (Amendment 1)</a>",
+        "09/10/2025"
+      ],
+      [
+        "David H",
+        "McCormick",
+        "McCormick, David H. (Senator)",
+        "<a href=\"/search/view/annual/f0dda451-74f3-4b34-b6a9-71a8c593fbae/\" target=\"_blank\">Annual Report for CY 2024</a>",
+        "08/13/2025"
+      ],
+      [
+        "Katie",
+        "Britt",
+        "Britt, Katie (Senator)",
+        "<a href=\"/search/view/annual/d5afe8e9-b8b3-4265-9075-7935cbb7ba0b/\" target=\"_blank\">Annual Report for CY 2024</a>",
+        "08/13/2025"
+      ]
+    ]
+  }
+}

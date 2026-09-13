@@ -14,11 +14,12 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from src.analysis.compliance import compliance_leaderboard
 from src.api.templating import templates
-from src.db import Anomaly, Disclosure, Member, Transaction, get_db_session
+from src.db import Anomaly, Disclosure, Transaction, get_db_session
 
 router = APIRouter()
 
@@ -90,95 +91,117 @@ async def compliance_page(request: Request) -> HTMLResponse:
 
 @router.get("/api/insights", tags=["Insights"])
 async def get_insights(db: Session = Depends(get_db_session)) -> list[dict[str, Any]]:
-    """Get interesting facts and insights from congressional data."""
+    """Headline figures for the landing page.
+
+    Rewritten because the landing page is the first thing a visitor sees and
+    two of its four cards said things this project does not support.
+
+    "Most Flagged Member" named one real person, in the hero, as the member
+    with the most anomalies. A flag count is not a fact about a person: it is
+    dominated by trading volume, because a member who files a lot of trades
+    trips `large_trade`, `volume_spikes`, `trade_clustering` and
+    `high_trading_frequency` over and over. Presenting that as a ranking of
+    members, above the fold, with no q-value and no caveat, is the exact thing
+    the rest of the codebase spends its time refusing to do. It is gone.
+
+    "Largest Single Trade: $5,000,000" read `amount_max` -- the UPPER BOUND of
+    a disclosed band -- and printed it as a figure. The filing said
+    $1,000,001-$5,000,000 and the page said five million. Bands are reported as
+    bands here now, which is the oldest rule in this project.
+
+    What is left is arithmetic over public filings: how much was read, how much
+    was filed late, how many findings survive correction, and the largest
+    disclosed band.
+    """
     insights: list[dict[str, Any]] = []
 
     try:
-        top_anomalies_members = (
-            db.query(
-                Member.first_name,
-                Member.last_name,
-                func.count(Anomaly.id).label("anomaly_count"),
+        filings = db.query(func.count(Disclosure.id)).scalar() or 0
+        if filings:
+            unreadable = (
+                db.query(func.count(Disclosure.id))
+                .filter(
+                    or_(
+                        Disclosure.parsed.is_(False),
+                        Disclosure.has_text_layer.is_(False),
+                        Disclosure.parse_confidence == 0.0,
+                    )
+                )
+                .scalar()
+                or 0
             )
-            .join(Anomaly, Member.id == Anomaly.member_id)
-            .group_by(Member.id, Member.first_name, Member.last_name)
-            .order_by(func.count(Anomaly.id).desc())
-            .limit(1)
-            .first()
-        )
-
-        if top_anomalies_members:
-            member_name = f"{top_anomalies_members[0]} {top_anomalies_members[1]}"
             insights.append(
                 {
                     "id": 1,
-                    "icon": "🚨",
-                    "title": "Most Flagged Member",
-                    "description": "Member with the highest number of detected anomalies",
-                    "value": f"{member_name} ({top_anomalies_members[2]} flags)",
+                    "icon": "📄",
+                    "title": "Filings analysed",
+                    "description": (
+                        f"{unreadable:,} of them could not be read at all — scans of paper "
+                        "forms, mostly, which hold no machine-readable text. Nothing in "
+                        "those filings appears anywhere on this site."
+                    ),
+                    "value": f"{filings:,} filings",
                 }
             )
 
-        largest_trade = (
-            db.query(
-                Transaction.description,
-                Transaction.amount_max,
-                Member.first_name,
-                Member.last_name,
-            )
-            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-            .join(Member, Disclosure.member_id == Member.id)
-            .order_by(Transaction.amount_max.desc())
-            .first()
-        )
-
-        if largest_trade and largest_trade[1]:
-            amount = int(largest_trade[1])
+        # The most defensible number here: two dates that both appear on the
+        # filing, subtracted. No threshold anybody chose.
+        late = compliance_leaderboard(db, min_transactions=1)
+        if late["total_transactions_checked"]:
             insights.append(
                 {
                     "id": 2,
-                    "icon": "📈",
-                    "title": "Largest Single Trade",
-                    "description": "Highest value stock trade on record",
-                    "value": f"${amount:,}",
+                    "icon": "⏱️",
+                    "title": "Reported after the deadline",
+                    "description": (
+                        f"Share of {late['total_transactions_checked']:,} disclosed trades "
+                        f"filed more than {late['deadline_days']} days after the trade, "
+                        "which is what the STOCK Act allows."
+                    ),
+                    "value": f"{late['overall_late_rate_percent']}%",
                 }
             )
 
-        most_active = (
-            db.query(
-                Member.first_name,
-                Member.last_name,
-                func.count(Transaction.id).label("trade_count"),
-            )
-            .join(Disclosure, Member.id == Disclosure.member_id)
-            .join(Transaction, Disclosure.id == Transaction.disclosure_id)
-            .group_by(Member.id, Member.first_name, Member.last_name)
-            .order_by(func.count(Transaction.id).desc())
-            .limit(1)
+        largest = (
+            db.query(Transaction.amount_min, Transaction.amount_max)
+            .filter(Transaction.amount_max.isnot(None))
+            .order_by(Transaction.amount_max.desc())
             .first()
         )
-
-        if most_active:
-            member_name = f"{most_active[0]} {most_active[1]}"
+        if largest:
+            low, high = largest
+            # A band, said as a band. The filing does not contain a figure.
+            band = f"${int(high):,}" if low is None else f"${int(low):,}–${int(high):,}"
             insights.append(
                 {
                     "id": 3,
-                    "icon": "📊",
-                    "title": "Most Active Trader",
-                    "description": "Member with highest frequency of stock trades",
-                    "value": f"{member_name} ({most_active[2]} trades)",
+                    "icon": "📈",
+                    "title": "Largest disclosed trade",
+                    "description": (
+                        "STOCK Act filings report a range, never an amount, and never a "
+                        "share count. This is the widest band anyone disclosed, not a sum "
+                        "anyone was paid."
+                    ),
+                    "value": band,
                 }
             )
 
-        disclosure_count = db.query(func.count(Disclosure.id)).scalar()
-        if disclosure_count:
+        findings = db.query(func.count(Anomaly.id)).scalar() or 0
+        if findings:
+            survived = (
+                db.query(func.count(Anomaly.id)).filter(Anomaly.q_value.isnot(None)).scalar() or 0
+            )
             insights.append(
                 {
                     "id": 4,
-                    "icon": "📄",
-                    "title": "Total Disclosures Analyzed",
-                    "description": "Financial and transaction disclosure reports processed",
-                    "value": f"{disclosure_count:,} filings",
+                    "icon": "🔍",
+                    "title": "Findings that survive correction",
+                    "description": (
+                        f"Of {findings:,} patterns flagged, these are the ones still "
+                        "standing after correcting for every test the run performed. A "
+                        "pattern is not a finding of wrongdoing."
+                    ),
+                    "value": f"{survived:,}",
                 }
             )
 

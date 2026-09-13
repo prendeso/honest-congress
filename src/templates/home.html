@@ -11,7 +11,13 @@
         <div class="container mx-auto px-4 py-12 text-white">
             <div class="text-center mb-12">
                 <h2 class="text-5xl font-bold mb-4">Track Congressional Financial Activity</h2>
-                <p class="text-xl text-blue-200">Analyzing disclosures, trades, and anomalies in Congress</p>
+                <p class="text-xl text-blue-200">Official disclosures, read as carefully as we can manage</p>
+                <p class="text-blue-200/80 text-sm mt-4 max-w-2xl mx-auto">
+                    Everything here comes from filings members of Congress are required to
+                    publish. A flag on this site is a pattern in those filings, not a finding
+                    of wrongdoing &mdash; each one says what it cannot show, and the ones that
+                    survive correction for multiple comparisons are marked.
+                </p>
             </div>
 
             <!-- Stats Cards -->
@@ -32,9 +38,9 @@
                     <div class="text-sm text-gray-500 mt-1">PTR filings</div>
                 </a>
                 <a href="/anomalies" class="glass-card rounded-xl shadow-lg p-6 text-gray-800 hover:scale-105 transition transform cursor-pointer">
-                    <div class="text-gray-600 text-sm font-medium uppercase">Anomalies</div>
+                    <div class="text-gray-600 text-sm font-medium uppercase">Flags</div>
                     <div class="text-4xl font-bold text-red-600 mt-2" x-text="stats.totalAnomalies || '...'"></div>
-                    <div class="text-sm text-gray-500 mt-1">Flags detected</div>
+                    <div class="text-sm text-gray-500 mt-1">Patterns flagged, not accusations</div>
                 </a>
             </div>
 
@@ -102,24 +108,12 @@
                             this.insights = await response.json();
                         }
                     } catch (e) {
+                        // Show nothing rather than invented headlines. This used to
+                        // fall back to two hardcoded cards -- "Most Active Traders",
+                        // "Anomalies Detected" -- that looked like findings and were
+                        // not computed from anything at all.
                         console.error('Error loading insights:', e);
-                        // Set default insights if API fails
-                        this.insights = [
-                            {
-                                id: 1,
-                                icon: '📊',
-                                title: 'Most Active Traders',
-                                description: 'Members with the highest frequency of stock trades',
-                                value: 'View Analysis'
-                            },
-                            {
-                                id: 2,
-                                icon: '🚨',
-                                title: 'Anomalies Detected',
-                                description: 'Unusual trading patterns and timing anomalies',
-                                value: 'Learn More'
-                            }
-                        ];
+                        this.insights = [];
                     }
                 }
             };

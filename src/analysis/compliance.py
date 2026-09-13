@@ -21,8 +21,9 @@ including the small ones, or it is not a rate.
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 from sqlalchemy.orm import Session
 
@@ -43,14 +44,7 @@ def _median(values: List[int]) -> float:
 
 
 def member_compliance(db: Session, member: Member) -> Dict[str, Any] | None:
-    """Filing punctuality for one member, or None if nothing is checkable.
-
-    A transaction is only checkable when both its own date and the filing date
-    of its disclosure are known. Both columns are currently NOT NULL, so the
-    guard below is defensive rather than reachable -- but if either is ever
-    relaxed, an unknown date must drop out of the denominator rather than be
-    silently counted as filed on time, which would understate the late rate.
-    """
+    """Filing punctuality for one member, or None if nothing is checkable."""
     rows = (
         db.query(Transaction, Disclosure)
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
@@ -60,7 +54,23 @@ def member_compliance(db: Session, member: Member) -> Dict[str, Any] | None:
         )
         .all()
     )
+    return _score(member, rows)
 
+
+def _score(member: Member, rows: Sequence[Any]) -> Dict[str, Any] | None:
+    """Score one member from their (transaction, disclosure) rows.
+
+    Split out so the leaderboard can hand it pre-fetched rows instead of
+    issuing a query per member. There is one implementation of the scoring and
+    both callers use it, so the single-member endpoint and the leaderboard
+    cannot drift apart.
+
+    A transaction is only checkable when both its own date and the filing date
+    of its disclosure are known. Both columns are currently NOT NULL, so the
+    guard below is defensive rather than reachable -- but if either is ever
+    relaxed, an unknown date must drop out of the denominator rather than be
+    silently counted as filed on time, which would understate the late rate.
+    """
     days_late: List[int] = []
     checkable = 0
     late_value = Decimal(0)
@@ -116,6 +126,44 @@ def member_compliance(db: Session, member: Member) -> Dict[str, Any] | None:
     }
 
 
+def late_filing_rate(db: Session) -> Dict[str, Any]:
+    """Just the headline: how many checkable trades were filed late.
+
+    The landing page wants one percentage. It used to get it by building the
+    entire leaderboard, which scores every filer individually -- far too much
+    work for a number on a hero card, fetched on every page load.
+
+    Two date columns in one query, compared in Python. Deliberately not a SQL
+    date-difference: that needs `julianday` on SQLite and interval arithmetic
+    on Postgres, and a dialect branch inside a query expression is a good way
+    to ship something that works in the tests and fails in production. The
+    comparison here is the same one `_score` makes, so the headline and the
+    leaderboard cannot disagree.
+    """
+    rows = (
+        db.query(Transaction.transaction_date, Disclosure.filing_date)
+        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
+        .filter(Disclosure.is_ptr.is_(True))
+        .all()
+    )
+
+    checked = 0
+    late = 0
+    for transaction_date, filing_date in rows:
+        if not transaction_date or not filing_date:
+            continue
+        checked += 1
+        if (filing_date - transaction_date).days - PTR_DEADLINE_DAYS > 0:
+            late += 1
+
+    return {
+        "transactions_checked": checked,
+        "filed_late": late,
+        "late_rate_percent": round(late / checked * 100, 2) if checked else 0.0,
+        "deadline_days": PTR_DEADLINE_DAYS,
+    }
+
+
 def compliance_leaderboard(
     db: Session,
     min_transactions: int = 5,
@@ -126,10 +174,37 @@ def compliance_leaderboard(
     `min_transactions` guards against a member with one late filing out of one
     transaction topping a "100% late" ranking.
     """
-    scores: List[Dict[str, Any]] = []
+    # One query, not one per member. This iterated `db.query(Member).all()` and
+    # called `member_compliance` inside the loop -- on the production roster of
+    # 12,766 members that is 12,766 round trips, and it took 48 seconds to
+    # return an empty leaderboard. `/api/insights` calls this on every load of
+    # the landing page, so the front page of the site hung.
+    #
+    # Driving from the join also scopes the work correctly: only members who
+    # actually filed a PTR transaction can score, and the join yields exactly
+    # those. Members with nothing to check were being fetched and discarded.
+    rows = (
+        db.query(Transaction, Disclosure)
+        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
+        .filter(Disclosure.is_ptr.is_(True))
+        .all()
+    )
 
-    for member in db.query(Member).all():
-        score = member_compliance(db, member)
+    by_member: Dict[int, List[Any]] = defaultdict(list)
+    for txn, disclosure in rows:
+        by_member[disclosure.member_id].append((txn, disclosure))
+
+    if not by_member:
+        members: Dict[int, Member] = {}
+    else:
+        members = {m.id: m for m in db.query(Member).filter(Member.id.in_(by_member)).all()}
+
+    scores: List[Dict[str, Any]] = []
+    for member_id, member_rows in by_member.items():
+        member = members.get(member_id)
+        if member is None:
+            continue
+        score = _score(member, member_rows)
         if score and score["transactions_checked"] >= min_transactions:
             scores.append(score)
 

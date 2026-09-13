@@ -236,19 +236,48 @@ async def get_insights(db: Session = Depends(get_db_session)) -> list[dict[str, 
 
         findings = db.query(func.count(Anomaly.id)).scalar() or 0
         if findings:
-            survived = (
-                db.query(func.count(Anomaly.id)).filter(Anomaly.q_value.isnot(None)).scalar() or 0
-            )
+            # This counted `q_value IS NOT NULL`, which means WAS TESTED, and
+            # published it under the word "survive". Those are different claims
+            # and the gap is not academic: the live site read "1" when exactly
+            # zero findings passed FDR and one had merely been testable. A
+            # q-value of 0.97 -- tested, comprehensively failed -- was counted as
+            # surviving correction.
+            #
+            # `significance_summary` already draws the distinction the rest of
+            # this codebase insists on, so use it rather than a fourth spelling
+            # of the same query.
+            from src.analysis.baselines import significance_summary
+
+            summary = significance_summary(db)
+            survived = int(summary["findings_passing_fdr"])
+            tested = int(summary["findings_with_a_null_model"])
+            alpha = summary["fdr_alpha"]
+
+            # The second number is the honest one and the more interesting one.
+            # Most findings here come from magnitude rules with no null model to
+            # shuffle, so they are not testable even in principle -- and saying
+            # "none survived" without saying "almost none were tested" invites
+            # exactly the wrong reading.
+            if tested:
+                detail = (
+                    f"Of {findings:,} patterns flagged, {tested:,} could be tested against "
+                    f"a null model at all; these are the ones still standing at q ≤ {alpha}, "
+                    "after correcting for every test the run performed."
+                )
+            else:
+                detail = (
+                    f"None of the {findings:,} patterns flagged could be tested against a "
+                    "null model in this run, so none has been corrected for multiple "
+                    "comparisons. That is a limit of the data, not a verdict on the "
+                    "filings."
+                )
+
             insights.append(
                 {
                     "id": 4,
                     "icon": "🔍",
                     "title": "Findings that survive correction",
-                    "description": (
-                        f"Of {findings:,} patterns flagged, these are the ones still "
-                        "standing after correcting for every test the run performed. A "
-                        "pattern is not a finding of wrongdoing."
-                    ),
+                    "description": f"{detail} A pattern is not a finding of wrongdoing.",
                     "value": f"{survived:,}",
                 }
             )

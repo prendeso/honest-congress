@@ -1,6 +1,6 @@
 """How often chance alone would produce a finding this strong.
 
-Sixteen detectors run against every member. At any realistic false-positive
+Seventeen detectors run against every member. At any realistic false-positive
 rate that names people who did nothing, and this project publishes their names,
 so the suite needs to say which findings survive the fact that it looked
 everywhere.

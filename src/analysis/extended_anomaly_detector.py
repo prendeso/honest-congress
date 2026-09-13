@@ -358,7 +358,24 @@ class ExtendedAnomalyDetector:
         timing_anomalies = previous_results.get("timing_anomalies", [])
         conflict_anomalies = previous_results.get("conflict_anomalies", [])
 
-        # Build member anomaly map
+        # Build member anomaly map.
+        #
+        # The disabled types have to be filtered HERE, not only where anomalies
+        # are written. `outperforming_trades`, `perfect_timing` and
+        # `loss_avoidance` are disabled because their arithmetic is indefensible
+        # -- a hardcoded 10% benchmark, a rate that exceeds 100%, a ratio that is
+        # always exactly 100% -- and the persist-time gate stops those rows being
+        # stored. It does not stop them being COUNTED here. So a member could be
+        # published as "multi-factor risk" on the strength of three findings that
+        # this project has already judged unfit to show, with the disabled
+        # detectors named in the description of a row that is served.
+        #
+        # Re-deriving the risk from findings that were themselves suppressed is
+        # the one thing a multi-factor detector must not do.
+        from src.config import get_settings
+
+        disabled = get_settings().disabled_anomaly_types_set
+
         member_anomaly_map = defaultdict(list)
 
         for anomaly in (
@@ -369,12 +386,20 @@ class ExtendedAnomalyDetector:
             + conflict_anomalies
         ):
             member_id = anomaly.get("member_id")
-            if member_id:
+            if member_id and anomaly.get("anomaly_type") not in disabled:
                 member_anomaly_map[member_id].append(anomaly)
 
         # Flag members with multiple anomalies
         for member_id, anomalies_list in member_anomaly_map.items():
-            if len(anomalies_list) >= 3:  # 3+ different anomaly types
+            # Distinct TYPES, which is what the title has always claimed. This
+            # counted findings, so three `rapid_asset_appreciation` rows for one
+            # member were published as "3 different anomaly types" -- a
+            # single-signal member described as a multi-signal one, which is the
+            # entire content of this detector.
+            distinct_types = {
+                a.get("anomaly_type") for a in anomalies_list if a.get("anomaly_type")
+            }
+            if len(distinct_types) >= 3:
                 severity_scores = {"CRITICAL": 3, "HIGH": 2, "MEDIUM": 1, "LOW": 0}
 
                 total_score = sum(
@@ -393,7 +418,7 @@ class ExtendedAnomalyDetector:
                         "anomaly_type": "multi_factor_risk",
                         "severity": overall_severity,
                         "title": (
-                            f"Multi-factor risk: {len(anomalies_list)} different anomaly types"
+                            f"Multi-factor risk: {len(distinct_types)} different anomaly types"
                         ),
                         "anomaly_count": len(anomalies_list),
                         "risk_score": total_score,

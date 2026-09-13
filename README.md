@@ -14,7 +14,7 @@ inconsistencies in reported wealth or trading activity.
 - **Anomaly detection** — detectors covering wealth vs. salary growth, rapid
   asset appreciation, late PTR filings, large trades, sector concentration,
   trade clustering, volume spikes, and donor / lobbying / contract conflict
-  windows. Four detectors are disabled by default because their output is not
+  windows. Three detectors are disabled by default because their output is not
   defensible — see [docs/DECISIONS.md](docs/DECISIONS.md).
 - **Web dashboard** — server-rendered Jinja2 templates + Alpine.js for
   members, disclosures, trades, parsed data, and anomalies.
@@ -156,13 +156,15 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for the deeper design dive.
 | `sector_concentration` | >50% of trades in one regulated sector in a disclosure year |
 | `high_trading_frequency` | >10 trades in a single month |
 | `trade_clustering` | 5+ consecutive same-direction trades |
-| `volume_spikes` | 2+ trades exceeding 3 standard deviations of typical size |
+| `volume_spikes` | 2+ trades exceeding 3 median absolute deviations of typical size |
 | `multi_factor_risk` | Member shows 3+ different anomaly types |
 | `donor_conflict` | Trade shortly after a corporate donation |
 | `lobbying_overlap` | Trade overlapping a lobbying filing window |
 | `contract_front_run` | Trade ahead of a government contract award |
 | `committee_jurisdiction_conflict` | Traded a sector overseen by a committee the member sits on |
 | `cross_member_cluster` | Several members traded the same ticker, same direction, same window |
+| `sponsorship_conflict` | Trade in a sector near the member sponsoring a bill in that sector |
+| `bill_jurisdiction_conflict` | Trade in a sector near a bill in that sector reaching the member's committee |
 
 Thresholds for `late_filing` are tunable via `LATE_FILING_MIN_DAYS` and
 `LATE_FILING_MIN_AMOUNT_USD` in the environment.

@@ -34,7 +34,14 @@ on:
           - reparse
           - fresh
       years:
-        description: 'Filing years to ingest, space separated'
+        # The House Clerk publishes {year}FD.xml for 2008 through the current
+        # year -- 19 years, probed rather than assumed. Earlier years 404; the
+        # repo used to claim 2004. Periodic Transaction Reports only exist from
+        # 2012, when the STOCK Act created them, so earlier years are annual
+        # filings alone and a zero PTR count for 2008-2011 is correct.
+        #
+        # A backfill is this input, not a separate code path: pass the years.
+        description: 'Filing years to ingest, space separated (House Clerk has 2008 onward)'
         required: true
         default: '2024 2025'
       limit:

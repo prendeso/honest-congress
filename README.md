@@ -40,6 +40,11 @@ cp .env.example .env                 # edit if you want non-default knobs
 
 python -m src.cli init               # alembic upgrade head
 python -m src.cli ingest -y 2024 2025
+
+# Backfill. The House Clerk publishes an index per year from 2008 onward; PTRs
+# only exist from 2012, when the STOCK Act created them. Ingestion is
+# idempotent, so a wider range can be re-run safely.
+python -m src.cli ingest -y 2008 2009 2010 2011 2012 2013 2014 2015 2016 2017
 python -m src.cli download-pdfs      # fetch filing PDFs
 python -m src.cli parse              # PDFs -> transactions / assets
 python -m src.cli sync-committees    # committee assignments (free, no key)

@@ -23,7 +23,6 @@ and — because nothing in that path committed — wrote nothing at all.
 | Module | Source | Notes |
 |---|---|---|
 | `house.py` | House Clerk `{year}FD.xml` / `{year}PTR.xml` | Primary. Official bulk XML plus PDF links. |
-| `house_clerk_historical.py` | House Clerk, 2004+ | Historical backfill. Overlaps `house.py`; a merge candidate. |
 | `senate.py` | efdsearch.senate.gov AJAX | CSRF handshake then a DataTables JSON endpoint. Parses by column position, so it is fragile. Anti-bot protection is a live risk. |
 | `congress_gov.py` | unitedstates.io `congress-legislators`, Congress.gov | Member roster. The GitHub dataset is primary and needs no key; Congress.gov is the fallback. |
 | `committees.py` | unitedstates.io `committee-membership` | Committee rosters, for the jurisdiction detectors. |

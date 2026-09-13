@@ -228,6 +228,17 @@
                         </div>
                     </div>
 
+                    <template x-if="memberIdFilter">
+                        <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between text-sm">
+                            <span class="text-blue-900">
+                                Showing findings for
+                                <span class="font-semibold" x-text="memberFilterName || ('member #' + memberIdFilter)"></span>
+                                only.
+                            </span>
+                            <button @click="clearMemberFilter()" class="text-blue-700 hover:text-blue-900 underline">Show all members</button>
+                        </div>
+                    </template>
+
                     <!-- Filters -->
                     <div class="flex gap-4 mb-4">
                         <!-- Built from the same catalogue as the legend, so a filter
@@ -398,8 +409,20 @@
                 memberPage: 1, disclosurePage: 1, tradePage: 1, anomalyPage: 1,
                 // The detector catalogue, fetched rather than duplicated here.
                 detectorTypes: [],
+                memberIdFilter: null,
+                memberFilterName: '',
 
                 async init() {
+                    const requested = new URLSearchParams(location.search).get('member_id');
+                    if (requested && /^\d+$/.test(requested)) {
+                        this.memberIdFilter = requested;
+                        this.tab = 'anomalies';
+                        fetch(`/api/members/${requested}`)
+                            .then(r => r.ok ? r.json() : null)
+                            .then(m => { if (m) this.memberFilterName = `${m.first_name} ${m.last_name}`; })
+                            .catch(() => {});
+                    }
+
                     // The types come first: the legend, the filter list and every
                     // finding card read from it, and a card that renders before it
                     // arrives would explain nothing.
@@ -461,9 +484,23 @@
                         let url = `/api/anomalies?page=${this.anomalyPage}&page_size=20`;
                         if (this.anomalyTypeFilter) url += `&anomaly_type=${this.anomalyTypeFilter}`;
                         if (this.severityFilter) url += `&severity=${this.severityFilter}`;
+                        // The members page links here as `/anomalies?member_id=N`.
+                        // This page ignored the query string entirely, so "view
+                        // this member's findings" showed everyone's, which a
+                        // reader would reasonably take for that member's own.
+                        if (this.memberIdFilter) url += `&member_id=${this.memberIdFilter}`;
                         const data = await fetch(url).then(r => r.json());
                         this.anomalies = data.anomalies || [];
                     } catch (e) { console.error('Anomalies error:', e); }
+                },
+
+                clearMemberFilter() {
+                    this.memberIdFilter = null;
+                    this.memberFilterName = '';
+                    // Keep the address bar honest about what is on screen.
+                    history.replaceState({}, '', '/anomalies');
+                    this.anomalyPage = 1;
+                    this.loadAnomalies();
                 },
 
                 // One lookup, over the catalogue the server serves. This replaced

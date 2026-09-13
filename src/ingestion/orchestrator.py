@@ -163,6 +163,34 @@ class IngestionOrchestrator:
         )
         return results
 
+    @staticmethod
+    def _already_queued(db: Session, document_id: str, seen: set[str]) -> bool:
+        """Whether this filing is already stored, or already pending in this run.
+
+        The DB check alone was not enough, and the gap is not theoretical: the
+        House Clerk's own 2025 index publishes four DocIDs twice, and one of
+        them (10078188) killed a production ingest with
+
+            UniqueViolation: duplicate key value violates unique constraint
+            "disclosures_document_id_key"
+
+        `SessionLocal` is built with `autoflush=False`, so a row added earlier
+        in the same loop is invisible to `db.query(...)`. Both copies passed
+        the existence check, both were added, and the single `db.commit()` at
+        the end of the loop failed -- taking the whole year's ingest with it,
+        because that commit sits outside the per-item `try`.
+
+        The `seen` set closes that window. It is per-call, which is enough:
+        each sync commits before the next one starts, so a DocID repeated
+        across years is caught by the database check instead.
+        """
+        if document_id in seen:
+            return True
+        if db.query(Disclosure).filter(Disclosure.document_id == document_id).first():
+            return True
+        seen.add(document_id)
+        return False
+
     def sync_house_disclosures(
         self, db: Session, year: int | None = None, download_pdfs: bool = False
     ) -> int:
@@ -183,6 +211,7 @@ class IngestionOrchestrator:
         disclosures = self.house.fetch_annual_xml_index(year)
         synced = 0
 
+        seen: set[str] = set()
         for d in disclosures:
             try:
                 # Find matching member
@@ -204,13 +233,8 @@ class IngestionOrchestrator:
                     )
                     continue
 
-                # Check if disclosure exists
-                existing = (
-                    db.query(Disclosure).filter(Disclosure.document_id == d["document_id"]).first()
-                )
-
-                if existing:
-                    continue  # Already have this disclosure
+                if self._already_queued(db, d["document_id"], seen):
+                    continue
 
                 # Create disclosure record
                 disclosure = Disclosure(
@@ -261,6 +285,7 @@ class IngestionOrchestrator:
         ptrs = self.house.fetch_ptr_xml_index(year)
         synced = 0
 
+        seen: set[str] = set()
         for d in ptrs:
             try:
                 # Find matching member
@@ -282,13 +307,8 @@ class IngestionOrchestrator:
                     )
                     continue
 
-                # Check if disclosure exists
-                existing = (
-                    db.query(Disclosure).filter(Disclosure.document_id == d["document_id"]).first()
-                )
-
-                if existing:
-                    continue  # Already have this PTR
+                if self._already_queued(db, d["document_id"], seen):
+                    continue
 
                 # Create PTR disclosure record
                 disclosure = Disclosure(
@@ -345,14 +365,10 @@ class IngestionOrchestrator:
         unmatched = 0
         ambiguous = 0
 
+        seen: set[str] = set()
         for d in disclosures:
             try:
-                # Check if disclosure exists
-                existing = (
-                    db.query(Disclosure).filter(Disclosure.document_id == d["document_id"]).first()
-                )
-
-                if existing:
+                if self._already_queued(db, d["document_id"], seen):
                     continue
 
                 # Disclosure.member_id is non-nullable, so an unmatched filing

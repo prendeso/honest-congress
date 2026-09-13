@@ -25,7 +25,13 @@ import pytest
 
 from src.api.main import app
 
-TEMPLATES = Path("src/templates")
+# Anchored to this file, not the working directory. Built with a bare
+# `Path("src/templates")` these globs came up empty when pytest ran from
+# anywhere but the repo root, the parametrised cases vanished, and pytest
+# reported them SKIPPED rather than failing -- the same silent-pass failure
+# these tests exist to catch.
+REPO = Path(__file__).resolve().parents[1]
+TEMPLATES = REPO / "src" / "templates"
 
 # Loop variable -> the response model its object comes from. Anything not
 # listed is not checked, which is the point: this is a guard on the bindings
@@ -55,7 +61,12 @@ def _served() -> dict[str, set[str]]:
     return {name: set(body.get("properties", {})) for name, body in schemas.items()}
 
 
-@pytest.mark.parametrize("template", sorted(TEMPLATES.glob("*.html")), ids=lambda p: p.name)
+PAGES = sorted(TEMPLATES.glob("*.html"))
+
+assert PAGES, f"no templates found under {TEMPLATES}; this file would test nothing"
+
+
+@pytest.mark.parametrize("template", PAGES, ids=lambda p: p.name)
 def test_no_page_reads_a_field_the_api_does_not_serve(template):
     served = _served()
     body = re.sub(r"<!--.*?-->", "", template.read_text(), flags=re.S)

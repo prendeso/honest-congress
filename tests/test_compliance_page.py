@@ -33,7 +33,15 @@ from src.db.models import (
     TransactionType,
 )
 
-PAGE = Path("src/templates/compliance.html")
+# Anchored to this file, not the working directory. Built with a bare
+# `Path("src/templates")` these globs came up empty when pytest ran from
+# anywhere but the repo root, the parametrised cases vanished, and pytest
+# reported them SKIPPED rather than failing -- the same silent-pass failure
+# these tests exist to catch.
+REPO = Path(__file__).resolve().parents[1]
+PAGE = REPO / "src" / "templates" / "compliance.html"
+
+assert PAGE.exists(), f"{PAGE} is missing; this file would test nothing"
 
 
 @pytest.fixture

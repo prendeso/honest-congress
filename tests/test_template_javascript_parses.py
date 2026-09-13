@@ -21,7 +21,13 @@ from pathlib import Path
 
 import pytest
 
-TEMPLATES = sorted(Path("src/templates").rglob("*.html"))
+# Anchored to this file, not the working directory. Built with a bare
+# `Path("src/templates")` these globs came up empty when pytest ran from
+# anywhere but the repo root, the parametrised cases vanished, and pytest
+# reported them SKIPPED rather than failing -- the same silent-pass failure
+# these tests exist to catch.
+REPO = Path(__file__).resolve().parents[1]
+TEMPLATES = sorted((REPO / "src" / "templates").rglob("*.html"))
 SCRIPT = re.compile(r"<script>(.*?)</script>", re.S)
 
 pytestmark = pytest.mark.skipif(
@@ -76,7 +82,7 @@ def test_the_three_filing_lists_agree_on_how_well_a_filing_was_read(name):
     on another. This pins them to each other instead.
     """
     bodies = {
-        page: _helper((Path("src/templates") / page).read_text(), name)
+        page: _helper((REPO / "src" / "templates" / page).read_text(), name)
         for page in READ_STATUS_PAGES
     }
 

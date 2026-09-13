@@ -1,8 +1,11 @@
+import logging
 from functools import lru_cache
 from typing import List
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -20,8 +23,9 @@ class Settings(BaseSettings):
 
     database_url: str = Field(default="sqlite:///./honest_congress.db", alias="DATABASE_URL")
 
-    # CORS. Comma-separated origins. "*" is allowed for local/dev only —
-    # in production set this to your dashboard origin(s).
+    # CORS. Comma-separated origins. The "*" default applies to local
+    # development only -- `allowed_origins_list` refuses it in production. See
+    # the note there for why.
     allowed_origins: str = Field(default="*", alias="ALLOWED_ORIGINS")
 
     # Congress.gov API key (optional - get free key at https://api.congress.gov/sign-up/)
@@ -113,9 +117,36 @@ class Settings(BaseSettings):
 
     @property
     def allowed_origins_list(self) -> List[str]:
+        """Origins the API answers cross-origin requests from.
+
+        The wildcard is a development convenience and is refused in production.
+        `src/api/main.py` pairs this with `allow_headers=["*"]`, so a wildcard
+        on a deployed host lets any page on the internet send `X-Admin-Token`
+        to the mutating endpoints. `allow_credentials` self-disables on "*",
+        which stops cookies but not a header an attacker sets deliberately.
+
+        Falling back to "no cross-origin allowed" rather than raising is the
+        deliberate choice. `ADMIN_PASSWORD` raises in `get_settings()` because
+        the app genuinely cannot serve its admin routes without one; a missing
+        origin list is different -- raising would take a running site down at
+        the moment someone deployed a security fix. Nothing legitimate breaks
+        here either way: the dashboard fetches its own `/api/*` from the same
+        origin, and same-origin requests never go through CORS at all. Only a
+        separate front end on another domain would notice, and that is exactly
+        the case that should have to be declared.
+        """
         raw = (self.allowed_origins or "").strip()
+
         if raw in ("", "*"):
+            if self.is_production:
+                logger.warning(
+                    "ALLOWED_ORIGINS is %s in production; refusing cross-origin "
+                    "requests. Set it to your dashboard origin(s) to allow them.",
+                    "unset" if not raw else "'*'",
+                )
+                return []
             return ["*"]
+
         return [o.strip() for o in raw.split(",") if o.strip()]
 
     @field_validator("env")

@@ -357,6 +357,51 @@ Null means unknown -- parsed before this was recorded -- and is counted with the
 parser's failures rather than excused as a scan. The safe reading of "nobody
 looked" is not "it was fine".
 
+## D14. The site explains itself from the detector registry, not from a copy
+
+The dashboard kept its own description of every detector: a legend, a filter
+list, and three JavaScript lookup tables. All four were hand-maintained, and
+they drifted in the worst possible direction. Beside named members of Congress,
+the page was still telling visitors:
+
+> **Stock Outperformance** -- Trading returns significantly beat S&P 500 benchmark
+> **Loss Avoidance** -- Statistically improbable success rate (80%+)
+> **Trade Timing** -- Perfect timing ... buying before stock rises
+
+All three detectors had been disabled for making exactly those claims: there are
+no prices in this dataset (D10), `loss_avoidance` incremented its numerator and
+denominator on the same branch so its rate was always 100%, and none of them ran
+a statistical test of any kind. The page advertised them anyway.
+
+The same tables omitted every detector that *does* carry a q-value --
+`donor_conflict`, `lobbying_overlap`, `contract_front_run`,
+`sponsorship_conflict`, `bill_jurisdiction_conflict`, `cross_member_cluster`.
+The six strongest findings the system produces each rendered as "This anomaly
+requires further investigation to understand its significance."
+
+`src/analysis/catalog.py` is now the only copy, served at
+`/api/anomalies/types` and rendered by the page. Three things are structural
+rather than remembered:
+
+- A detector in `disabled_anomaly_types` is not described, because the
+  catalogue reads the same setting the query layer does.
+- Whether a type is marked as carrying a q-value is derived from
+  `NO_NULL_MODEL`, never asserted a second time.
+- Every entry states `limits` -- what the detector *cannot* show -- next to
+  what it measures, on the finding card as well as in the legend. That is the
+  field that keeps a pattern in public filings from reading as an accusation,
+  and it is the field a legend usually omits.
+
+Each finding now also carries its own badge: a q-value, "did not survive
+correction", or "not tested" where no null model exists (D11). Severity was
+previously the only thing distinguishing one finding from another, and severity
+is a threshold, not a test.
+
+`tests/test_detector_catalog.py` fails if a detector is added, renamed or
+disabled without the catalogue following -- including if any description
+acquires the words return, profit, gain, outperform or alpha, or claims
+significance for a detector that has no null model.
+
 ---
 
 ## Superseded

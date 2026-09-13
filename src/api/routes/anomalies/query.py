@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import List
+
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, contains_eager
 
+from src.analysis.catalog import as_dicts
 from src.api.routes.anomalies._shared import (
     AnomalyListResponse,
     AnomalyResponse,
@@ -15,6 +19,25 @@ from src.config import get_settings
 from src.db import Anomaly, Disclosure, Member, get_db_session
 
 router = APIRouter()
+
+
+class DetectorTypeResponse(BaseModel):
+    """One anomaly type, described to whoever has to read a finding of it."""
+
+    anomaly_type: str
+    name: str
+    #: What the detector measures, stated so it cannot be read as a finding of
+    #: wrongdoing -- because it is not one.
+    means: str
+    #: What it cannot see. The part a reader needs most and the part a legend
+    #: usually omits.
+    limits: str
+    source: str
+    #: Whether a q-value exists for this type at all. A null q on a type with a
+    #: null model means the finding did not survive correction; a null q on one
+    #: without means no test was ever run. Those are not the same claim.
+    has_null_model: bool
+
 
 # Severity is stored as free text, so rank it explicitly and case-insensitively.
 # Anything unrecognised sorts last rather than silently ahead of "high".
@@ -166,6 +189,23 @@ async def get_anomaly_summary(db: Session = Depends(get_db_session)):
         by_party=by_party,
         by_chamber=by_chamber,
     )
+
+
+@router.get("/types", response_model=List[DetectorTypeResponse])
+async def list_anomaly_types():
+    """What each detector looks for, what it cannot see, and whether it is tested.
+
+    Declared before `/{anomaly_id}` deliberately: that route takes an int, so a
+    request for `/types` registered after it would be matched by it and fail
+    validation rather than reach this handler.
+
+    Served from `src.analysis.catalog`, which is the only copy. The dashboard
+    used to keep its own, and it went stale in the worst direction -- still
+    describing three detectors that had been disabled for claiming returns and
+    statistical significance the data cannot support, while the six detectors
+    that do carry a q-value went unexplained entirely.
+    """
+    return [DetectorTypeResponse(**entry) for entry in as_dicts()]
 
 
 @router.get("/{anomaly_id}", response_model=AnomalyResponse)

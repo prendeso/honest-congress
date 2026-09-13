@@ -194,55 +194,51 @@
 
                 <!-- Anomalies Tab - ENHANCED -->
                 <div x-show="tab === 'anomalies'" class="p-6">
-                    <!-- Anomaly Type Legend -->
+                    <!-- Anomaly Type Legend, served from /api/anomalies/types.
+                         It used to be hand-written here, and it went stale in the
+                         worst direction: still advertising three detectors that
+                         had been disabled for claiming returns and statistical
+                         significance this data cannot support, while the six
+                         detectors that DO carry a q-value went unmentioned. -->
                     <div class="mb-6 p-4 bg-gray-50 rounded-lg">
-                        <h3 class="font-medium text-gray-900 mb-3">🔍 Anomaly Types Explained</h3>
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-                            <div class="p-2 bg-white rounded border">
-                                <span class="font-medium text-red-700">Wealth vs Salary</span>
-                                <p class="text-gray-600 text-xs mt-1">Net worth grew faster than cumulative salary could explain</p>
-                            </div>
-                            <div class="p-2 bg-white rounded border">
-                                <span class="font-medium text-orange-700">Asset Appreciation</span>
-                                <p class="text-gray-600 text-xs mt-1">Single asset value increased >100% in one year</p>
-                            </div>
-                            <div class="p-2 bg-white rounded border">
-                                <span class="font-medium text-yellow-700">Stock Outperformance</span>
-                                <p class="text-gray-600 text-xs mt-1">Trading returns significantly beat S&P 500 benchmark</p>
-                            </div>
-                            <div class="p-2 bg-white rounded border">
-                                <span class="font-medium text-purple-700">Trade Timing</span>
-                                <p class="text-gray-600 text-xs mt-1">Perfect timing, consecutive trades, or volume spikes</p>
-                            </div>
-                            <div class="p-2 bg-white rounded border">
-                                <span class="font-medium text-blue-700">Committee Conflict</span>
-                                <p class="text-gray-600 text-xs mt-1">Trading in sectors the member's committee oversees</p>
-                            </div>
-                            <div class="p-2 bg-white rounded border">
-                                <span class="font-medium text-green-700">Loss Avoidance</span>
-                                <p class="text-gray-600 text-xs mt-1">Statistically improbable success rate (80%+)</p>
-                            </div>
-                            <div class="p-2 bg-white rounded border">
-                                <span class="font-medium text-pink-700">Multi-Factor Risk</span>
-                                <p class="text-gray-600 text-xs mt-1">Member shows 3+ different anomaly patterns</p>
-                            </div>
-                            <div class="p-2 bg-white rounded border">
-                                <span class="font-medium text-gray-700">Late Filing</span>
-                                <p class="text-gray-600 text-xs mt-1">Trade reported more than 45 days after transaction</p>
-                            </div>
+                        <h3 class="font-medium text-gray-900 mb-1">What each category means</h3>
+                        <p class="text-gray-600 text-xs mb-3">
+                            None of these is a finding of wrongdoing. Each one is a pattern in
+                            public filings, with the things it cannot see stated alongside it.
+                        </p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                            <template x-for="d in detectorTypes" :key="d.anomaly_type">
+                                <div class="p-3 bg-white rounded border">
+                                    <div class="flex items-center gap-2 flex-wrap">
+                                        <span class="font-medium text-gray-900" x-text="d.name"></span>
+                                        <template x-if="d.has_null_model">
+                                            <span class="px-1.5 py-0.5 rounded text-[11px] bg-emerald-100 text-emerald-800"
+                                                  title="A shifted-calendar null model exists for this category, so its findings carry a p-value and an FDR-corrected q-value.">tested against chance</span>
+                                        </template>
+                                        <template x-if="!d.has_null_model">
+                                            <span class="px-1.5 py-0.5 rounded text-[11px] bg-gray-100 text-gray-700"
+                                                  title="This category measures a magnitude rather than a coincidence in timing. There is nothing to shift, so no p-value is claimed for it.">threshold only</span>
+                                        </template>
+                                    </div>
+                                    <p class="text-gray-700 text-xs mt-1" x-text="d.means"></p>
+                                    <p class="text-gray-500 text-xs mt-1"><span class="font-medium">Cannot show:</span> <span x-text="d.limits"></span></p>
+                                    <p class="text-gray-400 text-[11px] mt-1" x-text="d.source"></p>
+                                </div>
+                            </template>
                         </div>
                     </div>
 
                     <!-- Filters -->
                     <div class="flex gap-4 mb-4">
+                        <!-- Built from the same catalogue as the legend, so a filter
+                             cannot offer a type the site no longer produces. The old
+                             hand-written list offered `trade_timing`, which is not an
+                             anomaly type this system has ever written. -->
                         <select x-model="anomalyTypeFilter" @change="loadAnomalies()" class="border rounded-lg px-4 py-2">
                             <option value="">All Types</option>
-                            <option value="excessive_wealth_growth">Wealth vs Salary</option>
-                            <option value="rapid_asset_appreciation">Asset Appreciation</option>
-                            <option value="trade_timing">Trade Timing</option>
-                            <option value="sector_concentration">Sector Concentration</option>
-                            <option value="multi_factor_risk">Multi-Factor Risk</option>
-                            <option value="late_filing">Late Filing</option>
+                            <template x-for="d in detectorTypes" :key="d.anomaly_type">
+                                <option :value="d.anomaly_type" x-text="d.name"></option>
+                            </template>
                         </select>
                         <select x-model="severityFilter" @change="loadAnomalies()" class="border rounded-lg px-4 py-2">
                             <option value="">All Severities</option>
@@ -290,6 +286,36 @@
                                                 'bg-yellow-400 text-gray-800': anomaly.severity === 'low'
                                             }" class="px-2 py-1 rounded text-sm font-medium uppercase" x-text="anomaly.severity"></span>
                                             <span class="text-xs text-gray-500" x-text="getAnomalyTypeName(anomaly.anomaly_type)"></span>
+                                            <!-- Whether this finding survived correction for
+                                                 every test the run performed. The suite runs
+                                                 seventeen detectors against every member, so
+                                                 some of what it flags is what running thousands
+                                                 of tests produces. Severity alone never said
+                                                 this, and severity was the only badge here. -->
+                                            <template x-if="anomaly.q_value !== null && anomaly.q_value !== undefined">
+                                                <span class="px-2 py-0.5 rounded text-[11px] bg-emerald-100 text-emerald-800"
+                                                      :title="'p = ' + formatP(anomaly.p_value) + ', corrected for every test in the run (Benjamini-Hochberg)'">
+                                                    q = <span x-text="formatP(anomaly.q_value)"></span>
+                                                </span>
+                                            </template>
+                                            <template x-if="(anomaly.q_value === null || anomaly.q_value === undefined) && anomaly.has_null_model">
+                                                <span class="px-2 py-0.5 rounded text-[11px] bg-amber-100 text-amber-900"
+                                                      title="This category is tested against a shifted-calendar null, and this finding did not survive that test at the run's false-discovery rate.">
+                                                    did not survive correction
+                                                </span>
+                                            </template>
+                                            <template x-if="!anomaly.has_null_model">
+                                                <span class="px-2 py-0.5 rounded text-[11px] bg-gray-100 text-gray-700"
+                                                      title="No null model exists for this category -- it measures a magnitude, not a coincidence in timing. A missing q here means untested, not passed.">
+                                                    not tested
+                                                </span>
+                                            </template>
+                                            <template x-if="anomaly.percentile_rank !== null && anomaly.percentile_rank !== undefined">
+                                                <span class="text-[11px] text-gray-500"
+                                                      title="Where this finding sits among others of its own type.">
+                                                    <span x-text="Math.round(anomaly.percentile_rank)"></span>th pct of its type
+                                                </span>
+                                            </template>
                                         </div>
                                     </div>
 
@@ -320,10 +346,21 @@
                                         </div>
                                     </div>
 
-                                    <!-- What This Means -->
+                                    <!-- What this means, and what it does not. Both come from
+                                         /api/anomalies/types rather than a lookup table kept
+                                         here, which is how the old one came to explain
+                                         detectors that no longer exist and to fall through to
+                                         "requires further investigation" for the six that
+                                         carry a q-value. -->
                                     <div class="mt-3 p-2 bg-white bg-opacity-50 rounded text-sm">
-                                        <span class="font-medium text-gray-700">💡 What this means: </span>
-                                        <span class="text-gray-600" x-text="getAnomalyExplanation(anomaly.anomaly_type)"></span>
+                                        <div>
+                                            <span class="font-medium text-gray-700">What this means: </span>
+                                            <span class="text-gray-600" x-text="detectorFor(anomaly.anomaly_type).means"></span>
+                                        </div>
+                                        <div class="mt-1">
+                                            <span class="font-medium text-gray-700">What it cannot show: </span>
+                                            <span class="text-gray-600" x-text="detectorFor(anomaly.anomaly_type).limits"></span>
+                                        </div>
                                     </div>
                                 </div>
                             </template>
@@ -359,9 +396,21 @@
                 memberSearch: '', partyFilter: '', chamberFilter: '',
                 anomalyTypeFilter: '', severityFilter: '',
                 memberPage: 1, disclosurePage: 1, tradePage: 1, anomalyPage: 1,
+                // The detector catalogue, fetched rather than duplicated here.
+                detectorTypes: [],
 
                 async init() {
+                    // The types come first: the legend, the filter list and every
+                    // finding card read from it, and a card that renders before it
+                    // arrives would explain nothing.
+                    await this.loadDetectorTypes();
                     await Promise.all([this.loadStats(), this.loadMembers(), this.loadDisclosures(), this.loadAnomalies()]);
+                },
+
+                async loadDetectorTypes() {
+                    try {
+                        this.detectorTypes = await fetch('/api/anomalies/types').then(r => r.json());
+                    } catch (e) { console.error('Detector types error:', e); }
                 },
 
                 async loadStats() {
@@ -417,57 +466,35 @@
                     } catch (e) { console.error('Anomalies error:', e); }
                 },
 
-                getAnomalyTypeName(type) {
-                    const typeNames = {
-                        'excessive_wealth_growth': 'Wealth vs Salary',
-                        'rapid_asset_appreciation': 'Asset Appreciation',
-                        'trade_timing': 'Trade Timing',
-                        'trade_clustering': 'Trade Clustering',
-                        'volume_spikes': 'Volume Spikes',
-                        'sector_concentration': 'Sector Concentration',
-                        'multi_factor_risk': 'Multi-Factor Risk',
-                        'late_filing': 'Late Filing',
-                        'high_frequency': 'High Frequency',
-                        'large_trade': 'Large Trade'
+                // One lookup, over the catalogue the server serves. This replaced
+                // three hand-maintained tables that had drifted apart from each
+                // other and from the detectors: they named `trade_timing` and
+                // `high_frequency`, neither of which is a type this system
+                // writes, and omitted all six that carry a q-value.
+                detectorFor(type) {
+                    return this.detectorTypes.find(d => d.anomaly_type === type) || {
+                        name: type,
+                        means: 'This category is no longer produced. It is shown because a finding of it is still stored.',
+                        limits: 'Unknown -- the detector that wrote this is not in the current catalogue.',
+                        source: 'Unknown'
                     };
-                    return typeNames[type] || type;
                 },
 
-                getAnomalyExplanation(type) {
-                    const explanations = {
-                        'excessive_wealth_growth': 'Reported net worth grew by more than the Congressional salary alone could explain. Assets and liabilities are disclosed as ranges, so this is an estimate.',
-                        'rapid_asset_appreciation': 'A single asset (business, property, or investment) grew in value by more than 100% in one year, which is unusual and warrants investigation.',
-                        'trade_timing': 'The member demonstrated unusually good timing on trades, such as buying before stock rises or selling before drops.',
-                        'trade_clustering': 'Multiple consecutive trades in the same direction (all buys or all sells) suggests coordinated trading strategy.',
-                        'volume_spikes': 'One or more trades were much larger than this member typically files. Amounts are disclosed as ranges, so sizes are band midpoints.',
-                        'sector_concentration': 'A large share of the trades in one filing fall in a single industry sector, matched on trade descriptions. This does not use committee assignments.',
-                        'multi_factor_risk': 'This member shows 3 or more different anomaly patterns, making them a high-priority investigation target.',
-                        'late_filing': 'The member reported this trade more than 45 days after it occurred, violating the STOCK Act disclosure requirements.',
-                        'high_frequency': 'This member trades much more frequently than typical members, warranting additional scrutiny.',
-                        'large_trade': 'A single trade that is unusually large compared to typical Congressional member trading.'
-                    };
-                    return explanations[type] || 'This anomaly requires further investigation to understand its significance.';
-                },
+                getAnomalyTypeName(type) { return this.detectorFor(type).name; },
 
-                getSourceFromType(type) {
-                    const sources = {
-                        'excessive_wealth_growth': 'Annual Financial Disclosure (FD)',
-                        'rapid_asset_appreciation': 'Annual Financial Disclosure (FD)',
-                        'trade_timing': 'Stock Trades (PTR)',
-                        'trade_clustering': 'Stock Trades (PTR)',
-                        'volume_spikes': 'Stock Trades (PTR)',
-                        'sector_concentration': 'Stock Trades (PTR)',
-                        'multi_factor_risk': 'Combined Analysis',
-                        'late_filing': 'Stock Trades (PTR)',
-                        'high_frequency': 'Stock Trades (PTR)',
-                        'large_trade': 'Stock Trades (PTR)'
-                    };
-                    return sources[type] || 'Financial Disclosures';
+                getSourceFromType(type) { return this.detectorFor(type).source; },
+
+                // p and q are small by construction, and rounding one to two
+                // decimals turns 0.001 into "0.00", which reads as certainty.
+                formatP(value) {
+                    if (value === null || value === undefined) return 'n/a';
+                    if (value < 0.001) return '< 0.001';
+                    return value.toPrecision(2);
                 },
 
                 formatValue(value, type) {
                     if (!value) return '-';
-                    if (type.includes('growth') || type.includes('appreciation') || type.includes('outperforming')) {
+                    if (type.includes('growth') || type.includes('appreciation')) {
                         return value.toFixed(1) + '%';
                     }
                     if (value > 1000000) {

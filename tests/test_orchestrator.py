@@ -324,3 +324,117 @@ class TestScannedFilingsAreRecordedAsSuch:
         assert result["parsed"] == 2, "the broken filing and the never-checked one, not the scan"
         assert scan.parse_confidence == 0.0
         assert scan.has_text_layer is False
+
+
+class TestReparsingReplacesRatherThanAppends:
+    """Re-reading a filing must not add a second copy of what it already held.
+
+    `_store_ptr_data` and `_store_fd_data` only ever `db.add(...)`, and
+    transactions/assets/liabilities carry no uniqueness constraint -- only
+    non-unique indexes. So every re-parse appended: one disclosed trade became
+    1, then 2, then 3 rows across three calls.
+
+    Nothing caught it because the default filter only selects filings never
+    parsed, which have nothing to duplicate. Both re-read paths hit it: the
+    long-standing `--reparse`, and `--min-confidence`, whose entire purpose is
+    to re-read the corpus after a parser fix. Pointed at a populated database
+    that would have doubled the transaction table -- and a duplicate is
+    indistinguishable from a member genuinely reporting the same ticker, band,
+    type and date twice, so it could not have been cleaned up afterwards.
+    """
+
+    TXN = {
+        "transaction_date": datetime(2024, 3, 1),
+        "transaction_type": "purchase",
+        "amount_min": 1001,
+        "amount_max": 15000,
+        "description": "Apple Inc",
+        "ticker": "AAPL",
+    }
+
+    def _orchestrator(self, tmp_path, transactions):
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        (tmp_path / "x.pdf").write_bytes(b"%PDF-1.4")
+        orch.download_disclosure_pdf = lambda d: tmp_path / "x.pdf"  # type: ignore[method-assign]
+        orch.ptr_parser.parse_ptr = lambda path: {  # type: ignore[method-assign]
+            "quality": {
+                "text_extracted": True,
+                "rows_detected": len(transactions),
+                "rows_parsed": len(transactions),
+            },
+            "transactions": list(transactions),
+        }
+        return orch
+
+    def _ptr(self, db, member, doc_id):
+        d = Disclosure(
+            member_id=member.id,
+            filing_year=2024,
+            filing_type="PTR",
+            filing_date=datetime(2024, 5, 1),
+            document_id=doc_id,
+            is_ptr=True,
+        )
+        db.add(d)
+        db.commit()
+        db.refresh(d)
+        return d
+
+    def _count(self, db, disclosure):
+        from src.db.models import Transaction
+
+        return db.query(Transaction).filter(Transaction.disclosure_id == disclosure.id).count()
+
+    def test_three_reparses_leave_one_row(self, db_session, tmp_path):
+        member = _make_member(db_session)
+        filing = self._ptr(db_session, member, "REPARSE-1")
+        orch = self._orchestrator(tmp_path, [self.TXN])
+
+        counts = []
+        for _ in range(3):
+            orch.parse_disclosure(db_session, filing)
+            db_session.expire_all()
+            counts.append(self._count(db_session, filing))
+
+        assert counts == [1, 1, 1], f"re-parse duplicated rows: {counts}"
+
+    def test_a_changed_parse_replaces_the_old_rows(self, db_session, tmp_path):
+        """The point of re-parsing is that the new reading wins."""
+        member = _make_member(db_session)
+        filing = self._ptr(db_session, member, "REPARSE-2")
+
+        wrong = {**self.TXN, "transaction_type": "purchase", "description": "Best Co., Inc."}
+        self._orchestrator(tmp_path, [wrong]).parse_disclosure(db_session, filing)
+
+        right = {**self.TXN, "transaction_type": "sale", "description": "Best Buy Co., Inc."}
+        self._orchestrator(tmp_path, [right]).parse_disclosure(db_session, filing)
+        db_session.expire_all()
+
+        from src.db.models import Transaction, TransactionType
+
+        rows = db_session.query(Transaction).filter(Transaction.disclosure_id == filing.id).all()
+        assert len(rows) == 1
+        assert rows[0].transaction_type == TransactionType.SALE
+        assert rows[0].description == "Best Buy Co., Inc."
+
+    def test_a_reparse_that_finds_nothing_keeps_the_good_rows(self, db_session, tmp_path):
+        """The other half of the fix, and the more dangerous direction.
+
+        Clearing unconditionally would mean a failed download, a scan, or a
+        layout the parser lost silently deletes transactions an earlier parse
+        got right. Replacing is only safe when there is something to replace
+        them with.
+        """
+        member = _make_member(db_session)
+        filing = self._ptr(db_session, member, "REPARSE-3")
+        self._orchestrator(tmp_path, [self.TXN]).parse_disclosure(db_session, filing)
+        db_session.expire_all()
+        assert self._count(db_session, filing) == 1
+
+        self._orchestrator(tmp_path, []).parse_disclosure(db_session, filing)
+        db_session.expire_all()
+
+        assert self._count(db_session, filing) == 1, (
+            "a re-parse that yielded nothing deleted rows a previous parse got right"
+        )
+        assert filing.parse_confidence == 0.0, "and it must still be scored as having read nothing"

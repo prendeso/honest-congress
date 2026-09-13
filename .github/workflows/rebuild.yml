@@ -6,8 +6,8 @@ name: Rebuild
 #
 # Two reasons it is a separate workflow rather than a flag on the nightly:
 #
-#  * It writes destructively in `full-reset` mode, and a scheduled job must
-#    never be one typo away from dropping the schema.
+#  * It can drop the schema, and a scheduled job must never be one typo away
+#    from that.
 #  * `ENV` is unset on a GitHub runner, so `Settings.env` falls back to "dev"
 #    and `is_production` is False -- which means `cli reset`'s production guard
 #    does NOT protect this path even though it points at the production
@@ -16,18 +16,23 @@ name: Rebuild
 on:
   workflow_dispatch:
     inputs:
+      # The drop is deliberately NOT a mode. It used to be `mode: full-reset`,
+      # which meant the "re-dispatch with the same inputs to continue" advice
+      # this workflow prints would drop the schema again on every chunk and
+      # throw away the previous run's parse. Dropping now needs its own word,
+      # typed on purpose, and the continuation instruction can never carry it.
       confirm:
-        description: 'Type REBUILD to proceed'
+        description: 'REBUILD to run. DROP-EVERYTHING to ALSO wipe the schema first (first pass only).'
         required: true
         default: ''
       mode:
-        description: 'reparse = re-read filings, destroys nothing. full-reset = drop the schema first.'
+        description: 'reparse = re-read filings already read, for a parser fix. fresh = only filings never read.'
         required: true
         default: reparse
         type: choice
         options:
           - reparse
-          - full-reset
+          - fresh
       years:
         description: 'Filing years to ingest, space separated'
         required: true
@@ -49,9 +54,9 @@ jobs:
 
     steps:
       - name: Refuse unless the confirmation matches
-        if: ${{ inputs.confirm != 'REBUILD' }}
+        if: ${{ inputs.confirm != 'REBUILD' && inputs.confirm != 'DROP-EVERYTHING' }}
         run: |
-          echo "::error::Type REBUILD in the confirm box to run this workflow. It writes to the production database, and in full-reset mode it drops the schema."
+          echo "::error::Type REBUILD to run, or DROP-EVERYTHING to also wipe the schema first. This writes to the production database."
           exit 1
 
       - name: Checkout repository
@@ -85,8 +90,11 @@ jobs:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli reset
 
+      # Gated on the confirm word, not on `mode`, so that continuing a chunked
+      # rebuild cannot repeat it. `cli reset`'s own production guard does not
+      # help here: ENV is unset on a runner, so is_production is False.
       - name: Drop and rebuild the schema
-        if: ${{ inputs.mode == 'full-reset' }}
+        if: ${{ inputs.confirm == 'DROP-EVERYTHING' }}
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli reset --yes
@@ -206,4 +214,10 @@ jobs:
           python -m src.cli stats >> $GITHUB_STEP_SUMMARY 2>&1 || echo "stats failed" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "If the parse step hit the limit, dispatch this workflow again with the same inputs — it resumes." >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.confirm }}" = "DROP-EVERYTHING" ]; then
+            echo "**The schema was dropped and rebuilt on this run.**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "To continue the chunked parse, dispatch again with confirm set to \`REBUILD\` — NOT \`DROP-EVERYTHING\`, which would drop everything this run just built." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No schema drop on this run. If the parse step hit its limit, dispatch again with the same inputs — it resumes from where it stopped." >> $GITHUB_STEP_SUMMARY
+          fi

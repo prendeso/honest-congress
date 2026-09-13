@@ -4,7 +4,7 @@ import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 import requests
 from sqlalchemy import or_
@@ -528,6 +528,7 @@ class IngestionOrchestrator:
             # Use appropriate parser based on disclosure type
             if disclosure.is_ptr:
                 parsed = self.ptr_parser.parse_ptr(str(pdf_path))
+                self._clear_parsed_rows(db, disclosure, parsed.get("transactions") or [])
                 self._store_ptr_data(db, disclosure, parsed)
                 text_extracted = bool((parsed.get("quality") or {}).get("text_extracted"))
                 score = score_ptr_parse(
@@ -537,6 +538,11 @@ class IngestionOrchestrator:
                 )
             else:
                 parsed = self.disclosure_parser.parse_pdf(str(pdf_path))
+                self._clear_parsed_rows(
+                    db,
+                    disclosure,
+                    (parsed.get("assets") or []) + (parsed.get("liabilities") or []),
+                )
                 self._store_fd_data(db, disclosure, parsed)
                 text_extracted = bool(
                     parsed.get("raw_text") or parsed.get("assets") or parsed.get("liabilities")
@@ -579,6 +585,41 @@ class IngestionOrchestrator:
             disclosure.parse_error = str(e)
             db.commit()
             return False
+
+    @staticmethod
+    def _clear_parsed_rows(db: Session, disclosure: Disclosure, incoming: Sequence[Any]) -> None:
+        """Drop what a previous parse of this filing wrote, before writing again.
+
+        `_store_ptr_data` and `_store_fd_data` only ever `db.add(...)`, and
+        `transactions`/`assets`/`liabilities` carry no uniqueness constraint --
+        only non-unique indexes. So re-reading a filing APPENDED a second copy
+        of every row it already had, and a third on the next pass. Reproduced
+        directly: one disclosed trade became 1, then 2, then 3 rows across three
+        calls to `parse_disclosure`.
+
+        Nothing exercised it until now because the default filter only selects
+        filings never parsed, which have no rows to duplicate. Both paths that
+        re-read a filing hit it: the long-standing `--reparse`, and
+        `--min-confidence`, whose whole purpose is to re-read the corpus after a
+        parser fix. Running that against a populated database would have
+        doubled the transaction and asset tables, and a duplicate is
+        indistinguishable from a member genuinely reporting the same ticker,
+        band, type and date twice -- so it could not have been cleaned up
+        afterwards, only reset.
+
+        The `incoming` guard is the other half. A re-parse that yields nothing
+        -- a download that failed, a scan, a layout the parser lost -- must not
+        delete good rows a previous parse got right. Replacing is only safe when
+        there is something to replace them with; otherwise the old rows stay and
+        the confidence score records that this read found nothing.
+        """
+        if not incoming:
+            return
+
+        for model in (Transaction, Asset, Liability):
+            db.query(model).filter(model.disclosure_id == disclosure.id).delete(
+                synchronize_session=False
+            )
 
     def _store_ptr_data(self, db: Session, disclosure: Disclosure, parsed: Dict[str, Any]) -> None:
         """Store parsed PTR data as Transaction records."""

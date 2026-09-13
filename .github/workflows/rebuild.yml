@@ -59,6 +59,25 @@ jobs:
           echo "::error::Type REBUILD to run, or DROP-EVERYTHING to also wipe the schema first. This writes to the production database."
           exit 1
 
+      # Before anything irreversible. `years` and `limit` are free text and are
+      # interpolated into the shell; argparse would reject "2024,2025" with a
+      # bare exit 2, but only at the ingest step -- which is AFTER the schema
+      # drop. Failing here instead costs a re-dispatch rather than an empty
+      # database. (The interpolation itself is not a privilege escalation:
+      # workflow_dispatch already requires write access, and anyone with that
+      # can read these secrets by pushing a workflow of their own.)
+      - name: Validate the inputs
+        run: |
+          if ! printf '%s' '${{ inputs.years }}' | grep -Eq '^[0-9]{4}( [0-9]{4})*$'; then
+            echo "::error::years must be four-digit years separated by single spaces, e.g. '2024 2025'."
+            exit 1
+          fi
+          if ! printf '%s' '${{ inputs.limit }}' | grep -Eq '^[1-9][0-9]*$'; then
+            echo "::error::limit must be a positive whole number."
+            exit 1
+          fi
+          echo "years='${{ inputs.years }}' limit=${{ inputs.limit }} mode=${{ inputs.mode }}"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 

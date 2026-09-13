@@ -158,7 +158,21 @@ class WealthAnalyzer:
 
         disabled_types = get_settings().disabled_anomaly_types_set
 
-        members = db.query(Member).all()  # Include all members (active + retired)
+        # `analyze_member` needs at least two parsed filings to compare, and
+        # returns [] otherwise. Asking the database which members have that
+        # replaces a walk of the entire roster -- two queries each to find out
+        # there is nothing to compare. Same condition, so the same members are
+        # analysed; see the note in TradeAnalyzer.analyze_all_members.
+        comparable = (
+            db.query(Disclosure.member_id)
+            .filter(Disclosure.parsed == True)  # noqa: E712
+            .group_by(Disclosure.member_id)
+            .having(func.count(Disclosure.id) >= 2)
+        )
+        member_ids = [row[0] for row in comparable]
+        members = (
+            db.query(Member).filter(Member.id.in_(member_ids)).all() if member_ids else []
+        )  # Include all members (active + retired)
 
         all_anomalies = []
         members_analyzed = 0

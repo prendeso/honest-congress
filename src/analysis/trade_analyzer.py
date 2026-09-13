@@ -445,7 +445,25 @@ class TradeAnalyzer:
 
         disabled_types = get_settings().disabled_anomaly_types_set
 
-        members = db.query(Member).all()  # Include all members (active + retired)
+        # Only a member who has traded can produce a trade finding:
+        # `analyze_member` returns immediately when a member has no
+        # transactions. Walking the whole roster to discover that cost two
+        # queries per member -- against a 12,770-name roster imported from
+        # Congress.gov, that is ~25,000 round trips to produce nothing, and it
+        # dominated the runtime of the analysis step.
+        #
+        # Scoping the loop is behaviour-preserving by construction: the members
+        # dropped here are exactly the ones whose analysis returned [] anyway.
+        # The only thing that changes is `members_analyzed`, which now reports
+        # how many were actually analysed rather than how many exist.
+        #
+        # Retired members are still included -- membership of this set is
+        # decided by having traded, not by being in office.
+        traded = db.query(Disclosure.member_id).join(
+            Transaction, Transaction.disclosure_id == Disclosure.id
+        )
+        member_ids = [row[0] for row in traded.distinct()]
+        members = db.query(Member).filter(Member.id.in_(member_ids)).all() if member_ids else []
 
         all_anomalies = []
         members_analyzed = 0

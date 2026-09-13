@@ -438,3 +438,88 @@ class TestReparsingReplacesRatherThanAppends:
             "a re-parse that yielded nothing deleted rows a previous parse got right"
         )
         assert filing.parse_confidence == 0.0, "and it must still be scored as having read nothing"
+
+
+class TestADuplicateDocIdDoesNotKillTheIngest:
+    """The House Clerk publishes the same DocID more than once.
+
+    Not hypothetical: the 2025 annual index contains four duplicated DocIDs,
+    and one of them ended a production ingest three minutes in with
+
+        UniqueViolation: duplicate key value violates unique constraint
+        "disclosures_document_id_key"
+        DETAIL:  Key (document_id)=(10078188) already exists.
+
+    The existence check queried the database, but `SessionLocal` is built with
+    `autoflush=False`, so a row added earlier in the same loop is invisible to
+    it. Both copies passed the check, both were added, and the single
+    `db.commit()` after the loop failed -- taking the whole year with it,
+    because that commit sits outside the per-item `try`.
+    """
+
+    def _index_entry(self, member, doc_id):
+        return {
+            "first_name": member.first_name,
+            "last_name": member.last_name,
+            "full_name": f"{member.first_name} {member.last_name}",
+            "state": member.state,
+            "district": "01",
+            "filing_type": "O",
+            "filing_date": datetime(2025, 5, 1),
+            "filing_year": 2025,
+            "document_id": doc_id,
+            "document_url": f"https://example.invalid/{doc_id}.pdf",
+            "chamber": "house",
+        }
+
+    def test_the_same_docid_twice_in_one_index_is_stored_once(self, db_session, tmp_path):
+        member = _make_member(db_session)
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+
+        # 10078188 is a real duplicate in the Clerk's 2025 index.
+        entries = [
+            self._index_entry(member, "10078188"),
+            self._index_entry(member, "10078188"),
+            self._index_entry(member, "10078189"),
+        ]
+        orch.house.fetch_annual_xml_index = lambda year: entries  # type: ignore[method-assign]
+
+        synced = orch.sync_house_disclosures(db_session, year=2025)
+
+        stored = db_session.query(Disclosure).filter(Disclosure.filing_year == 2025).all()
+        assert len(stored) == 2, f"expected 2 distinct filings, stored {len(stored)}"
+        assert {d.document_id for d in stored} == {"10078188", "10078189"}
+        assert synced == 2
+
+    def test_the_run_survives_and_stores_everything_after_the_duplicate(self, db_session, tmp_path):
+        """The damage was not the duplicate -- it was losing the whole year.
+
+        The commit that raised sat outside the per-item `try`, so one repeated
+        DocID discarded every filing queued behind it.
+        """
+        member = _make_member(db_session)
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+
+        entries = [self._index_entry(member, "10078188")]
+        entries += [self._index_entry(member, "10078188")]
+        entries += [self._index_entry(member, f"2000{i:04d}") for i in range(25)]
+        orch.house.fetch_annual_xml_index = lambda year: entries  # type: ignore[method-assign]
+
+        orch.sync_house_disclosures(db_session, year=2025)
+
+        stored = db_session.query(Disclosure).filter(Disclosure.filing_year == 2025).count()
+        assert stored == 26, f"the filings after the duplicate were lost: {stored} of 26"
+
+    def test_re_running_the_ingest_adds_nothing(self, db_session, tmp_path):
+        """Idempotence across runs, which is what makes re-dispatch safe."""
+        member = _make_member(db_session)
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        entries = [self._index_entry(member, f"3000{i:04d}") for i in range(5)]
+        orch.house.fetch_annual_xml_index = lambda year: entries  # type: ignore[method-assign]
+
+        orch.sync_house_disclosures(db_session, year=2025)
+        first = db_session.query(Disclosure).count()
+        orch.sync_house_disclosures(db_session, year=2025)
+        second = db_session.query(Disclosure).count()
+
+        assert first == second == 5

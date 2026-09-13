@@ -46,6 +46,34 @@ SENATE_VIEW_PATH = re.compile(
 )
 
 
+# The cell that carries the link is markup, not a label:
+#   <a href="/search/view/annual/14c0.../">Annual Report for CY 2023 (Amendment 1)</a>
+# Storing it raw overflowed disclosures.filing_type, a VARCHAR(50), and aborted
+# the whole ingest. SQLite ignores declared string lengths, so the tests were
+# blind to it -- the same Postgres-only blind spot that hid the NUL byte.
+_TAGS = re.compile(r"<[^>]+>")
+FILING_TYPE_MAX = 50
+
+
+def _filing_type_label(row: List[Any], is_ptr: bool) -> str:
+    """A short, human-readable label that fits the column.
+
+    "PTR" for trade reports, matching what the House path stores so the two
+    chambers can be filtered the same way. Otherwise the link's own text, which
+    is genuinely informative -- it distinguishes "Annual Report for CY 2023"
+    from "(Amendment 1)" -- with the markup stripped and the result bounded.
+    """
+    if is_ptr:
+        return "PTR"
+
+    for cell in row:
+        text = _TAGS.sub("", str(cell)).strip()
+        if text and "report" in text.lower():
+            return text[:FILING_TYPE_MAX]
+
+    return "FD"
+
+
 def _as_json_array(value: str) -> str:
     """eFD wants `report_types=[11]`, a JSON array in a form field.
 
@@ -289,7 +317,7 @@ class SenateIngester(BaseIngester):
                         "first_name": str(row[0]).strip(),
                         "last_name": str(row[1]).strip(),
                         "filer_type": str(row[2]).strip(),
-                        "filing_type": "PTR" if is_ptr else str(row[3]).strip(),
+                        "filing_type": _filing_type_label(row, is_ptr),
                         # The trade reports are what the House path calls a PTR.
                         # Without this they would be read by the annual-filing
                         # parser, which looks for a different layout entirely.

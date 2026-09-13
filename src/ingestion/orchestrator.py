@@ -2,6 +2,7 @@
 
 import logging
 import time
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Sequence
@@ -28,6 +29,74 @@ DATA_DIR = Path("data")
 DISCLOSURES_DIR = DATA_DIR / "disclosures"
 
 
+class UnmatchedFilers:
+    """Filings dropped because their filer matched no member in the roster.
+
+    The three sync paths each looked up the filer by exact last name, a
+    first-name prefix, chamber and state, and on a miss did `continue` behind a
+    `logger.debug`. Nothing counted it and nothing reported it, so two very
+    different outcomes were indistinguishable from the outside:
+
+      * a candidate report (FilingType "C") filed by somebody who is not a
+        member of Congress and never will be -- correctly skipped
+      * an annual filing or a PTR by a sitting member whose name we failed to
+        match -- a filing silently missing from the site
+
+    The House index for 2024 and 2025 carries 5,219 entries between them, of
+    which 1,570 are candidate reports. Whether the rest all landed was not a
+    question anyone could answer from a run's output. Now it is: the count is
+    reported per source, broken down by filing type, with examples.
+
+    This counts; it does not change what is stored. Deciding which of these
+    ought to match is a separate question, and it needs these numbers first.
+    """
+
+    # FilingType codes in the House Clerk index that belong to people who are
+    # not members. A miss on these is the system working.
+    NON_MEMBER_TYPES = {"C"}
+
+    def __init__(self, source: str):
+        self.source = source
+        self.by_type: Counter[str] = Counter()
+        self.by_filer: Counter[str] = Counter()
+
+    def record(self, entry: Dict[str, Any]) -> None:
+        self.by_type[str(entry.get("filing_type") or "?")] += 1
+        name = f"{entry.get('first_name', '')} {entry.get('last_name', '')}".strip()
+        self.by_filer[f"{name} ({entry.get('state') or '??'})"] += 1
+
+    @property
+    def total(self) -> int:
+        return sum(self.by_type.values())
+
+    @property
+    def expected(self) -> int:
+        """Misses that are not a problem: filings by non-members."""
+        return sum(count for t, count in self.by_type.items() if t in self.NON_MEMBER_TYPES)
+
+    def report(self) -> int:
+        """Log what was dropped. Returns the number that is not expected."""
+        if not self.total:
+            return 0
+
+        unexpected = self.total - self.expected
+        breakdown = ", ".join(f"{t}={n}" for t, n in sorted(self.by_type.items()))
+        examples = ", ".join(f"{name} x{n}" for name, n in self.by_filer.most_common(5))
+
+        log = logger.warning if unexpected else logger.info
+        log(
+            "%s: %d filing(s) matched no member (%d expected as non-member filings, "
+            "%d not). By filing type: %s. Most frequent filers: %s",
+            self.source,
+            self.total,
+            self.expected,
+            unexpected,
+            breakdown,
+            examples,
+        )
+        return unexpected
+
+
 class IngestionOrchestrator:
     """
     Orchestrates data ingestion from multiple sources.
@@ -41,6 +110,11 @@ class IngestionOrchestrator:
         self.senate = SenateIngester()
         self.senate_ptr = SenatePTRIngester()
         self.member_client = CongressGovClient()
+
+        # Filings dropped for want of a matching member, across every sync this
+        # orchestrator runs, excluding the ones expected to have no member.
+        # `run_full_sync` reports it so a run says how much it did NOT store.
+        self.unmatched_filers = 0
 
         # PDF Parsers
         self.disclosure_parser = DisclosureParser()
@@ -211,6 +285,7 @@ class IngestionOrchestrator:
         disclosures = self.house.fetch_annual_xml_index(year)
         synced = 0
 
+        unmatched = UnmatchedFilers(f"House annual filings {year}")
         seen: set[str] = set()
         for d in disclosures:
             try:
@@ -227,10 +302,7 @@ class IngestionOrchestrator:
                 )
 
                 if not member:
-                    logger.debug(
-                        f"Member not found for disclosure: "
-                        f"{d['first_name']} {d['last_name']} ({d['state']})"
-                    )
+                    unmatched.record(d)
                     continue
 
                 if self._already_queued(db, d["document_id"], seen):
@@ -261,6 +333,7 @@ class IngestionOrchestrator:
                 logger.error(f"Error syncing disclosure {d.get('document_id')}: {e}")
 
         db.commit()
+        self.unmatched_filers += unmatched.report()
         logger.info(f"Synced {synced} House disclosures for {year}")
         return synced
 
@@ -285,6 +358,10 @@ class IngestionOrchestrator:
         ptrs = self.house.fetch_ptr_xml_index(year)
         synced = 0
 
+        # Every entry here is FilingType "P", so there is no non-member class to
+        # subtract: a PTR that matches nobody is a disclosed trade missing from
+        # the site, full stop.
+        unmatched = UnmatchedFilers(f"House PTRs {year}")
         seen: set[str] = set()
         for d in ptrs:
             try:
@@ -301,10 +378,7 @@ class IngestionOrchestrator:
                 )
 
                 if not member:
-                    logger.debug(
-                        f"Member not found for PTR: "
-                        f"{d['first_name']} {d['last_name']} ({d['state']})"
-                    )
+                    unmatched.record(d)
                     continue
 
                 if self._already_queued(db, d["document_id"], seen):
@@ -340,6 +414,7 @@ class IngestionOrchestrator:
                 logger.error(f"Error syncing PTR {d.get('document_id')}: {e}")
 
         db.commit()
+        self.unmatched_filers += unmatched.report()
         logger.info(f"Synced {synced} House PTRs for {year}")
         return synced
 
@@ -427,6 +502,8 @@ class IngestionOrchestrator:
                 logger.error(f"Error syncing Senate disclosure {d.get('document_id')}: {e}")
 
         db.commit()
+        # Senate filings all belong to sitting senators, so every miss counts.
+        self.unmatched_filers += unmatched
         logger.info(
             f"Synced {synced} Senate disclosures for {year} "
             f"({unmatched} unmatched, {ambiguous} ambiguous, skipped)"
@@ -899,7 +976,11 @@ class IngestionOrchestrator:
             "house_disclosures": 0,
             "house_ptrs": 0,
             "senate_disclosures": 0,
+            # Not a failure count -- a coverage one. A run that stores nothing
+            # and a run that stores everything used to print the same thing.
+            "unmatched_filers": 0,
         }
+        self.unmatched_filers = 0
 
         with get_db() as db:
             # Sync members first
@@ -919,6 +1000,7 @@ class IngestionOrchestrator:
                     db, year, download_files
                 )
 
+        summary["unmatched_filers"] = self.unmatched_filers
         logger.info(f"Full sync complete: {summary}")
         return summary
 

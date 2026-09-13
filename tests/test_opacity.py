@@ -158,7 +158,8 @@ class TestMemberOpacity:
 
         score = member_opacity(db, m)
 
-        assert score["components"]["disclosures_unparsed_percent"] == 100.0
+        assert score["components"]["disclosures_unparsed"] == 1
+        assert score["components"]["filings_unreadable_percent"] == 100.0
         assert score["opacity_score"] > 0
 
     def test_worst_case_scores_higher_than_partial(self, db):
@@ -253,3 +254,80 @@ class TestOpacityApi:
         m = _member(db)
 
         assert client.get(f"/api/compliance/opacity/{m.id}").status_code == 404
+
+
+class TestAScannedFilerIsNotInvisible:
+    """The worst case used to fall out of the measure entirely.
+
+    A scan of a paper form is `parsed = True` -- the parser ran, raised
+    nothing, and extracted nothing -- so the old `not d.parsed` measure scored
+    it 0% unparsed, and because it produced no transactions or assets it put
+    nothing in the item denominator either. A member filing exclusively on
+    paper therefore appeared perfectly legible, and if they had no readable
+    filings at all they fell below MIN_ITEMS_FOR_SCORE and vanished from the
+    leaderboard: the least legible filer in Congress, excluded from the
+    legibility ranking for being too illegible.
+
+    12.7% of 2024-25 House PTRs are such scans, so this is not hypothetical.
+    """
+
+    def _scan(self, db, member, doc_id):
+        d = _disclosure(db, member, doc_id)
+        d.has_text_layer = False
+        d.parse_confidence = 0.0
+        db.commit()
+        return d
+
+    def test_a_filer_with_only_scans_is_scored_at_all(self, db):
+        m = _member(db)
+        for i in range(3):
+            self._scan(db, m, f"SCAN-{i}")
+
+        score = member_opacity(db, m)
+
+        assert score is not None, "a member whose every filing is unreadable must be scored"
+        assert score["components"]["disclosures_scanned"] == 3
+
+    def test_a_filer_with_only_scans_is_the_most_opaque(self, db):
+        """Not 25 out of 100 -- which is what averaging in three undefined zeroes gave."""
+        scanner = _member(db, "OP00010", "Scanner")
+        for i in range(3):
+            self._scan(db, scanner, f"S-{i}")
+
+        clean = _member(db, "OP00011", "Clean")
+        d = _disclosure(db, clean, "CLEAN-1")
+        for _ in range(MIN_ITEMS_FOR_SCORE):
+            _txn(db, d)
+
+        assert member_opacity(db, scanner)["opacity_score"] == 100.0
+        assert member_opacity(db, clean)["opacity_score"] == 0.0
+
+    def test_scans_dilute_a_members_score_in_proportion(self, db):
+        """Half unreadable is not the same as all unreadable."""
+        m = _member(db)
+        readable = _disclosure(db, m, "READ-1")
+        readable.parse_confidence = 1.0
+        db.commit()
+        for _ in range(MIN_ITEMS_FOR_SCORE):
+            _txn(db, readable)
+        self._scan(db, m, "SCAN-X")
+
+        score = member_opacity(db, m)
+
+        assert score["components"]["filings_unreadable_percent"] == 50.0
+        # One of four components at 50, the other three at 0.
+        assert score["opacity_score"] == 12.5
+
+    def test_a_zero_confidence_parse_counts_even_with_a_text_layer(self, db):
+        """A filing that had text and still yielded nothing is unreadable too."""
+        m = _member(db)
+        broken = _disclosure(db, m, "BROKEN-1")
+        broken.has_text_layer = True
+        broken.parse_confidence = 0.0
+        db.commit()
+
+        score = member_opacity(db, m)
+
+        assert score is not None
+        assert score["components"]["filings_unreadable"] == 1
+        assert score["components"]["disclosures_scanned"] == 0

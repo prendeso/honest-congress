@@ -2,7 +2,15 @@
 
 Every other measure here asks what a member did. This one asks how clearly they
 said it -- what share of their filings are missing a ticker, describe a holding
-as "various", or report an amount that cannot be read at all.
+as "various", report an amount that cannot be read, or could not be read at all.
+
+That last component is the one that took two attempts. It used to be `not
+parsed`, which missed the worst case completely: a scan of a paper form IS
+parsed -- the parser ran, raised nothing and extracted nothing -- so a member
+filing exclusively on paper scored 0% unparsed, contributed no items to any
+denominator, and came out perfectly legible. If none of their filings were
+readable they fell below MIN_ITEMS_FOR_SCORE and left the leaderboard
+altogether. 12.7% of 2024-25 House trade reports are such scans.
 
 A member whose filings cannot be parsed is not thereby suspicious, and this
 makes no such claim: the House and Senate accept free-text filings, handwriting
@@ -62,6 +70,23 @@ def member_opacity(db: Session, member: Member) -> Dict[str, Any] | None:
     disclosure_ids = [d.id for d in disclosures]
     unparsed = sum(1 for d in disclosures if not d.parsed)
     parse_errors = sum(1 for d in disclosures if d.parse_error)
+    scanned = sum(1 for d in disclosures if d.has_text_layer is False)
+    # Every filing that produced nothing usable, however it failed to: never
+    # parsed, a scan with no text in it, or parsed and scored zero.
+    #
+    # `not parsed` alone was the old measure and it missed the worst case
+    # entirely. A scan of a paper form IS parsed -- the parser ran, raised
+    # nothing, and extracted nothing -- so a member who files exclusively on
+    # paper scored 0% unparsed and contributed no items at all, which put their
+    # illegibility in neither the numerator nor the denominator. If every one
+    # of their filings was a scan they fell below MIN_ITEMS_FOR_SCORE and
+    # dropped off the board completely: the least legible filer in Congress,
+    # excluded from the legibility ranking for being too illegible.
+    unreadable_filings = sum(
+        1
+        for d in disclosures
+        if not d.parsed or d.has_text_layer is False or d.parse_confidence == 0.0
+    )
 
     transactions: List[Transaction] = (
         db.query(Transaction).filter(Transaction.disclosure_id.in_(disclosure_ids)).all()
@@ -69,7 +94,9 @@ def member_opacity(db: Session, member: Member) -> Dict[str, Any] | None:
     assets: List[Asset] = db.query(Asset).filter(Asset.disclosure_id.in_(disclosure_ids)).all()
 
     items = len(transactions) + len(assets)
-    if items < MIN_ITEMS_FOR_SCORE:
+    if items < MIN_ITEMS_FOR_SCORE and not unreadable_filings:
+        # Too little to say anything about -- unless the reason there is too
+        # little is itself the finding.
         return None
 
     missing_ticker = sum(1 for t in transactions if not t.ticker)
@@ -80,15 +107,27 @@ def member_opacity(db: Session, member: Member) -> Dict[str, Any] | None:
         1 for t in transactions if t.amount_min is None and t.amount_max is None
     ) + sum(1 for a in assets if a.value_min is None and a.value_max is None)
 
-    # Equal weight across the three item-level components. Each is a share of
-    # the items it can apply to, so they stay comparable between members with
-    # very different filing volumes.
+    # Equal weight across the components, each a share of the things it can
+    # apply to, so they stay comparable between members filing very different
+    # volumes.
     ticker_rate = missing_ticker / len(transactions) * 100 if transactions else 0.0
-    vague_rate = vague_description / items * 100
-    amount_rate = unreadable_amount / items * 100
-    unparsed_rate = unparsed / len(disclosures) * 100
+    vague_rate = vague_description / items * 100 if items else 0.0
+    amount_rate = unreadable_amount / items * 100 if items else 0.0
+    unreadable_filing_rate = unreadable_filings / len(disclosures) * 100
 
-    score = round((ticker_rate + vague_rate + amount_rate + unparsed_rate) / 4, 2)
+    # Average only over the components that are DEFINED. A member with no
+    # readable items has no ticker rate, no vagueness rate and no amount rate
+    # -- those are undefined, not zero -- and averaging three zeroes in would
+    # score the most opaque filer at 25 out of 100 and rank them as one of the
+    # clearest. The filing-level component is always defined, because the
+    # member has filings or this function returned above.
+    defined = [unreadable_filing_rate]
+    if transactions:
+        defined.append(ticker_rate)
+    if items:
+        defined.extend((vague_rate, amount_rate))
+
+    score = round(sum(defined) / len(defined), 2)
 
     return {
         "member_id": member.id,
@@ -107,8 +146,12 @@ def member_opacity(db: Session, member: Member) -> Dict[str, Any] | None:
             "items_vaguely_described_percent": round(vague_rate, 2),
             "items_with_unreadable_amount": unreadable_amount,
             "items_with_unreadable_amount_percent": round(amount_rate, 2),
+            "filings_unreadable": unreadable_filings,
+            "filings_unreadable_percent": round(unreadable_filing_rate, 2),
+            # The breakdown, because the three have different remedies. A scan
+            # needs OCR nobody here does; an unparsed filing needs a re-run.
             "disclosures_unparsed": unparsed,
-            "disclosures_unparsed_percent": round(unparsed_rate, 2),
+            "disclosures_scanned": scanned,
             "disclosures_with_parse_errors": parse_errors,
         },
     }
@@ -125,14 +168,18 @@ def opacity_leaderboard(db: Session, limit: int | None = None) -> Dict[str, Any]
 
     return {
         "members_scored": len(scores),
+        # Members below this are unscored -- unless the reason they are below
+        # it is that their filings could not be read, which is the finding.
         "min_items": MIN_ITEMS_FOR_SCORE,
         "members": scores[:limit] if limit else scores,
         "note": (
             "Opacity measures how legible a member's filings are, not their conduct. "
             "House and Senate systems accept free text, scanned documents and "
-            "handwriting, so a high score often reflects the filing system rather "
-            "than the filer. It is reported because it bounds what every other "
-            "detector can see: a member whose filings cannot be read will show few "
-            "findings for reasons unrelated to their trading."
+            "handwriting -- 12.7% of 2024-25 House trade reports are photographs "
+            "of paper forms with no machine-readable text at all -- so a high "
+            "score often reflects the filing system rather than the filer. It is "
+            "reported because it bounds what every other detector can see: a "
+            "member whose filings cannot be read will show few findings for "
+            "reasons unrelated to their trading."
         ),
     }

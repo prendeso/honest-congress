@@ -149,3 +149,94 @@ class TestThePageIsReachable:
 
     def test_the_nav_links_to_it(self, client):
         assert 'href="/compliance"' in client.get("/").text
+
+
+class TestTheLeaderboardsDoNotQueryPerMember:
+    """These walked the whole roster, one query per member.
+
+    On the production roster of 12,766 members that is 12,766 round trips for
+    the compliance board and roughly three times that for opacity. Measured
+    against the live site it took 48 seconds to return an EMPTY leaderboard --
+    and `/api/insights` called it on every load, so the landing page of a
+    public site hung.
+
+    Counting queries rather than timing anything: a timing assertion is flaky
+    and does not say what went wrong, whereas "it issued one query per member"
+    is the actual defect and stays true on any machine.
+    """
+
+    @staticmethod
+    def _count_queries(callable_):
+        from sqlalchemy import event
+
+        from src.db import engine
+
+        seen: list[str] = []
+
+        def record(conn, cursor, statement, params, context, executemany):
+            seen.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            callable_()
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        return seen
+
+    def _many_members(self, db, count):
+        from src.db.models import Chamber, Member, Party
+
+        for i in range(count):
+            db.add(
+                Member(
+                    bioguide_id=f"Q{i:06d}",
+                    first_name="Quer",
+                    last_name=f"Y{i}",
+                    chamber=Chamber.HOUSE,
+                    party=Party.DEMOCRAT,
+                    state="NY",
+                )
+            )
+        db.commit()
+
+    def test_compliance_board_cost_does_not_grow_with_the_roster(self, client, seeded):
+        from src.analysis.compliance import compliance_leaderboard
+
+        before = len(self._count_queries(lambda: compliance_leaderboard(seeded)))
+        self._many_members(seeded, 60)
+        after = len(self._count_queries(lambda: compliance_leaderboard(seeded)))
+
+        assert after <= before + 1, (
+            f"adding 60 members added {after - before} queries -- this is per-member again"
+        )
+
+    def test_opacity_board_cost_does_not_grow_with_the_roster(self, client, seeded):
+        from src.analysis.opacity import opacity_leaderboard
+
+        before = len(self._count_queries(lambda: opacity_leaderboard(seeded)))
+        self._many_members(seeded, 60)
+        after = len(self._count_queries(lambda: opacity_leaderboard(seeded)))
+
+        assert after <= before + 1, (
+            f"adding 60 members added {after - before} queries -- this is per-member again"
+        )
+
+    def test_the_landing_page_headline_is_a_couple_of_queries(self, client, seeded):
+        """`/api/insights` built a whole leaderboard to print one percentage."""
+        from src.analysis.compliance import late_filing_rate
+
+        self._many_members(seeded, 60)
+        queries = self._count_queries(lambda: late_filing_rate(seeded))
+
+        assert len(queries) <= 2, f"{len(queries)} queries for one headline figure"
+
+    def test_the_headline_agrees_with_the_leaderboard(self, seeded):
+        """Two code paths, one answer -- or the front page contradicts the table."""
+        from src.analysis.compliance import compliance_leaderboard, late_filing_rate
+
+        board = compliance_leaderboard(seeded, min_transactions=1)
+        headline = late_filing_rate(seeded)
+
+        assert headline["transactions_checked"] == board["total_transactions_checked"]
+        assert headline["filed_late"] == board["total_filed_late"]
+        assert headline["late_rate_percent"] == board["overall_late_rate_percent"]

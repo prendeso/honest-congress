@@ -159,11 +159,23 @@ def member_opacity(db: Session, member: Member) -> Dict[str, Any] | None:
 
 def opacity_leaderboard(db: Session, limit: int | None = None) -> Dict[str, Any]:
     """Members ranked from least to most legible."""
-    scores = [
-        score
-        for member in db.query(Member).all()
-        if (score := member_opacity(db, member)) is not None
-    ]
+    # Only members who actually filed anything can be scored, and
+    # `member_opacity` returns None for the rest -- so ask the disclosures
+    # table who those are instead of walking the whole roster. This iterated
+    # every Member and issued three queries inside each call: on the
+    # production roster of 12,766 members that is ~38,000 round trips to
+    # produce a list that can only ever contain filers.
+    filer_ids = [row[0] for row in db.query(Disclosure.member_id).distinct().all()]
+
+    scores = (
+        [
+            score
+            for member in db.query(Member).filter(Member.id.in_(filer_ids)).all()
+            if (score := member_opacity(db, member)) is not None
+        ]
+        if filer_ids
+        else []
+    )
     scores.sort(key=lambda s: -s["opacity_score"])
 
     return {

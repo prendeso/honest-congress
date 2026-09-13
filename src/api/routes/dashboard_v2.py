@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from src.analysis.compliance import compliance_leaderboard
+from src.analysis.compliance import late_filing_rate
 from src.api.templating import templates
 from src.db import Anomaly, Disclosure, Transaction, get_db_session
 
@@ -146,19 +146,21 @@ async def get_insights(db: Session = Depends(get_db_session)) -> list[dict[str, 
 
         # The most defensible number here: two dates that both appear on the
         # filing, subtracted. No threshold anybody chose.
-        late = compliance_leaderboard(db, min_transactions=1)
-        if late["total_transactions_checked"]:
+        # Two aggregates, not a full leaderboard. Building the leaderboard here
+        # meant the landing page scored every filer individually on each load.
+        late = late_filing_rate(db)
+        if late["transactions_checked"]:
             insights.append(
                 {
                     "id": 2,
                     "icon": "⏱️",
                     "title": "Reported after the deadline",
                     "description": (
-                        f"Share of {late['total_transactions_checked']:,} disclosed trades "
+                        f"Share of {late['transactions_checked']:,} disclosed trades "
                         f"filed more than {late['deadline_days']} days after the trade, "
                         "which is what the STOCK Act allows."
                     ),
-                    "value": f"{late['overall_late_rate_percent']}%",
+                    "value": f"{late['late_rate_percent']}%",
                 }
             )
 

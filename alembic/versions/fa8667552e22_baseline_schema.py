@@ -156,3 +156,18 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_members_anomaly_count'), table_name='members')
     op.drop_table('members')
     # ### end Alembic commands ###
+
+    # Alembic's autogenerate wrote the table drops above but not the enum
+    # types those tables introduced, and Postgres keeps a type after the last
+    # column using it is gone. So `downgrade base` left `chamber`, `party`,
+    # `assettype` and `transactiontype` behind, and the next `upgrade` died on
+    # `CREATE TYPE chamber` -- meaning `cli reset --yes`, which is exactly
+    # `downgrade base` followed by `upgrade head`, dropped every table and then
+    # could not rebuild. It left the database empty with no schema at all.
+    #
+    # SQLite has no native enum types and no DROP TYPE, so this is Postgres
+    # only. Dropped in reverse creation order; IF EXISTS keeps the downgrade
+    # re-runnable.
+    if op.get_bind().dialect.name == "postgresql":
+        for type_name in ("transactiontype", "assettype", "party", "chamber"):
+            op.execute(f"DROP TYPE IF EXISTS {type_name}")

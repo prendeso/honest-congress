@@ -10,6 +10,7 @@ from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, contains_eager
 
 from src.analysis.catalog import as_dicts
+from src.api.auth import require_admin
 from src.api.routes.anomalies._shared import (
     AnomalyListResponse,
     AnomalyResponse,
@@ -254,8 +255,19 @@ async def get_anomaly(
 async def mark_anomaly_reviewed(
     anomaly_id: int,
     db: Session = Depends(get_db_session),
+    _: str = Depends(require_admin),
 ):
-    """Mark an anomaly as reviewed."""
+    """Mark an anomaly as reviewed.
+
+    Admin-only, like every other endpoint that writes. It was not: this was the
+    one mutating route in the API with no `require_admin` dependency, so any
+    unauthenticated caller could set `reviewed = True` on any finding in the
+    production database. Smaller blast radius than `/cleanup`, which deletes
+    rows, but the same kind of hole.
+
+    Nothing called it -- no template, no test, no script -- so gating it breaks
+    no caller.
+    """
     anomaly = db.query(Anomaly).filter(Anomaly.id == anomaly_id).first()
     if not anomaly:
         raise HTTPException(status_code=404, detail="Anomaly not found")

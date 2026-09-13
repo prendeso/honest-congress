@@ -223,8 +223,12 @@ literal string and uvicorn rejects it.
 
 `railway.toml` runs `alembic upgrade head` as a pre-deploy step.
 `.github/workflows/ci.yml` runs ruff, mypy (advisory, `continue-on-error`) and
-pytest on every PR. `daily-update.yml` runs migrate → ingest → ingest-trades →
-analyze nightly.
+pytest on every PR. `daily-update.yml` runs nightly: migrate → ingest →
+sync-committees → the four Tier-2 feeds → analyze → stats. It is a top-up, not
+a rebuild — it never runs `parse`, because a runner starts from a fresh
+checkout and nothing persists between runs. `rebuild.yml` is the manual
+`workflow_dispatch` that does build the dataset, chunked by a `limit` input
+because a runner is capped at six hours.
 
 `/health` pings the database and returns 503 if it is unreachable;
 `/health/live` always returns 200 for liveness probes.

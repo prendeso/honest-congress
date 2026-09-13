@@ -748,6 +748,23 @@ class IngestionOrchestrator:
         if ptr_only:
             query = query.filter(Disclosure.is_ptr == True)
 
+        # Least-recently-touched first, and this is what makes `--limit`
+        # resumable rather than a treadmill.
+        #
+        # There was no ordering at all, so the database returned an arbitrary
+        # set. That is harmless for the default filter -- a filing that parses
+        # leaves `parsed == False` and cannot come back -- but it silently
+        # breaks the two filters a filing can stay inside after being read.
+        # `--min-confidence 1.0 --limit 500` would take some arbitrary 500,
+        # re-read them, leave any that scored below 1.0 still matching, and
+        # take the same 500 again on the next run: a re-parse campaign that
+        # never reaches the rest of the corpus however many times it is run.
+        #
+        # `updated_at` carries `onupdate`, so parsing a filing moves it to the
+        # back of the queue whatever its new score. Each run therefore advances
+        # to filings it has not reached, and repeated runs converge.
+        query = query.order_by(Disclosure.updated_at.asc(), Disclosure.id.asc())
+
         if limit:
             query = query.limit(limit)
 

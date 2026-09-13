@@ -343,6 +343,25 @@ decide what to fetch, so running them before `parse` fetches nothing.
 source table is empty, which is the difference between "found nothing" and
 "never ran".
 
+Most of the time you do not want `reset`. After a parser change, what you
+actually want is to re-read the filings without destroying anything:
+
+```bash
+python -m src.cli purge-disabled            # drop findings from disabled detectors
+python -m src.cli parse --min-confidence 1.0  # re-read every filing not read perfectly
+python -m src.cli analyze                   # recompute against the corrected data
+```
+
+`purge-disabled` matters because disabling a detector only stops it *writing* —
+findings it already persisted stay in the database and keep being served.
+
+In CI, the **Rebuild** workflow (`.github/workflows/rebuild.yml`) runs that
+sequence against the deployed database: `workflow_dispatch` only, guarded by a
+`confirm` input, chunked by a `limit` because a runner is capped at six hours.
+Re-dispatch it until the parse step reports nothing left. The nightly job
+cannot do this — it never runs `parse`, since a runner starts from a fresh
+checkout and the PDF corpus does not persist.
+
 ## Development
 
 ```bash

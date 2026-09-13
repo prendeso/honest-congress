@@ -290,6 +290,88 @@ class TestAdminAuth:
         assert exc.value.status_code == 401
 
 
+class TestEveryWriteIsBehindAdminAuth:
+    """Enumerate the routes rather than trusting that each one remembered.
+
+    `POST /api/anomalies/{id}/review` shipped with no `require_admin`
+    dependency at all -- `require_admin` was not even imported into
+    `query.py` -- so any unauthenticated caller could write `reviewed = True`
+    to the production database. Nothing caught it because every test that
+    existed tested `require_admin` itself, and that function was fine. The
+    hole was a route that never called it.
+
+    So this asserts the property directly, over every route the app actually
+    registers. A new write endpoint that forgets the dependency fails here.
+    """
+
+    #: The only mutating route that must stay open: it is how you authenticate.
+    #: It does its own checking -- 503 with no password configured, 401 on a
+    #: wrong one (`routes/anomalies/admin.py`).
+    PUBLIC_BY_DESIGN = {"/api/anomalies/admin/login"}
+
+    WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+    @classmethod
+    def _write_routes(cls, routes, prefix=""):
+        """Every write route and the dependencies guarding it, fully qualified.
+
+        This FastAPI version does not flatten `include_router` into
+        `app.routes` -- it keeps `_IncludedRouter` wrappers, whose real routes
+        hang off `original_router` and whose prefix lives on `include_context`.
+        A walker that assumed the flat list found nothing at all, which is the
+        failure mode `test_the_walk_actually_finds_the_routes` exists to catch.
+        """
+        for route in routes:
+            if type(route).__name__ == "_IncludedRouter":
+                nested = getattr(route.include_context, "prefix", "") or ""
+                yield from cls._write_routes(route.original_router.routes, prefix + nested)
+                continue
+
+            nested_routes = getattr(route, "routes", None)
+            if nested_routes:
+                own = getattr(route, "prefix", "") or ""
+                yield from cls._write_routes(nested_routes, prefix + own)
+                continue
+
+            methods = getattr(route, "methods", None) or set()
+            if not methods & cls.WRITE_METHODS:
+                continue
+
+            guards = {
+                dependency.call.__name__
+                for dependency in route.dependant.dependencies
+                if getattr(dependency, "call", None) is not None
+            }
+            yield sorted(methods & cls.WRITE_METHODS)[0], prefix + route.path, guards
+
+    def test_no_write_route_is_unauthenticated(self):
+        from src.api.main import app
+
+        unguarded = [
+            f"{method} {path}"
+            for method, path, guards in self._write_routes(app.routes)
+            if path not in self.PUBLIC_BY_DESIGN and "require_admin" not in guards
+        ]
+
+        assert not unguarded, (
+            f"these routes write and have no require_admin dependency: {unguarded}. "
+            "Add `_: str = Depends(require_admin)`, or list the route in "
+            "PUBLIC_BY_DESIGN with a reason."
+        )
+
+    def test_the_walk_actually_finds_the_routes(self):
+        """Without this, a walker that matches nothing passes the test above."""
+        from src.api.main import app
+
+        found = {path: guards for _, path, guards in self._write_routes(app.routes)}
+
+        assert len(found) >= 8, f"expected at least 8 write routes, walked {sorted(found)}"
+        assert "/api/anomalies/{anomaly_id}/review" in found, (
+            "the route this class was written for is not being reached by the walk"
+        )
+        assert "require_admin" in found["/api/anomalies/{anomaly_id}/review"]
+
+
 # ---------------- anomaly ordering ----------------
 
 

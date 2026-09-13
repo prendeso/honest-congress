@@ -256,6 +256,56 @@ class TestScannedFilingsAreRecordedAsSuch:
         assert readable.has_text_layer is True
         assert readable.parse_confidence and readable.parse_confidence > 0
 
+    def test_a_limited_reparse_advances_instead_of_repeating(self, db_session, tmp_path):
+        """`--min-confidence` with `--limit` must reach the whole corpus.
+
+        The query had no ORDER BY, so the database returned an arbitrary set.
+        A filing that re-parses to less than the threshold still matches the
+        filter, so a limited run took the same rows every time and the rest of
+        the corpus was never reached, however many times the job was
+        dispatched. Ordering by `updated_at` -- which `onupdate` bumps on every
+        parse -- sends a filing to the back of the queue as soon as it is read.
+        """
+        member = _make_member(db_session)
+        for index in range(4):
+            filing = self._ptr(db_session, member, f"LOW-{index}")
+            filing.parsed, filing.parse_confidence, filing.has_text_layer = True, 0.5, True
+            filing.updated_at = datetime(2024, 1, 1 + index)
+        db_session.commit()
+
+        # Parse two, then two more. Every filing still scores below 1.0
+        # afterwards, so nothing leaves the filter -- only the ordering can
+        # make the second run pick up different rows.
+        orch = self._orchestrator(tmp_path, text_extracted=True)
+        orch.ptr_parser.parse_ptr = lambda path: {  # type: ignore[method-assign]
+            "quality": {"text_extracted": True, "rows_detected": 2, "rows_parsed": 1},
+            "transactions": [
+                {
+                    "transaction_date": datetime(2024, 3, 1),
+                    "transaction_type": "purchase",
+                    "amount_min": 1001,
+                    "amount_max": 15000,
+                    "description": "AAPL",
+                    "ticker": "AAPL",
+                }
+            ],
+        }
+
+        first = {d.document_id for d in self._reparse_batch(db_session, orch, limit=2)}
+        second = {d.document_id for d in self._reparse_batch(db_session, orch, limit=2)}
+
+        assert first == {"LOW-0", "LOW-1"}, "oldest first"
+        assert second == {"LOW-2", "LOW-3"}, (
+            f"the second run repeated {first & second} instead of advancing"
+        )
+
+    def _reparse_batch(self, db, orch, *, limit):
+        """Run one limited re-parse and report which filings it touched."""
+        before = {d.document_id: d.updated_at for d in db.query(Disclosure).all()}
+        orch.parse_disclosures(db, min_confidence=1.0, limit=limit, delay=0)
+        db.expire_all()
+        return [d for d in db.query(Disclosure).all() if d.updated_at != before.get(d.document_id)]
+
     def test_reparsing_the_low_scorers_leaves_the_scans_alone(self, db_session, tmp_path):
         """A scan scores 0.0 forever. Re-reading it every night buys nothing."""
         member = _make_member(db_session)

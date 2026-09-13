@@ -63,6 +63,12 @@ def cmd_ingest(args):
     # Printed only when there is something to say, but never hidden. A filing
     # whose filer matched no member is not stored and never reaches the site;
     # before this it was dropped behind a debug log and nothing counted it.
+    if summary.get("senate_unavailable"):
+        print(
+            "  WARNING: Senate eFD could not be queried. The Senate count above is an "
+            "outage, not a finding about the Senate."
+        )
+
     unmatched = summary.get("unmatched_filers", 0)
     if unmatched:
         print(
@@ -302,8 +308,19 @@ def cmd_fix_dates(args):
 
 
 def cmd_fix_urls(args):
-    """Fix incorrect disclosure URLs in the database."""
-    from src.db.models import Disclosure
+    """Fix incorrect disclosure URLs in the database.
+
+    HOUSE ONLY, and the filter is load-bearing rather than tidy. Every URL this
+    builds points at disclosures-clerk.house.gov, and a House Clerk URL is
+    reconstructible because the document id IS the filename. A Senate filing is
+    neither: it lives at efdsearch.senate.gov under a UUID and a path segment
+    that varies by format (/view/ptr/, /view/paper/, /view/annual/), none of
+    which can be derived from what is stored. Run unscoped against a database
+    containing Senate rows -- which it now can, since Senate ingestion actually
+    retrieves filings -- this would rewrite every Senate URL into a House Clerk
+    URL that 404s, discarding the only link to the real document.
+    """
+    from src.db.models import Chamber, Disclosure, Member
 
     BASE_URL = "https://disclosures-clerk.house.gov/public_disc"
 
@@ -312,10 +329,24 @@ def cmd_fix_urls(args):
             return f"{BASE_URL}/ptr-pdfs/{d.filing_year}/{d.document_id}.pdf"
         return f"{BASE_URL}/financial-pdfs/{d.filing_year}/{d.document_id}.pdf"
 
-    print("Checking disclosure URLs...")
+    print("Checking House disclosure URLs...")
 
     with get_db() as db:
-        disclosures = db.query(Disclosure).all()
+        disclosures = (
+            db.query(Disclosure)
+            .join(Member, Disclosure.member_id == Member.id)
+            .filter(Member.chamber == Chamber.HOUSE)
+            .all()
+        )
+
+        skipped = (
+            db.query(Disclosure)
+            .join(Member, Disclosure.member_id == Member.id)
+            .filter(Member.chamber != Chamber.HOUSE)
+            .count()
+        )
+        if skipped:
+            print(f"  (skipping {skipped} non-House disclosures — their URLs are not derivable)")
 
         issues = []
         for d in disclosures:

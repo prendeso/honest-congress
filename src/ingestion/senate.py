@@ -13,11 +13,52 @@ from src.ingestion.base import BaseIngester
 
 logger = logging.getLogger(__name__)
 
+
+class SenateSearchError(RuntimeError):
+    """eFD could not be queried at all.
+
+    Distinct from an empty result on purpose. Every failure path here used to
+    `return []`, so a total outage and a year with no filings produced the same
+    value -- and `sync_senate_disclosures` reported "Synced 0 Senate disclosures"
+    while the workflow step exited green. Senate coverage was zero for months and
+    nothing in any run said so.
+    """
+
+
 # Senate eFD search URL
 SENATE_EFD_BASE_URL = "https://efdsearch.senate.gov"
 SENATE_SEARCH_URL = f"{SENATE_EFD_BASE_URL}/search"
-SENATE_REPORT_URL = f"{SENATE_EFD_BASE_URL}/search/view/paper"
 SENATE_DATA_URL = f"{SENATE_EFD_BASE_URL}/search/report/data/"
+
+# Report and filer codes, read from the live search form rather than guessed.
+REPORT_TYPE_ANNUAL = "7"
+REPORT_TYPE_PTR = "11"
+FILER_TYPE_SENATOR = "1"
+FILER_TYPE_CANDIDATE = "4"
+FILER_TYPE_FORMER_SENATOR = "5"
+
+# A filing's URL carries its own kind. eFD serves several shapes --
+# /search/view/ptr/<uuid>/ for an electronically filed trade report,
+# /search/view/paper/<uuid>/ for a scan -- and the document id is a UUID, not
+# the run of digits this module used to require.
+SENATE_VIEW_PATH = re.compile(
+    r"/search/view/(?P<kind>[a-z_]+)/(?P<doc_id>[0-9a-fA-F-]{8,}|\d+)/?",
+)
+
+
+def _as_json_array(value: str) -> str:
+    """eFD wants `report_types=[11]`, a JSON array in a form field.
+
+    Accepts "", "11", or an already-bracketed "[11]" so callers can pass either
+    shape; an empty value means "every type", which the endpoint expresses as an
+    empty array.
+    """
+    value = (value or "").strip()
+    if not value:
+        return "[]"
+    if value.startswith("["):
+        return value
+    return "[" + ",".join(part.strip() for part in value.split(",") if part.strip()) + "]"
 
 
 class SenateIngester(BaseIngester):
@@ -48,15 +89,25 @@ class SenateIngester(BaseIngester):
             response.raise_for_status()
             time.sleep(1)  # Rate limiting
 
-            # Accept the agreement (required)
-            agree_response = self.session.get(
-                f"{SENATE_EFD_BASE_URL}/search/home/", params={"accept": "true"}, timeout=30
+            # Accept the agreement. eFD requires a POST of `prohibition_agreement=1`
+            # carrying the CSRF token; a GET with `?accept=true` -- what this sent
+            # for as long as the file has existed -- leaves the session
+            # unaccepted, and every subsequent search answers 503. Verified
+            # against the live site: the GET form yields three 503s and the POST
+            # form yields 200 with records, from the same machine seconds apart.
+            token = self.session.cookies.get("csrftoken", "")
+            agree_response = self.session.post(
+                f"{SENATE_EFD_BASE_URL}/search/home/",
+                data={"prohibition_agreement": "1", "csrfmiddlewaretoken": token},
+                headers={"Referer": f"{SENATE_EFD_BASE_URL}/search/home/"},
+                timeout=30,
             )
             agree_response.raise_for_status()
             time.sleep(1)
 
-            # Extract CSRF token
-            self._csrf_token = self.session.cookies.get("csrftoken", "")
+            # The token is rotated by the POST, so re-read it rather than reusing
+            # the pre-agreement value.
+            self._csrf_token = self.session.cookies.get("csrftoken", token)
 
             if self._csrf_token:
                 self._session_initialized = True
@@ -106,19 +157,29 @@ class SenateIngester(BaseIngester):
             List of disclosure metadata dicts
         """
         if not self._init_session():
-            logger.error("Failed to initialize session")
-            return []
+            raise SenateSearchError(
+                "could not establish an eFD session (the agreement POST failed)"
+            )
 
         try:
             # Build the AJAX request
+            # `report_types` / `filer_types`, plural, each a JSON array -- not the
+            # singular scalars this sent. The endpoint answers 200 either way; it
+            # simply matches nothing. The dates need times as well.
+            #
+            # Codes read from the live search form rather than guessed:
+            #   report_types  7=Annual  11=Periodic Transactions  10=Extension
+            #                 14=Blind Trusts  15=Other
+            #   filer_types   1=Senator  4=Candidate  5=Former Senator
             data = {
                 "draw": "1",
                 "start": str(start),
                 "length": str(length),
-                "filer_type": filer_type,
-                "report_type": report_type,
-                "submitted_start_date": f"01/01/{filing_year}",
-                "submitted_end_date": f"12/31/{filing_year}",
+                "filer_types": _as_json_array(filer_type),
+                "report_types": _as_json_array(report_type),
+                "submitted_start_date": f"01/01/{filing_year} 00:00:00",
+                "submitted_end_date": f"12/31/{filing_year} 23:59:59",
+                "csrfmiddlewaretoken": self._csrf_token or "",
             }
 
             headers = {
@@ -140,27 +201,27 @@ class SenateIngester(BaseIngester):
                             json_data = response.json()
                             return self._parse_ajax_results(json_data, filing_year)
                         except ValueError:
-                            logger.warning("Non-JSON response from Senate AJAX")
-                            return []
+                            raise SenateSearchError(
+                                "eFD returned a non-JSON body; the session is probably not accepted"
+                            ) from None
                     elif response.status_code == 503:
                         logger.warning(f"Senate eFD returned 503 (attempt {attempt + 1}/3)")
                         time.sleep(5 * (attempt + 1))  # Exponential backoff
                         continue
                     else:
-                        logger.error(f"Senate eFD returned {response.status_code}")
-                        return []
+                        raise SenateSearchError(f"eFD returned HTTP {response.status_code}")
 
                 except requests.RequestException as e:
                     logger.warning(f"Request failed (attempt {attempt + 1}/3): {e}")
                     time.sleep(5)
                     continue
 
-            logger.error("All retry attempts failed for Senate search")
-            return []
+            raise SenateSearchError("all retry attempts failed")
 
+        except SenateSearchError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to search Senate disclosures: {e}")
-            return []
+            raise SenateSearchError(f"unexpected failure querying eFD: {e}") from e
 
     def _parse_ajax_results(
         self, json_data: Dict[str, Any], filing_year: int
@@ -173,38 +234,82 @@ class SenateIngester(BaseIngester):
 
         logger.info(f"Senate eFD returned {records_total} total records, {len(data)} in this page")
 
+        # A live row, for reference:
+        #   [0] "David H"
+        #   [1] "McCormick"
+        #   [2] "McCormick, David H. (Senator)"
+        #   [3] '<a href="/search/view/ptr/e337e1b4-...-1d25a81ea26f/">Periodic
+        #        Transaction Report for 12/26/2025</a>'
+        #   [4] "12/26/2025"
+        #
+        # This used to read row[-1] as the link -- that is the DATE -- and to
+        # require a numeric document id, where eFD uses UUIDs. Measured against
+        # 100 live rows, it matched none of them. Rather than swap one hardcoded
+        # index for another, scan the row for the first cell containing a view
+        # link: the column order is eFD's to change, and a shifted column should
+        # cost nothing.
+        unparsed = 0
+
         for row in data:
-            # AJAX response returns array of values per row
-            # Typical format: [first_name, last_name, filer_type, report_type, date, link]
             if not isinstance(row, list) or len(row) < 5:
+                unparsed += 1
                 continue
 
             try:
-                # Extract document ID from the link (last element usually contains HTML link)
-                link_html = str(row[-1]) if row else ""
-                doc_id_match = re.search(r"/search/view/paper/(\d+)/", link_html)
+                match = None
+                for cell in row:
+                    match = SENATE_VIEW_PATH.search(str(cell))
+                    if match:
+                        break
 
-                if not doc_id_match:
+                if not match:
+                    unparsed += 1
                     continue
 
-                doc_id = doc_id_match.group(1)
+                doc_id = match.group("doc_id")
+                kind = match.group("kind")
+
+                # The path segment is the FORMAT, not the report kind:
+                # /search/view/ptr/ is an electronically filed trade report and
+                # /search/view/paper/ is a scan -- and a scanned PTR is still a
+                # PTR. A live PTR search returns both, so keying is_ptr on the
+                # segment alone silently filed paper trade reports as annual
+                # ones, where the wrong parser would read them and the late
+                # filing detector would never see them. The link text carries
+                # the kind, so use both.
+                link_text = " ".join(str(cell) for cell in row).lower()
+                is_ptr = kind == "ptr" or "periodic transaction" in link_text
 
                 disclosures.append(
                     {
-                        "document_id": doc_id,
-                        "document_url": f"{SENATE_REPORT_URL}/{doc_id}/",
+                        "document_id": f"S{doc_id}",
+                        "document_url": f"{SENATE_EFD_BASE_URL}{match.group(0).rstrip('/')}/",
                         "filing_year": filing_year,
                         "chamber": "senate",
-                        "first_name": str(row[0]).strip() if len(row) > 0 else "",
-                        "last_name": str(row[1]).strip() if len(row) > 1 else "",
-                        "filer_type": str(row[2]).strip() if len(row) > 2 else "",
-                        "filing_type": str(row[3]).strip() if len(row) > 3 else "",
-                        "filing_date": self._parse_date(str(row[4])) if len(row) > 4 else None,
+                        "first_name": str(row[0]).strip(),
+                        "last_name": str(row[1]).strip(),
+                        "filer_type": str(row[2]).strip(),
+                        "filing_type": "PTR" if is_ptr else str(row[3]).strip(),
+                        # The trade reports are what the House path calls a PTR.
+                        # Without this they would be read by the annual-filing
+                        # parser, which looks for a different layout entirely.
+                        "is_ptr": is_ptr,
+                        "filing_date": self._parse_date(str(row[4])),
                     }
                 )
             except Exception as e:
+                unparsed += 1
                 logger.debug(f"Error parsing row: {e}")
                 continue
+
+        if unparsed:
+            # Silence here is what let a parser that matched nothing look like a
+            # year with no filings.
+            logger.warning(
+                "Senate eFD: %d of %d rows carried no recognisable document link",
+                unparsed,
+                len(data),
+            )
 
         return disclosures
 
@@ -241,53 +346,67 @@ class SenateIngester(BaseIngester):
         return self.search_disclosures(last_name=member_id)
 
     def search_all_disclosures(self, filing_year: int) -> List[Dict[str, Any]]:
+        """Every Senate annual filing and trade report for a year.
+
+        Both kinds, explicitly, and paginated.
+
+        This used to send one request for report_type="" -- all types -- and
+        take whatever the first page held. Two things were wrong with that. The
+        Senate's trade reports were never asked for as such, so nothing set
+        is_ptr and anything that did arrive would have been handed to the
+        annual-filing parser. And a single page is a cap: 2025 alone holds 141
+        trade reports and 119 annual filings, well past any default page size.
         """
-        Search for all Senate disclosures in a given year.
+        results: List[Dict[str, Any]] = []
 
-        Args:
-            filing_year: Year of filing
+        for report_type in (REPORT_TYPE_ANNUAL, REPORT_TYPE_PTR):
+            results.extend(self._search_paginated(filing_year, report_type))
 
-        Returns:
-            List of all disclosure metadata for the year
-        """
-        return self.search_disclosures(filing_year=filing_year)
+        logger.info(
+            "Senate eFD %d: %d filings (%d trade reports)",
+            filing_year,
+            len(results),
+            sum(1 for r in results if r.get("is_ptr")),
+        )
+        return results
 
-    def _parse_search_results(
-        self, html: str, filing_year: int | None = None
+    def _search_paginated(
+        self, filing_year: int, report_type: str, page_size: int = 100
     ) -> List[Dict[str, Any]]:
+        """Walk every page of one report type.
+
+        Stops on a short page rather than trusting a total, and carries a hard
+        page ceiling so a server that ignores `start` cannot loop forever.
         """
-        Parse HTML search results from Senate eFD site.
+        collected: List[Dict[str, Any]] = []
+        max_pages = 50
 
-        Note: The actual Senate eFD returns data in a table format.
-        This is a simplified parser - real implementation would use BeautifulSoup.
-        """
-        disclosures = []
+        for page in range(max_pages):
+            rows = self.search_disclosures_ajax(
+                filing_year,
+                filer_type=FILER_TYPE_SENATOR,
+                report_type=report_type,
+                start=page * page_size,
+                length=page_size,
+            )
+            if not rows:
+                break
 
-        # Simple regex-based parsing (would use BeautifulSoup in production)
-        # Pattern to find disclosure links in the HTML
-        # Format: /search/view/paper/XXXXX/
-        pattern = r"/search/view/paper/(\d+)/"
-        doc_ids = re.findall(pattern, html)
+            collected.extend(rows)
 
-        # In production, use BeautifulSoup to properly parse the table.
+            if len(rows) < page_size:
+                break
 
-        for doc_id in set(doc_ids):
-            disclosures.append(
-                {
-                    "document_id": doc_id,
-                    "document_url": f"{SENATE_REPORT_URL}/{doc_id}/",
-                    "filing_year": filing_year or datetime.now().year,
-                    "chamber": "senate",
-                    # Other fields would be populated from actual HTML parsing
-                    "first_name": "",
-                    "last_name": "",
-                    "state": "",
-                    "filing_type": "",
-                    "filing_date": None,
-                }
+            time.sleep(1)
+        else:
+            logger.warning(
+                "Senate eFD: stopped at the %d-page ceiling for report type %s in %d",
+                max_pages,
+                report_type,
+                filing_year,
             )
 
-        return disclosures
+        return collected
 
     def download_disclosure(self, disclosure_url: str, output_path: str) -> bool:
         """

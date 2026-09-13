@@ -17,7 +17,7 @@ from src.ingestion import _helpers
 from src.ingestion.congress_gov import CongressGovClient
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 from src.ingestion.house import HouseIngester
-from src.ingestion.senate import SenateIngester, SenatePTRIngester
+from src.ingestion.senate import SenateIngester, SenatePTRIngester, SenateSearchError
 from src.parsing.confidence import score_fd_parse, score_ptr_parse
 from src.parsing.pdf_parser import DisclosureParser
 from src.parsing.ptr_parser import PTRParser
@@ -115,6 +115,10 @@ class IngestionOrchestrator:
         # orchestrator runs, excluding the ones expected to have no member.
         # `run_full_sync` reports it so a run says how much it did NOT store.
         self.unmatched_filers = 0
+
+        # Set when eFD could not be reached at all, so a run can distinguish
+        # "the Senate filed nothing" from "we never got to ask".
+        self.senate_unavailable = False
 
         # PDF Parsers
         self.disclosure_parser = DisclosureParser()
@@ -435,7 +439,22 @@ class IngestionOrchestrator:
         year = year or datetime.now().year
         logger.info(f"Syncing Senate disclosures for {year}...")
 
-        disclosures = self.senate.search_all_disclosures(year)
+        # An eFD outage must not cost the House data alongside it -- that is the
+        # duplicate-DocID lesson again -- but it must not pass for an empty year
+        # either. SenateSearchError means "could not ask"; an empty list means
+        # "asked, and there is nothing", and those are different facts.
+        try:
+            disclosures = self.senate.search_all_disclosures(year)
+        except SenateSearchError as e:
+            self.senate_unavailable = True
+            logger.error(
+                "Senate eFD could not be queried for %d (%s). No Senate filings were "
+                "stored for this year; this is an outage, not an empty year.",
+                year,
+                e,
+            )
+            return 0
+
         synced = 0
         unmatched = 0
         ambiguous = 0
@@ -493,6 +512,12 @@ class IngestionOrchestrator:
                         filing_date=choose_filing_date(d.get("filing_date"), d.get("filing_year")),
                         document_id=d["document_id"],
                         document_url=d["document_url"],
+                        # Carried through from the search. Without it every
+                        # Senate trade report was stored as an annual filing and
+                        # handed to the wrong parser, and the late-filing
+                        # detector -- which selects on is_ptr -- could never see
+                        # a single Senate trade.
+                        is_ptr=bool(d.get("is_ptr")),
                         parsed=False,
                     )
                 )
@@ -537,6 +562,22 @@ class IngestionOrchestrator:
         # Skip if already downloaded
         if pdf_path.exists() and not force:
             return pdf_path
+
+        # A Senate filing is served from efdsearch.senate.gov, and it is HTML,
+        # not a PDF. Every fallback below is a House Clerk URL reconstructed from
+        # the document id -- which for a Senate filing is a UUID that appears in
+        # no House path -- so running them would fetch a string of 404s and then
+        # write the last response body into a .pdf that pdfplumber cannot open.
+        # `SenateIngester.download_disclosure` already branches on Content-Type
+        # and saves HTML as .html; it simply was never called.
+        if str(disclosure.document_url).startswith("https://efdsearch.senate.gov"):
+            html_path = pdf_path.with_suffix(".html")
+            if html_path.exists() and not force:
+                return html_path
+            if self.senate.download_disclosure(disclosure.document_url, str(pdf_path)):
+                return html_path if html_path.exists() else pdf_path
+            logger.warning("Failed to download Senate filing %s", disclosure.document_id)
+            return None
 
         urls_to_try = [disclosure.document_url]
         base_url = "https://disclosures-clerk.house.gov"
@@ -979,8 +1020,12 @@ class IngestionOrchestrator:
             # Not a failure count -- a coverage one. A run that stores nothing
             # and a run that stores everything used to print the same thing.
             "unmatched_filers": 0,
+            # True when eFD could not be reached, so zero Senate filings is
+            # reported as an outage rather than as a finding about the Senate.
+            "senate_unavailable": False,
         }
         self.unmatched_filers = 0
+        self.senate_unavailable = False
 
         with get_db() as db:
             # Sync members first
@@ -1001,6 +1046,7 @@ class IngestionOrchestrator:
                 )
 
         summary["unmatched_filers"] = self.unmatched_filers
+        summary["senate_unavailable"] = self.senate_unavailable
         logger.info(f"Full sync complete: {summary}")
         return summary
 

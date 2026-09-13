@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy import Enum as SQLEnum
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
@@ -347,16 +348,38 @@ class Anomaly(Base):
     # Relationships
     member: Mapped["Member"] = relationship("Member", back_populates="anomalies")
 
-    # Matches the dedupe key persist_anomalies() checks in Python. Declared here
-    # as well as in migration c3a7f1d92b04 so metadata.create_all() (used by the
-    # test suite) builds the same schema alembic does.
+    # Two identities, not one. See src/analysis/anomaly_key.py: a finding about
+    # a specific trade is identified by that trade, and one about the member
+    # overall by its title. A single index on (member, type, title) made a
+    # member with two equally-late trades unrepresentable -- their titles are
+    # the same bucket label -- and killed the first analysis run over real data.
+    #
+    # Partial, because the two must not interfere: without the WHERE clauses a
+    # NULL transaction_id would make every member-level row distinct from every
+    # other under PostgreSQL's NULL handling, losing the guarantee entirely for
+    # exactly the rows the original index was added to protect.
+    #
+    # Declared here as well as in migration 7c4e9a0b52d1 so that
+    # metadata.create_all() (used by the test suite) builds the same schema
+    # alembic does. Both dialects in use support partial indexes.
     __table_args__ = (
+        Index(
+            "uq_anomaly_member_type_transaction",
+            "member_id",
+            "anomaly_type",
+            "transaction_id",
+            unique=True,
+            sqlite_where=text("transaction_id IS NOT NULL"),
+            postgresql_where=text("transaction_id IS NOT NULL"),
+        ),
         Index(
             "uq_anomaly_member_type_title",
             "member_id",
             "anomaly_type",
             "title",
             unique=True,
+            sqlite_where=text("transaction_id IS NULL"),
+            postgresql_where=text("transaction_id IS NULL"),
         ),
     )
 

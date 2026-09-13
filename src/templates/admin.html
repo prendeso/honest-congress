@@ -238,13 +238,13 @@
                         <h4 class="text-white font-medium">View Anomalies</h4>
                         <p class="text-gray-400 text-sm">Query anomalies</p>
                     </div>
-                    <button @click="callApi('GET', '/api/anomalies?page_size=10')"
+                    <button @click="callApi('GET', '/api/anomalies/?page_size=10')"
                             class="bg-gray-600 hover:bg-gray-500 text-white px-4 py-2 rounded-lg text-sm">
                         Test
                     </button>
                 </div>
                 <div class="api-badge bg-gray-800 text-blue-400 px-2 py-1 rounded inline-block">
-                    GET /api/anomalies?page_size=10
+                    GET /api/anomalies/?page_size=10
                 </div>
             </div>
         </div>

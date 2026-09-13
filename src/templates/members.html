@@ -433,12 +433,20 @@
                     this.anomaliesLoading = true;
 
                     try {
-                        const url = `/api/anomalies?member_id=${member.id}&page_size=100`;
-                        const data = await fetch(url).then(r => r.json());
+                        const url = `/api/anomalies/?member_id=${member.id}&page_size=100`;
+                        // fetch() rejects only on a network-level failure, so an
+                        // HTTP error status used to fall through to `data.anomalies
+                        // || []` and render an empty modal -- a member with a broken
+                        // request looked exactly like a member with a clean record.
+                        const response = await fetch(url);
+                        if (!response.ok) {
+                            throw new Error(`${response.status} ${response.statusText}`);
+                        }
+                        const data = await response.json();
                         this.memberAnomalies = data.anomalies || [];
                     } catch (e) {
                         console.error('[Members] Failed to load anomalies:', e);
-                        alert('Failed to load anomalies for this member.');
+                        alert(`Failed to load anomalies for this member: ${e.message}`);
                     } finally {
                         this.anomaliesLoading = false;
                     }
@@ -470,7 +478,11 @@
                         url += `&sort_by=${this.sortField}&sort_order=${this.sortOrder}`;
 
                         console.log('[Members] Fetching:', url);
-                        const data = await fetch(url).then(r => r.json());
+                        const listResponse = await fetch(url);
+                        if (!listResponse.ok) {
+                            throw new Error(`${listResponse.status} ${listResponse.statusText}`);
+                        }
+                        const data = await listResponse.json();
 
                         this.members = data.members || [];
                         this.total = data.total || 0;

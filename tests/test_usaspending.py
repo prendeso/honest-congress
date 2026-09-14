@@ -416,3 +416,85 @@ def test_start_date_is_clamped_to_what_the_api_supports(db_session, resolver, aw
             db_session, "1999-01-01", "2024-12-31", tickers=["LMT"], resolver=resolver
         )
     assert fetch.call_args[0][0] == EARLIEST_SEARCH_DATE
+
+
+# ---------------- cost ----------------
+
+
+def _count_queries(engine, callable_):
+    from sqlalchemy import event
+
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, params, context, executemany):
+        seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        callable_()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return seen
+
+
+class TestCostDoesNotTrackTheNumberOfAwards:
+    """Asking "is this one already stored?" once per award is an N+1.
+
+    It was affordable while the feed took three hundred awards in total. Asking
+    per traded company returns tens of thousands, `ingest-contracts` runs on a
+    GitHub runner against a hosted database, and on a nightly rerun EVERY award
+    is already present -- so the entire cost would be paid to discover there is
+    nothing to do.
+
+    The keys already stored are read once instead, which is also the within-run
+    duplicate guard: `SessionLocal` is autoflush=False, so a row added earlier
+    in the same batch is invisible to a query and had to be tracked in memory
+    regardless.
+    """
+
+    def _awards(self, n: int):
+        return [
+            {
+                "Award ID": f"W31P4Q24C{i:04d}",
+                "Mod": "0",
+                "Recipient Name": "LOCKHEED MARTIN CORPORATION",
+                "Action Date": "2024-06-28",
+                "Transaction Amount": 1000.0 + i,
+                "Awarding Agency": "Department of Defense",
+                "Transaction Description": f"Award {i}",
+            }
+            for i in range(n)
+        ]
+
+    def test_one_award_and_thirty_cost_the_same_to_look_up(self, db_session, engine, resolver):
+        # INSERTs scale with rows and must; what must not is the number of
+        # questions asked before deciding whether a row is new.
+        def selects(n: int) -> list[str]:
+            with patch("src.ingestion.usaspending.fetch_awards", return_value=self._awards(n)):
+                statements = _count_queries(
+                    engine,
+                    lambda: ingest_government_contracts(
+                        db_session, "2024-01-01", "2024-12-31", tickers=["LMT"], resolver=resolver
+                    ),
+                )
+            return [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+
+        one = selects(1)
+        thirty = selects(30)
+
+        assert len(one) == len(thirty) == 1, (
+            f"lookups grew with the number of awards: {len(one)} -> {len(thirty)}. "
+            "That is one round trip per award to a hosted database."
+        )
+
+    def test_a_rerun_over_stored_awards_still_asks_once(self, db_session, engine, resolver):
+        for _ in range(2):
+            with patch("src.ingestion.usaspending.fetch_awards", return_value=self._awards(30)):
+                statements = _count_queries(
+                    engine,
+                    lambda: ingest_government_contracts(
+                        db_session, "2024-01-01", "2024-12-31", tickers=["LMT"], resolver=resolver
+                    ),
+                )
+        selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
+        assert len(selects) == 1, selects

@@ -43,9 +43,10 @@ from datetime import datetime
 from typing import Any, Dict, Iterator, List
 
 import requests
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from src.db.models import Bill, BillCommittee, BillSponsorship, Member
+from src.db.models import Bill, BillCommittee, BillSponsorship, Disclosure, Member
 from src.ingestion.rate_limit import HOUR, RequestBudgetExhausted, ThrottledClient
 
 logger = logging.getLogger(__name__)
@@ -222,6 +223,36 @@ def _sponsorship_pages(client, bioguide_id: str, path: str, key: str, skipped: L
         logger.debug("Congress.gov has no record for %s; skipping", bioguide_id)
 
 
+def _can_produce_a_finding():
+    """Members worth spending a Congress.gov request on.
+
+    The roster imported from congress-legislators is every member in history --
+    12,770 rows -- and this loop made one API call per row. Congress.gov allows
+    5,000 requests an hour, so a full sweep is two and a half hours of a
+    350-minute job, and the overwhelming majority of it is spent on people who
+    left Congress decades ago.
+
+    Neither detector this feeds can say anything about those members.
+    `detect_sponsorship_conflicts` reads `by_member.get(sponsorship.member_id)`
+    and skips a sponsor with no transactions, and a member who has filed nothing
+    has no transactions. `detect_bill_jurisdiction_conflicts` needs the member to
+    sit on the committee a bill was referred to, which a former member does not.
+
+    So: anyone currently in office, plus anyone whose filings this database
+    actually holds. The first covers everybody who can sponsor legislation now;
+    the second covers the member who left mid-period but whose 2024 filings --
+    and 2024 trades -- are here, which is the case a bare `in_office` test would
+    drop. `in_office` is left permissive rather than exact because it is refreshed
+    from the roster feed and being generous costs one request.
+
+    This is the same scoping `tests/test_analysis_scope.py` applies to the
+    analyzers, for the same reason and with the same argument: the members
+    dropped are exactly the ones whose output was empty.
+    """
+    has_filed = select(Disclosure.member_id).where(Disclosure.member_id.isnot(None)).distinct()
+    return or_(Member.in_office.is_(True), Member.id.in_(has_filed))
+
+
 def ingest_member_bills(
     db: Session,
     api_key: str,
@@ -237,7 +268,9 @@ def ingest_member_bills(
     members = db.query(Member)
     if bioguide_ids:
         members = members.filter(Member.bioguide_id.in_(bioguide_ids))
-    roster = members.all()
+    else:
+        members = members.filter(_can_produce_a_finding())
+    roster = members.order_by(Member.id).all()
 
     if not roster:
         logger.warning("No members in the database. Run `ingest` first to populate the roster.")

@@ -265,7 +265,27 @@ def ingest_government_contracts(
     queried = 0
     fetched = 0
     rejected_names: Dict[str, int] = {}
-    seen: set[str] = set()
+
+    # Every key already stored, read once. This used to be one SELECT per award
+    # to find out whether it was new, which was affordable at three hundred
+    # awards and is not at the tens of thousands a per-company search returns --
+    # `analyze` runs on a GitHub runner against a hosted database, so each one is
+    # a network round trip, and on a nightly rerun EVERY award is a hit, so the
+    # whole cost is paid to learn there is nothing to do.
+    #
+    # The set doubles as the within-run guard the `seen` set used to be: an id
+    # added here on import is found here on the next iteration, which matters
+    # because SessionLocal is autoflush=False and a pending row is invisible to
+    # a query anyway.
+    seen: set[str] = {
+        row[0]
+        for row in db.query(GovernmentContract.external_id)
+        .filter(
+            GovernmentContract.source == SOURCE,
+            GovernmentContract.external_id.isnot(None),
+        )
+        .all()
+    }
 
     for ticker in universe:
         company = resolver.name_for(ticker)
@@ -305,31 +325,17 @@ def ingest_government_contracts(
             # ticker -- so `seen` is guarding repeats inside one company's
             # pages, which is where the nine appeared.)
             external_id = award_action_key(award)
-            if external_id and external_id in seen:
+            if external_id is None:
+                # No contract number, so nothing identifies this action and a
+                # rerun could not recognise it. Counting it as a duplicate is
+                # the honest arithmetic: it is not imported and it was not
+                # rejected as the wrong company.
                 duplicates += 1
                 continue
-            if external_id:
-                seen.add(external_id)
-
-            exists = (
-                db.query(GovernmentContract)
-                .filter(
-                    GovernmentContract.source == SOURCE,
-                    GovernmentContract.external_id == external_id,
-                )
-                .first()
-                if external_id
-                else db.query(GovernmentContract)
-                .filter(
-                    GovernmentContract.ticker == ticker,
-                    GovernmentContract.awarded_date == awarded,
-                    GovernmentContract.description == description,
-                )
-                .first()
-            )
-            if exists:
+            if external_id in seen:
                 duplicates += 1
                 continue
+            seen.add(external_id)
 
             db.add(
                 GovernmentContract(

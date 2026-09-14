@@ -31,7 +31,7 @@ from unittest.mock import MagicMock
 import pytest
 import requests
 
-from src.db.models import Bill, BillCommittee, BillSponsorship, Chamber, Member, Party
+from src.db.models import Bill, BillCommittee, BillSponsorship, Chamber, Disclosure, Member, Party
 from src.ingestion.bills import (
     CONGRESS_API_BASE_URL,
     PAGE_SIZE,
@@ -456,3 +456,104 @@ class TestOneUnknownMemberDoesNotAbortTheIngest:
         assert any("no record for" in r.getMessage() for r in caplog.records), (
             "members Congress.gov could not resolve were skipped without saying so"
         )
+
+
+# --------------------------------------------------------------------------
+# Who is worth a request
+# --------------------------------------------------------------------------
+
+
+class TestTheRosterIsScopedToMembersAFindingCanBeAbout:
+    """One Congress.gov request per member, over every member in history.
+
+    Measured against production: the roster holds **12,770** members, of whom
+    **540** are in office and **407** have a disclosure on file -- 50 of those
+    being former members. The set worth asking about is the union, **590**.
+    Congress.gov allows 5,000 requests an hour, so the unscoped sweep is two and
+    a half hours of a 350-minute job, almost all of it spent on people who left
+    Congress decades ago.
+
+    Nothing is lost. `detect_sponsorship_conflicts` skips a sponsor with no
+    transactions, and a member who has filed nothing has none;
+    `detect_bill_jurisdiction_conflicts` needs the member to sit on the
+    committee a bill reached, which a former member does not. This is the
+    scoping `tests/test_analysis_scope.py` applies to the analyzers, with the
+    same argument: the members dropped are exactly the ones producing nothing.
+    """
+
+    def _former(self, db, bioguide: str) -> Member:
+        member = _member(db, bioguide=bioguide)
+        member.in_office = False
+        db.commit()
+        return member
+
+    def _with_a_filing(self, db, member: Member) -> Member:
+        db.add(
+            Disclosure(
+                member_id=member.id,
+                filing_year=2024,
+                filing_type="PTR",
+                filing_date=datetime(2024, 5, 1),
+                document_id=f"DOC_{member.bioguide_id}",
+                is_ptr=True,
+            )
+        )
+        db.commit()
+        return member
+
+    def test_a_member_in_office_is_asked_about(self, db_session, sponsored, cosponsored):
+        _member(db_session, bioguide="A000001")
+        client = _client([sponsored, cosponsored])
+
+        result = ingest_member_bills(db_session, API_KEY, client=client)
+
+        assert result["members_queried"] == 1
+
+    def test_a_former_member_who_never_filed_costs_nothing(self, db_session):
+        self._former(db_session, "B000002")
+        client = _client([])
+
+        result = ingest_member_bills(db_session, API_KEY, client=client)
+
+        assert result["members_queried"] == 0
+        assert client.requests_made == 0
+
+    def test_a_former_member_whose_filings_are_here_is_still_asked_about(
+        self, db_session, sponsored, cosponsored
+    ):
+        # 50 of the 407 members with filings have left. Their 2024 trades are in
+        # this database and a 2024 bill they sponsored is a real conflict.
+        member = self._former(db_session, "C000003")
+        self._with_a_filing(db_session, member)
+        client = _client([sponsored, cosponsored])
+
+        result = ingest_member_bills(db_session, API_KEY, client=client)
+
+        assert result["members_queried"] == 1
+
+    def test_the_historical_roster_does_not_set_the_cost(self, db_session, sponsored, cosponsored):
+        _member(db_session, bioguide="D000004")
+        for i in range(40):
+            self._former(db_session, f"H{i:06d}")
+        client = _client([sponsored, cosponsored])
+
+        result = ingest_member_bills(db_session, API_KEY, client=client)
+
+        assert result["members_queried"] == 1, (
+            "the 40 former members with no filings were asked about; that is "
+            "12,180 wasted requests at production scale"
+        )
+
+    def test_naming_members_explicitly_overrides_the_scope(
+        self, db_session, sponsored, cosponsored
+    ):
+        # `--bioguide` is how someone re-runs one member on purpose, including a
+        # former one. The scope must not quietly refuse them.
+        member = self._former(db_session, "E000005")
+        client = _client([sponsored, cosponsored])
+
+        result = ingest_member_bills(
+            db_session, API_KEY, client=client, bioguide_ids=[member.bioguide_id]
+        )
+
+        assert result["members_queried"] == 1

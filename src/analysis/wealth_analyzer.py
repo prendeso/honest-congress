@@ -2,7 +2,7 @@
 
 import logging
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -12,6 +12,13 @@ from src.config import get_settings
 from src.db import Anomaly, Asset, Disclosure, Liability, Member
 
 logger = logging.getLogger(__name__)
+
+# How often each analyzer says where it has got to. Both of these ran in
+# complete silence: the gap between `analyze` starting and the first detector
+# logging anything was 10m42s in the production run of 2026-09-14, and nothing
+# in the log said which of the two it was, or whether either was moving.
+PROGRESS_EVERY_MEMBERS = 100
+
 settings = get_settings()
 
 
@@ -59,10 +66,13 @@ class WealthAnalyzer:
         if len(disclosures) < 2:
             return []  # Need at least 2 years to compare
 
+        # Two queries for this member's filings, not two per filing.
+        totals = self._net_worth_totals(db, [d.id for d in disclosures])
+
         # Calculate net worth for each year
         net_worths = []
         for disclosure in disclosures:
-            net_worth = self._calculate_net_worth(db, disclosure.id)
+            net_worth = self._calculate_net_worth(db, disclosure.id, totals=totals)
             net_worths.append(
                 {
                     "year": disclosure.filing_year,
@@ -231,6 +241,13 @@ class WealthAnalyzer:
                     )
 
             members_analyzed += 1
+            if members_analyzed % PROGRESS_EVERY_MEMBERS == 0:
+                logger.info(
+                    "Wealth analysis: %d/%d members, %d findings so far",
+                    members_analyzed,
+                    len(members),
+                    len(all_anomalies),
+                )
 
         db.commit()
 
@@ -241,8 +258,85 @@ class WealthAnalyzer:
             "anomalies": all_anomalies,
         }
 
-    def _calculate_net_worth(self, db: Session, disclosure_id: int) -> Dict[str, Decimal | None]:
-        """Calculate net worth from a disclosure's assets and liabilities."""
+    def _net_worth_totals(
+        self, db: Session, disclosure_ids: Sequence[int]
+    ) -> Dict[int, Dict[str, Decimal]]:
+        """Asset and liability sums for many filings, in two queries rather than 2n.
+
+        `_calculate_net_worth` issues one SUM over assets and one over
+        liabilities for a single filing. Called down a loop over a member's
+        filings, down a loop over the roster, that is two network round trips per
+        filing against a hosted database -- and this analyzer runs inside the
+        ten minutes of silence before the first detector logs anything.
+
+        Grouping by `disclosure_id` asks the same two questions once for the
+        whole population. A filing with no assets or no liabilities is simply
+        absent from the corresponding result, which is why the caller still
+        defaults each side to zero.
+        """
+        totals: Dict[int, Dict[str, Decimal]] = {}
+        if not disclosure_ids:
+            return totals
+
+        for row in (
+            db.query(
+                Asset.disclosure_id,
+                func.sum(Asset.value_min),
+                func.sum(Asset.value_max),
+            )
+            .filter(Asset.disclosure_id.in_(disclosure_ids))
+            .group_by(Asset.disclosure_id)
+            .all()
+        ):
+            entry = totals.setdefault(row[0], {})
+            entry["assets_min"] = row[1] or Decimal(0)
+            entry["assets_max"] = row[2] or Decimal(0)
+
+        for row in (
+            db.query(
+                Liability.disclosure_id,
+                func.sum(Liability.amount_min),
+                func.sum(Liability.amount_max),
+            )
+            .filter(Liability.disclosure_id.in_(disclosure_ids))
+            .group_by(Liability.disclosure_id)
+            .all()
+        ):
+            entry = totals.setdefault(row[0], {})
+            entry["liabilities_min"] = row[1] or Decimal(0)
+            entry["liabilities_max"] = row[2] or Decimal(0)
+
+        return totals
+
+    def _calculate_net_worth(
+        self,
+        db: Session,
+        disclosure_id: int,
+        totals: Dict[int, Dict[str, Decimal]] | None = None,
+    ) -> Dict[str, Decimal | None]:
+        """Calculate net worth from a disclosure's assets and liabilities.
+
+        `totals` is the preloaded index from `_net_worth_totals`. Optional so the
+        method still works on its own -- it is called that way elsewhere -- but
+        every caller walking more than one filing should pass it.
+        """
+        if totals is not None:
+            entry = totals.get(disclosure_id, {})
+            assets_min = entry.get("assets_min", Decimal(0))
+            assets_max = entry.get("assets_max", Decimal(0))
+            liabilities_min = entry.get("liabilities_min", Decimal(0))
+            liabilities_max = entry.get("liabilities_max", Decimal(0))
+            net_min = assets_min - liabilities_max
+            net_max = assets_max - liabilities_min
+            # Same shape and the same null rule as the per-filing path below.
+            # `mid` is None when either bound is falsy, which is not the same as
+            # the midpoint of zero -- a difference the tests hold this to.
+            return {
+                "min": net_min,
+                "max": net_max,
+                "mid": (net_min + net_max) / 2 if net_min and net_max else None,
+            }
+
         # Sum assets
         assets_result = (
             db.query(func.sum(Asset.value_min).label("min"), func.sum(Asset.value_max).label("max"))

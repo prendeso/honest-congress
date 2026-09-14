@@ -307,3 +307,62 @@ class TestStoredSenateFilingsCanBeReReadAtAll:
         )
 
         assert "HOUSE-POOR" in self._selected(db_session, tmp_path)
+
+
+class TestTheParserSaysThatItReadTheHeaders:
+    """`score_ptr_parse` assumes columns were guessed unless told otherwise.
+
+    Reading columns by header name is the whole design of this parser --
+    `_column_index` maps every field from the table's own `<th>` text, and
+    `TestColumnsAreReadByNameNotPosition` reorders the table to prove it. But it
+    never set `quality.headers_recognised`, which only the PDF path did, so
+    every Senate filing was scored as though the positions had been assumed.
+
+    Measured on the live site: all eighteen readable Senate filings in a sample
+    carried the warning "column positions assumed, not read from a header row"
+    -- the exact reverse of what happened -- at confidence 0.5.
+
+    The confidence is the half that actually bites. `NO_HEADER_CEILING` is 0.5,
+    so every Senate filing permanently matched `parse --min-confidence 1.0`:
+    every future re-parse would re-download and re-read the whole Senate corpus
+    to arrive at 0.5 again, and the queue could never converge. Against real
+    filings the same six now score 1.0, 0.0, 1.0, 1.0, 0.0, 1.0 -- the two
+    zeroes being `/view/paper/` image scans, which is correct.
+    """
+
+    def test_headers_are_recorded_as_recognised(self, parsed):
+        assert parsed["quality"]["headers_recognised"] is True
+
+    def test_the_filing_is_not_warned_about_assumed_columns(self, parsed):
+        from src.parsing.confidence import score_ptr_parse
+
+        score = score_ptr_parse(parsed["quality"], parsed["transactions"])
+
+        assert not any("column positions assumed" in w for w in score.warnings), score.warnings
+
+    def test_a_clean_read_can_reach_full_confidence(self, parsed):
+        from src.parsing.confidence import NO_HEADER_CEILING, score_ptr_parse
+
+        score = score_ptr_parse(parsed["quality"], parsed["transactions"])
+
+        # The point is not the exact number; it is that the score is no longer
+        # held under the ceiling that kept every Senate filing in the re-parse
+        # queue for ever.
+        assert score.confidence > NO_HEADER_CEILING, score.warnings
+
+    def test_a_table_whose_headers_do_not_yield_the_required_columns_is_still_honest(self):
+        from bs4 import BeautifulSoup
+
+        from src.parsing.ptr_parser import ParseQuality
+
+        # No Amount column, so the parse cannot proceed -- and must not claim it
+        # read headers it could not use.
+        soup = BeautifulSoup(
+            "<table><tr><th>Something</th><th>Else</th></tr><tr><td>a</td><td>b</td></tr></table>",
+            "html.parser",
+        )
+        quality = ParseQuality()
+        rows = SenateHtmlParser()._rows_to_transactions(soup.find("table"), quality)
+
+        assert rows == []
+        assert quality.headers_recognised is False

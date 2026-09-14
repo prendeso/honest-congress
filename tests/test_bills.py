@@ -641,6 +641,67 @@ class TestATransientGatewayErrorIsRetriedNotFatal:
             _member(db, bioguide=bioguide)
 
 
+class TestANetworkFailureIsRetriedNotFatal:
+    """The other half of the same hole, found by the reporting that found the
+    first half.
+
+    Retrying transient STATUSES fixed a 522 that killed the bill ingest. It did
+    nothing for the failures that happen before a status exists, and the very
+    next run showed one:
+
+        requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='www.sec.gov',
+        port=443): Read timed out. (read timeout=45)
+
+    One slow response out of roughly a thousand, on a step whose entire job is
+    to cache a value per ticker. The step died and reported success under
+    `continue-on-error`, and only the new step-outcome block in the run summary
+    said so.
+    """
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            requests.exceptions.ReadTimeout("read timed out"),
+            requests.exceptions.ConnectTimeout("connect timed out"),
+            requests.exceptions.ConnectionError("connection reset"),
+            requests.exceptions.ChunkedEncodingError("truncated"),
+        ],
+    )
+    def test_it_is_retried_and_then_succeeds(self, sponsored, error):
+        slept: list[float] = []
+        session = MagicMock()
+        session.get.side_effect = [error, _response(sponsored)]
+        client = CongressAPIClient(API_KEY, session=session, sleeper=slept.append)
+
+        assert client.get("/member/X/sponsored-legislation") == sponsored
+        assert slept == [2]
+        assert session.get.call_count == 2
+
+    def test_a_failure_that_never_clears_gives_up_and_names_it(self, sponsored):
+        session = MagicMock()
+        session.get.side_effect = [
+            requests.exceptions.ReadTimeout("read timed out") for _ in range(8)
+        ]
+        client = CongressAPIClient(API_KEY, session=session, sleeper=lambda _: None)
+
+        with pytest.raises(requests.exceptions.RetryError, match="ReadTimeout"):
+            client.get("/member/X/sponsored-legislation")
+
+        assert session.get.call_count == 4
+
+    def test_a_real_http_error_is_not_swallowed_as_a_network_blip(self, sponsored):
+        # `raise_for_status` raising HTTPError is the server's answer, not a
+        # failure to reach it, and retrying it four times would be wrong.
+        session = MagicMock()
+        session.get.side_effect = [_response({}, status_code=404), _response(sponsored)]
+        client = CongressAPIClient(API_KEY, session=session, sleeper=lambda _: None)
+
+        with pytest.raises(requests.exceptions.HTTPError):
+            client.get("/member/X/sponsored-legislation")
+
+        assert session.get.call_count == 1
+
+
 # --------------------------------------------------------------------------
 # Cost
 # --------------------------------------------------------------------------

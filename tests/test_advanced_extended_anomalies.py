@@ -12,6 +12,8 @@ from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 
+import pytest
+
 from src.analysis import (
     AdvancedAnomalyDetector,
     ExtendedAnomalyDetector,
@@ -19,12 +21,17 @@ from src.analysis import (
     run_advanced_anomaly_detection,
     transaction_amount,
 )
+from src.analysis.advanced_anomaly_detector import (
+    _assets_by_disclosure,
+    _liabilities_by_disclosure,
+)
 from src.db.models import (
     Anomaly,
     Asset,
     AssetType,
     Chamber,
     Disclosure,
+    Liability,
     Member,
     Party,
     Transaction,
@@ -220,6 +227,112 @@ class TestWealthVsSalary:
         detector = AdvancedAnomalyDetector()
         anomalies = detector.detect_wealth_vs_salary_anomalies(db_session)
         assert any(a["anomaly_type"] == "wealth_vs_salary" for a in anomalies)
+
+
+class TestFinancialDisclosureDetectorsDoNotQueryPerFiling:
+    """Two detectors that returned nothing, slowly.
+
+    In the 2026-09-14 06:00 cron, `wealth_vs_salary` took 14m39s and
+    `rapid_asset_appreciation` 14m40s, and both found zero. `detector_is_disabled`
+    already describes the shape: they walk the roster with per-member queries.
+    Each member cost a query for their filings, and then each filing cost one for
+    its assets and one for its liabilities -- so a member with five filings was
+    eleven round trips to Railway from a GitHub runner.
+
+    Asserted as flat rather than smaller: the point is that the cost stops
+    tracking how many members and filings there are.
+    """
+
+    def _roster(self, db, n: int, *, start: int):
+        for i in range(n):
+            member = _make_member(db, bioguide=f"FD{start + i:06d}", last=f"M{start + i}")
+            for year, value in ((2020, 500000), (2022, 900000), (2024, 10000000)):
+                disclosure = _make_disclosure(db, member, year, f"FD{start + i}_{year}")
+                _make_asset(db, disclosure, "Portfolio", value, value)
+
+    def _statements(self, engine, callable_):
+        from sqlalchemy import event
+
+        seen: list[str] = []
+
+        def record(conn, cursor, statement, params, context, executemany):
+            seen.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            callable_()
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+        return seen
+
+    def test_wealth_vs_salary_costs_the_same_for_one_member_and_eight(self, db_session, engine):
+        detector = AdvancedAnomalyDetector()
+
+        self._roster(db_session, 1, start=100)
+        one = self._statements(
+            engine, lambda: detector.detect_wealth_vs_salary_anomalies(db_session)
+        )
+        self._roster(db_session, 7, start=200)
+        eight = self._statements(
+            engine, lambda: detector.detect_wealth_vs_salary_anomalies(db_session)
+        )
+
+        assert len(one) == len(eight), (
+            f"cost still grows with the roster: {len(one)} -> {len(eight)} statements"
+        )
+
+    def test_rapid_asset_appreciation_costs_the_same_for_one_member_and_eight(
+        self, db_session, engine
+    ):
+        detector = AdvancedAnomalyDetector()
+
+        self._roster(db_session, 1, start=300)
+        one = self._statements(
+            engine, lambda: detector.detect_asset_appreciation_anomalies(db_session)
+        )
+        self._roster(db_session, 7, start=400)
+        eight = self._statements(
+            engine, lambda: detector.detect_asset_appreciation_anomalies(db_session)
+        )
+
+        assert len(one) == len(eight), (
+            f"cost still grows with the roster: {len(one)} -> {len(eight)} statements"
+        )
+
+    def test_the_findings_are_unchanged_by_the_preload(self, db_session):
+        """The preload is a change of where the rows come from, not which rows.
+
+        Liabilities especially: net worth is not net worth without them, and a
+        preload that quietly dropped them would make every member look richer.
+        """
+        member = _make_member(db_session, bioguide="FD999999", last="Both")
+        d1 = _make_disclosure(db_session, member, 2020, "FDb1")
+        d2 = _make_disclosure(db_session, member, 2024, "FDb2")
+        _make_asset(db_session, d1, "Portfolio", 500000, 500000)
+        _make_asset(db_session, d2, "Portfolio", 10000000, 10000000)
+        db_session.add(
+            Liability(
+                disclosure_id=d2.id,
+                creditor="Bank",
+                liability_type="Mortgage",
+                amount_min=Decimal("9000000"),
+                amount_max=Decimal("9000000"),
+            )
+        )
+        db_session.commit()
+
+        detector = AdvancedAnomalyDetector()
+        preloaded = detector._calculate_wealth_progression(
+            db_session,
+            [d1, d2],
+            assets_by_disclosure=_assets_by_disclosure(db_session, [d1.id, d2.id]),
+            liabilities_by_disclosure=_liabilities_by_disclosure(db_session, [d1.id, d2.id]),
+        )
+        per_query = detector._calculate_wealth_progression(db_session, [d1, d2])
+
+        assert preloaded == per_query
+        # And the liability is actually subtracted: 10m of assets less 9m owed.
+        assert preloaded[-1]["net_worth_estimate"] == pytest.approx(1000000)
 
 
 # ---------------- extended detector ----------------

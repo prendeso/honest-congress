@@ -316,17 +316,13 @@ def ingest_campaign_donations(
     # already present. Also the in-batch guard, since autoflush=False hides a
     # row added earlier in this loop from a query.
     seen_sub_ids: Set[str] = set()
-    # Tickers already carrying donations for this cycle, so a resumed run does
-    # not re-spend requests on PACs already done.
-    already_done: Set[str] = set()
 
-    def reload_caches() -> None:
-        """Refill both caches from committed state, in place.
+    def reload_seen_sub_ids() -> None:
+        """Refill `seen_sub_ids` from committed state, in place.
 
-        In place because `_store_one_pacs_receipts` closes over them. Two, not
-        one: a rollback undoes donations, so `seen_sub_ids` would skip
-        re-importing them AND `already_done` would claim the ticker was finished
-        when its rows are gone.
+        In place because `_store_one_pacs_receipts` closes over it. Called once
+        to prime it, and again after any rollback: at that point it holds ids
+        for donations that no longer exist and would skip re-importing them.
         """
         seen_sub_ids.clear()
         seen_sub_ids.update(
@@ -338,27 +334,34 @@ def ingest_campaign_donations(
             )
             .all()
         )
-        already_done.clear()
-        already_done.update(
-            row[0]
-            for row in db.query(CampaignDonation.ticker)
-            .filter(
-                CampaignDonation.cycle == str(cycle),
-                CampaignDonation.source == SOURCE,
-            )
-            .distinct()
-            .all()
-        )
 
-    reload_caches()
+    reload_seen_sub_ids()
+
+    # Tickers that already carried donations for this cycle BEFORE this run
+    # started, so a capped or throttled run can resume without re-spending
+    # requests on PACs it finished.
+    #
+    # Deliberately a snapshot, and deliberately NOT refreshed alongside
+    # `seen_sub_ids`. It is read per PAC, and more than one PAC can map to a
+    # single ticker -- so refreshing it mid-run would add tickers this run has
+    # just committed and silently skip the second PAC for a company whose first
+    # one imported. A rollback can only remove rows this run added, which this
+    # snapshot never contained, so it cannot go stale in a direction that
+    # matters.
+    already_done: Set[str] = {
+        row[0]
+        for row in db.query(CampaignDonation.ticker)
+        .filter(
+            CampaignDonation.cycle == str(cycle),
+            CampaignDonation.source == SOURCE,
+        )
+        .distinct()
+        .all()
+    }
 
     try:
         committees = principal_committees(client, sorted(members_by_fec_id))
         pacs = corporate_pacs(client, resolver, cycle, restrict_to=traded)
-
-        # `already_done` was primed with the caches above: a capped or throttled
-        # run stops partway through, and resuming must not re-spend requests on
-        # PACs already done.
 
         def _store_one_pacs_receipts(
             ticker: str, pac_name: str, receipts: List[Dict[str, Any]]
@@ -459,7 +462,7 @@ def ingest_campaign_donations(
             # connection costs one PAC instead of every donation gathered so far.
             for _attempt in range(1 + CONNECTION_LOSS_RETRIES):
                 counts = _store_one_pacs_receipts(ticker, pac_name, receipts)
-                if commit_or_recover(db, rebuild_caches=reload_caches, unit=ticker):
+                if commit_or_recover(db, rebuild_caches=reload_seen_sub_ids, unit=ticker):
                     imported += counts["imported"]
                     duplicates += counts["duplicates"]
                     unmapped += counts["unmapped"]

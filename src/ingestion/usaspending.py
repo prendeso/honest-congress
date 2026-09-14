@@ -7,12 +7,52 @@ USASpending is the government's official open-data source for federal spending,
 public domain, no key and no registration. It publishes recipient *names*, so
 tickers come from :mod:`src.ingestion.sec_tickers`.
 
-Awards whose recipient does not resolve to a ticker are skipped, and that is
-correct rather than lossy: national laboratories, universities and nonprofits
-take an enormous share of federal contracting by value and none of them can be
-traded, so there is no conflict for a trade detector to find. What the resolver
-must not miss is a listed parent behind a subsidiary name -- see
-SUBSIDIARY_OVERRIDES there.
+Why it is driven by ticker
+--------------------------
+It used to fetch the three hundred largest contract actions in the window and
+keep whichever happened to resolve to a ticker. Measured against the live API
+for 2023-01-01 to 2026-09-14, that slice bottoms out at **$733,882,415** and
+contains **fourteen** publicly traded companies -- BA, BAESY, CNC, FLR, GD, HII,
+HON, HUM, LMT, MCK, NOC, RTX, SID, UNH. Every federal award below three-quarters
+of a billion dollars was invisible to the detector, which is to say almost all of
+them: the largest award action Microsoft received in that window is $56.6m, IBM
+$131m, Booz Allen $270m, Caterpillar $87m, Pfizer $19m. None of those companies
+could ever have produced a finding.
+
+The docstring here used to justify the cut as skipping "thousands of small
+purchase orders". That is not where the cut landed.
+
+So it now runs the way the FEC and LDA ingesters already do, from the tickers
+members have actually traded (`traded_tickers`), turned back into company names
+through the SEC register (`TickerResolver.name_for`), one `recipient_search_text`
+query each. Most tickers return nothing at all -- Apple, Netflix, Starbucks,
+Nike, Target, Salesforce, Adobe, Eli Lilly and AMD each returned zero award
+actions when measured -- which costs one request; the rest return a page.
+
+The catch, and the guard
+------------------------
+`recipient_search_text` also matches through USASpending's own recipient
+hierarchy, so asking about Leidos returns awards to "QTC MEDICAL SERVICES INC".
+Those may well be real subsidiaries, but nothing in the SEC register confirms the
+parentage and this project does not attribute an award to a company on a guess.
+So every result is round-tripped through the same resolver and kept only if the
+recipient name lands back on the ticker that was asked about -- the identical
+guard `lda.py` applies to lobbying clients.
+
+That guard is stricter here than it is there, and the cost is measured rather
+than assumed. Across a 40-ticker sample it keeps 2,042 of 3,358 award actions,
+and thirteen of the forty keep nothing at all, because the entity that holds the
+federal business is named for a division: "CACI, INC. - FEDERAL", "DELL FEDERAL
+SYSTEMS L.P", "CHEVRON USA INC.", "ORACLE AMERICA, INC", "MERCK SHARP & DOHME
+LLC", "KBR WYLE SERVICES, LLC". Those are a known gap, not a silent one --
+`rejected_wrong_company` counts them and the most common rejected names are
+logged, so the gap is visible in every run summary. Closing it means writing each
+one down in SUBSIDIARY_OVERRIDES, where it is a reviewable assertion.
+
+Recipients that resolve to nothing at all are a different case and are correctly
+dropped: national laboratories, universities and nonprofits take an enormous
+share of federal contracting by value and none of them can be traded, so there is
+no conflict for a trade detector to find.
 """
 
 from __future__ import annotations
@@ -26,6 +66,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from src.db.models import GovernmentContract
+from src.ingestion._helpers import traded_tickers
 from src.ingestion.sec_tickers import TickerResolver
 
 logger = logging.getLogger(__name__)
@@ -47,6 +88,10 @@ PAGE_LIMIT = 100
 # USASpending caps award search at 2007-10-01; anything earlier needs the bulk
 # download endpoints instead.
 EARLIEST_SEARCH_DATE = "2007-10-01"
+
+# How many rejected recipient names to name in the summary log. Enough to show
+# the shape of the gap; not so many that a run log becomes a company directory.
+REJECTED_NAMES_LOGGED = 10
 
 
 def _parse_date(value: Any) -> datetime | None:
@@ -71,24 +116,34 @@ def fetch_awards(
     start_date: str,
     end_date: str,
     *,
-    pages: int = 3,
+    recipient: str | None = None,
+    pages: int = 1,
     session: requests.Session | None = None,
 ) -> List[Dict[str, Any]]:
-    """Fetch contract awards in a date range, largest first.
+    """Fetch contract award actions in a date range, largest first.
 
-    Sorted by award amount because the detector cares about material awards and
-    the tail is enormous -- there is no value in paging through thousands of
-    small purchase orders.
+    `recipient` restricts the search to one company via USASpending's own
+    `recipient_search_text` filter. Omitting it searches every recipient in the
+    window, which is what this module used to do for the whole corpus -- see the
+    module docstring for why one page of that is nearly useless to the detector.
+
+    Sorted by award amount descending, so one page is "the hundred largest award
+    actions this company received", which is a rule that can be stated on the
+    site rather than an arbitrary slice.
     """
     http = session or requests.Session()
     awards: List[Dict[str, Any]] = []
 
+    filters: Dict[str, Any] = {
+        "award_type_codes": CONTRACT_AWARD_TYPES,
+        "time_period": [{"start_date": start_date, "end_date": end_date}],
+    }
+    if recipient:
+        filters["recipient_search_text"] = [recipient]
+
     for page in range(1, pages + 1):
         payload = {
-            "filters": {
-                "award_type_codes": CONTRACT_AWARD_TYPES,
-                "time_period": [{"start_date": start_date, "end_date": end_date}],
-            },
+            "filters": filters,
             "fields": [
                 "Award ID",
                 "Recipient Name",
@@ -112,7 +167,6 @@ def fetch_awards(
         if not body.get("page_metadata", {}).get("hasNext"):
             break
 
-    logger.info("Fetched %d contract award actions from USASpending", len(awards))
     return awards
 
 
@@ -121,10 +175,11 @@ def ingest_government_contracts(
     start_date: str = "2023-01-01",
     end_date: str | None = None,
     *,
-    pages: int = 3,
+    pages: int = 1,
+    tickers: List[str] | None = None,
     resolver: TickerResolver | None = None,
-) -> Dict[str, int]:
-    """Fetch awards and upsert those whose recipient resolves to a ticker."""
+) -> Dict[str, Any]:
+    """Fetch federal awards for the companies members have traded, and store them."""
     end_date = end_date or datetime.now().strftime("%Y-%m-%d")
     if start_date < EARLIEST_SEARCH_DATE:
         logger.warning(
@@ -135,82 +190,139 @@ def ingest_government_contracts(
         start_date = EARLIEST_SEARCH_DATE
 
     resolver = resolver or TickerResolver()
-    awards = fetch_awards(start_date, end_date, pages=pages)
+
+    universe = sorted(t.upper() for t in tickers) if tickers else sorted(traded_tickers(db))
+    if not universe:
+        logger.warning(
+            "No transactions carry a ticker, so there is nothing to look up. "
+            "Run `ingest` and `parse` first."
+        )
+        return {
+            "tickers_queried": 0,
+            "tickers_without_a_registered_name": 0,
+            "fetched": 0,
+            "imported": 0,
+            "duplicates": 0,
+            "rejected_wrong_company": 0,
+            "rejected_names": {},
+        }
 
     imported = 0
-    unresolved = 0
     duplicates = 0
+    rejected = 0
+    unnamed = 0
+    queried = 0
+    fetched = 0
+    rejected_names: Dict[str, int] = {}
     seen: set[str] = set()
 
-    for award in awards:
-        recipient = award.get("Recipient Name") or ""
-        ticker = resolver.resolve(recipient)
-        if not ticker:
-            unresolved += 1
+    for ticker in universe:
+        company = resolver.name_for(ticker)
+        if not company:
+            # Not in the SEC register at all -- a foreign listing, a fund, or a
+            # ticker the parser misread. Nothing to ask USASpending about.
+            unnamed += 1
             continue
 
-        # The date the award action actually happened -- the only one a
-        # front-running window can be measured against.
-        awarded = _parse_date(award.get("Action Date"))
-        description = award.get("Transaction Description") or award.get("Award ID") or ""
+        queried += 1
+        awards = fetch_awards(start_date, end_date, recipient=company, pages=pages)
+        fetched += len(awards)
 
-        # `internal_id` is USASpending's own identifier for the award ACTION.
-        # It is returned whether or not it is listed in `fields`, and it is what
-        # makes reruns idempotent. The natural key cannot do this
-        # job: one contract is routinely modified several times on the same day
-        # for the same amount, and collapsing those loses real award activity.
-        external_id = str(award.get("internal_id") or "") or None
-        if external_id and external_id in seen:
-            duplicates += 1
-            continue
-        if external_id:
-            seen.add(external_id)
+        for award in awards:
+            recipient_name = award.get("Recipient Name") or ""
 
-        exists = (
-            db.query(GovernmentContract)
-            .filter(
-                GovernmentContract.source == SOURCE,
-                GovernmentContract.external_id == external_id,
-            )
-            .first()
-            if external_id
-            else db.query(GovernmentContract)
-            .filter(
-                GovernmentContract.ticker == ticker,
-                GovernmentContract.awarded_date == awarded,
-                GovernmentContract.description == description,
-            )
-            .first()
-        )
-        if exists:
-            duplicates += 1
-            continue
+            # The round trip. USASpending matched this award to the company we
+            # asked about, possibly through its own recipient hierarchy, which
+            # this project cannot verify. Keeping only names that resolve back
+            # to the same ticker means every stored award is attributable from
+            # the SEC register alone.
+            if resolver.resolve(recipient_name) != ticker:
+                rejected += 1
+                rejected_names[recipient_name] = rejected_names.get(recipient_name, 0) + 1
+                continue
 
-        db.add(
-            GovernmentContract(
-                ticker=ticker,
-                agency=award.get("Awarding Agency"),
-                description=description,
-                amount=_parse_amount(award.get("Transaction Amount")),
-                awarded_date=awarded,
-                source=SOURCE,
-                external_id=external_id,
+            # The date the award action actually happened -- the only one a
+            # front-running window can be measured against.
+            awarded = _parse_date(award.get("Action Date"))
+            description = award.get("Transaction Description") or award.get("Award ID") or ""
+
+            # `internal_id` is USASpending's own identifier for the award ACTION.
+            # It is returned whether or not it is listed in `fields`, and it is
+            # what makes reruns idempotent. The natural key cannot do this job:
+            # one contract is routinely modified several times on the same day
+            # for the same amount, and collapsing those loses real award
+            # activity. (It cannot collide across two company queries -- the
+            # round trip above resolves each recipient to exactly one ticker --
+            # so `seen` is guarding repeats inside one company's pages.)
+            external_id = str(award.get("internal_id") or "") or None
+            if external_id and external_id in seen:
+                duplicates += 1
+                continue
+            if external_id:
+                seen.add(external_id)
+
+            exists = (
+                db.query(GovernmentContract)
+                .filter(
+                    GovernmentContract.source == SOURCE,
+                    GovernmentContract.external_id == external_id,
+                )
+                .first()
+                if external_id
+                else db.query(GovernmentContract)
+                .filter(
+                    GovernmentContract.ticker == ticker,
+                    GovernmentContract.awarded_date == awarded,
+                    GovernmentContract.description == description,
+                )
+                .first()
             )
-        )
-        imported += 1
+            if exists:
+                duplicates += 1
+                continue
+
+            db.add(
+                GovernmentContract(
+                    ticker=ticker,
+                    agency=award.get("Awarding Agency"),
+                    description=description,
+                    amount=_parse_amount(award.get("Transaction Amount")),
+                    awarded_date=awarded,
+                    source=SOURCE,
+                    external_id=external_id,
+                )
+            )
+            imported += 1
 
     db.commit()
 
     logger.info(
-        "Government contracts: %d imported, %d duplicates, %d recipients "
-        "not publicly traded (expected -- labs, universities, nonprofits)",
+        "Government contracts: %d imported, %d duplicates, %d rejected as a "
+        "different company, across %d tickers (%d not in the SEC register)",
         imported,
         duplicates,
-        unresolved,
+        rejected,
+        queried,
+        unnamed,
     )
+    if rejected_names:
+        # Named, not just counted. A recipient rejected a hundred times is a
+        # listed contractor whose federal arm is registered under a divisional
+        # name, and the only way that gap gets closed is by someone reading it
+        # here and writing the assertion down in SUBSIDIARY_OVERRIDES.
+        top = sorted(rejected_names.items(), key=lambda kv: -kv[1])[:REJECTED_NAMES_LOGGED]
+        logger.info(
+            "Most-rejected recipients (matched by USASpending's hierarchy, not "
+            "by the SEC register): %s",
+            "; ".join(f"{name} x{count}" for name, count in top),
+        )
+
     return {
+        "tickers_queried": queried,
+        "tickers_without_a_registered_name": unnamed,
+        "fetched": fetched,
         "imported": imported,
         "duplicates": duplicates,
-        "unresolved_recipients": unresolved,
-        "fetched": len(awards),
+        "rejected_wrong_company": rejected,
+        "rejected_names": rejected_names,
     }

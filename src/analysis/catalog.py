@@ -88,7 +88,12 @@ DETECTORS: List[Detector] = [
         "awarded a federal contract.",
         "Purchases only, and many awards are publicly anticipated long before "
         "they are announced. Buying ahead of an expected award is not buying "
-        "ahead of a secret one, and this cannot tell the two apart.",
+        "ahead of a secret one, and this cannot tell the two apart. Coverage is "
+        "also partial by construction: the award set is the largest hundred "
+        "federal award actions to each company anyone in Congress has traded, so "
+        "a smaller award to a heavily contracted company is not in it, and an "
+        "award booked to a subsidiary the SEC register does not tie back to its "
+        "parent is missing entirely. An absence here is not evidence of none.",
         f"{PTR} joined to USASpending federal award actions",
     ),
     Detector(

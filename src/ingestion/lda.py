@@ -228,7 +228,25 @@ def ingest_lobbying_disclosures(
     rejected = 0
     unnamed = 0
     queried = 0
-    seen: Set[str] = set()
+
+    # Every filing_uuid already stored for this source, read once. This was a
+    # SELECT per incoming filing, and the last run imported 4,920 of them --
+    # one network round trip each, against a database on another host, and on a
+    # rerun every single one is a hit, so the whole cost buys the answer
+    # "nothing to do".
+    #
+    # The set doubles as the in-batch guard it sits beside: `SessionLocal` is
+    # autoflush=False, so a row added earlier in this loop is invisible to a
+    # query anyway.
+    seen: Set[str] = {
+        row[0]
+        for row in db.query(LobbyingDisclosure.external_id)
+        .filter(
+            LobbyingDisclosure.source == SOURCE,
+            LobbyingDisclosure.external_id.isnot(None),
+        )
+        .all()
+    }
 
     for ticker in universe:
         company = resolver.name_for(ticker)
@@ -255,23 +273,25 @@ def ingest_lobbying_disclosures(
                 continue
 
             external_id = str(filing.get("filing_uuid") or "") or None
-            if external_id and external_id in seen:
-                duplicates += 1
-                continue
             if external_id:
+                if external_id in seen:
+                    duplicates += 1
+                    continue
                 seen.add(external_id)
-
-            exists = (
-                db.query(LobbyingDisclosure)
-                .filter(
-                    LobbyingDisclosure.source == SOURCE,
-                    LobbyingDisclosure.external_id == external_id,
-                )
-                .first()
-            )
-            if exists:
-                duplicates += 1
-                continue
+            else:
+                # No filing_uuid. Rare enough to be worth one query rather than
+                # a second pre-loaded set, and the semantics are preserved
+                # exactly: a NULL external_id matches any other NULL one.
+                if (
+                    db.query(LobbyingDisclosure)
+                    .filter(
+                        LobbyingDisclosure.source == SOURCE,
+                        LobbyingDisclosure.external_id.is_(None),
+                    )
+                    .first()
+                ):
+                    duplicates += 1
+                    continue
 
             db.add(
                 LobbyingDisclosure(

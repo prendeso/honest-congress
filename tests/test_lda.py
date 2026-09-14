@@ -291,3 +291,95 @@ def test_no_traded_tickers_reports_rather_than_scanning_the_whole_year(db_sessio
     assert result["tickers_queried"] == 0
     assert result["imported"] == 0
     assert client.requests_made == 0
+
+
+# --------------------------------------------------------------------------
+# Cost
+# --------------------------------------------------------------------------
+
+
+def _count_selects(engine, callable_):
+    from sqlalchemy import event
+
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        callable_()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return seen
+
+
+class TestCostDoesNotTrackTheNumberOfFilings:
+    """One SELECT per incoming filing, to learn whether it was already stored.
+
+    The last production run imported 4,920 lobbying filings. That was 4,920
+    network round trips to a database on another host, and on a rerun every one
+    of them is already present -- so the entire cost buys the answer "nothing to
+    do". Ingestion runs as a GitHub Actions step writing to Railway.
+
+    The same fix as `src/ingestion/usaspending.py`: read the ids already stored
+    for this source once. The set is also the in-batch guard it replaces, since
+    `SessionLocal` is autoflush=False and a row added earlier in the loop is
+    invisible to a query anyway.
+    """
+
+    def _filings(self, n: int, northrop: dict) -> dict:
+        one = northrop["results"][0]
+        return {
+            "count": n,
+            "next": None,
+            "results": [dict(one, filing_uuid=f"uuid-{i:04d}") for i in range(n)],
+        }
+
+    def test_one_filing_and_forty_cost_the_same_to_look_up(
+        self, db_session, engine, resolver, northrop
+    ):
+        def selects(n):
+            client = _client([self._filings(n, northrop)])
+            return _count_selects(
+                engine,
+                lambda: ingest_lobbying_disclosures(
+                    db_session, 2024, tickers=["NOC"], resolver=resolver, client=client
+                ),
+            )
+
+        one = selects(1)
+        forty = selects(40)
+
+        assert len(one) == len(forty), (
+            f"lookups grew with the number of filings: {len(one)} -> {len(forty)}"
+        )
+
+    def test_a_rerun_over_stored_filings_still_asks_once(
+        self, db_session, engine, resolver, northrop
+    ):
+        payload = self._filings(30, northrop)
+        for _ in range(2):
+            client = _client([payload])
+            statements = _count_selects(
+                engine,
+                lambda c=client: ingest_lobbying_disclosures(
+                    db_session, 2024, tickers=["NOC"], resolver=resolver, client=c
+                ),
+            )
+
+        assert len(statements) == 1, statements
+
+    def test_the_filings_are_still_stored_once_each(self, db_session, resolver, northrop):
+        from src.db.models import LobbyingDisclosure
+
+        for _ in range(2):
+            client = _client([self._filings(12, northrop)])
+            result = ingest_lobbying_disclosures(
+                db_session, 2024, tickers=["NOC"], resolver=resolver, client=client
+            )
+
+        assert result["imported"] == 0
+        assert result["duplicates"] == 12
+        assert db_session.query(LobbyingDisclosure).count() == 12

@@ -294,6 +294,22 @@ def ingest_member_bills(
     seen_bills: set[int] = set()
     unknown_to_congress_gov: List[str] = []
 
+    # Existing sponsorships as their natural key, read once. This was a SELECT
+    # per bill per member -- one network round trip to learn whether a
+    # sponsorship already existed, repeated across every bill a member has ever
+    # sponsored. Congress.gov returns 71 sponsored bills for a typical member.
+    #
+    # A natural key rather than an external id because that is what the table is
+    # unique on, and this must not change what counts as a duplicate. The set is
+    # added to on insert, which also covers the in-batch case: autoflush=False
+    # hides a row added earlier in this loop from a query.
+    known_sponsorships: set[tuple[int, int, bool]] = {
+        (row[0], row[1], bool(row[2]))
+        for row in db.query(
+            BillSponsorship.bill_id, BillSponsorship.member_id, BillSponsorship.is_sponsor
+        ).all()
+    }
+
     kinds = [("sponsored-legislation", "sponsoredLegislation", True)]
     if include_cosponsored:
         kinds.append(("cosponsored-legislation", "cosponsoredLegislation", False))
@@ -311,17 +327,10 @@ def ingest_member_bills(
                         continue
                     seen_bills.add(bill.id)
 
-                    exists = (
-                        db.query(BillSponsorship)
-                        .filter(
-                            BillSponsorship.bill_id == bill.id,
-                            BillSponsorship.member_id == member.id,
-                            BillSponsorship.is_sponsor == is_sponsor,
-                        )
-                        .first()
-                    )
-                    if exists:
+                    key = (bill.id, member.id, bool(is_sponsor))
+                    if key in known_sponsorships:
                         continue
+                    known_sponsorships.add(key)
 
                     db.add(
                         BillSponsorship(bill_id=bill.id, member_id=member.id, is_sponsor=is_sponsor)
@@ -405,7 +414,28 @@ def fetch_bill_committees(
     fetched = 0
     referrals = 0
     stopped_early = False
-    seen_referrals: set[tuple[Any, ...]] = set()
+
+    # Referrals already stored for the bills being fetched, read once instead of
+    # once per activity. Same natural key the table is unique on, and the same
+    # set that guards the in-batch case below -- a committee really does repeat
+    # an activity name within one response, so both jobs were always needed and
+    # only one of them needed a query.
+    target_ids = [b.id for b in targets]
+    seen_referrals: set[tuple[Any, ...]] = (
+        {
+            (row[0], row[1], row[2], row[3])
+            for row in db.query(
+                BillCommittee.bill_id,
+                BillCommittee.committee_id,
+                BillCommittee.activity,
+                BillCommittee.activity_date,
+            )
+            .filter(BillCommittee.bill_id.in_(target_ids))
+            .all()
+        }
+        if target_ids
+        else set()
+    )
 
     try:
         for bill in targets:
@@ -435,18 +465,6 @@ def fetch_bill_committees(
                         continue
                     seen_referrals.add(key)
 
-                    exists = (
-                        db.query(BillCommittee)
-                        .filter(
-                            BillCommittee.bill_id == bill.id,
-                            BillCommittee.committee_id == thomas_id,
-                            BillCommittee.activity == name,
-                            BillCommittee.activity_date == when,
-                        )
-                        .first()
-                    )
-                    if exists:
-                        continue
                     db.add(
                         BillCommittee(
                             bill_id=bill.id,

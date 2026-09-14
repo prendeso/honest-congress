@@ -639,3 +639,115 @@ class TestATransientGatewayErrorIsRetriedNotFatal:
     def _roster(self, db, bioguides):
         for bioguide in bioguides:
             _member(db, bioguide=bioguide)
+
+
+# --------------------------------------------------------------------------
+# Cost
+# --------------------------------------------------------------------------
+
+
+def _count_queries(engine, callable_):
+    from sqlalchemy import event
+
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, params, context, executemany):
+        seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        callable_()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return seen
+
+
+class TestCostDoesNotTrackTheNumberOfBills:
+    """Sponsorships and referrals each asked the database once per row.
+
+    A sponsorship lookup fired once per bill per member, and Congress.gov
+    returns 71 sponsored bills for a typical member; a referral lookup fired
+    once per committee activity per bill. Ingestion runs as a GitHub Actions
+    step writing to Railway, so each one is a network round trip.
+
+    Both are keyed on a NATURAL key rather than an external id, because that is
+    what their tables are unique on -- so the fix reads those keys once and uses
+    the resulting set as the in-batch guard as well. The in-batch guard was
+    always needed independently: autoflush=False hides a row added earlier in
+    the loop from a query, and a committee really does repeat an activity name
+    within one response.
+    """
+
+    def _sponsored(self, n: int, sponsored: dict) -> dict:
+        one = sponsored["sponsoredLegislation"][0]
+        return {
+            "sponsoredLegislation": [
+                dict(one, number=str(1000 + i), introducedDate="2024-03-01") for i in range(n)
+            ],
+            "pagination": {"count": n},
+        }
+
+    def test_one_bill_and_forty_cost_the_same_to_look_up(self, db_session, engine, sponsored):
+        # One member throughout, so the only thing that varies is how many bills
+        # come back for them.
+        _member(db_session, bioguide="AA000001")
+
+        def selects(n):
+            db_session.query(BillSponsorship).delete()
+            db_session.query(Bill).delete()
+            db_session.commit()
+            client = _client([self._sponsored(n, sponsored)])
+            statements = _count_queries(
+                engine,
+                lambda: ingest_member_bills(
+                    db_session, API_KEY, client=client, include_cosponsored=False
+                ),
+            )
+            return [
+                s
+                for s in statements
+                if s.lstrip().upper().startswith("SELECT") and "bill_sponsorships" in s
+            ]
+
+        one = selects(1)
+        forty = selects(40)
+
+        # Sponsorship lookups specifically. `_upsert_bill` still issues its own
+        # query per bill to find the bill by (congress, type, number) -- that is
+        # a separate N+1, it is not what this change touched, and asserting on
+        # the total would quietly claim credit for fixing it.
+        assert len(one) == len(forty) == 1, (
+            f"sponsorship lookups grew with the number of bills: {len(one)} -> {len(forty)}"
+        )
+
+    def test_sponsorships_are_still_stored_once_each(self, db_session, sponsored):
+        _member(db_session, bioguide="AB000001")
+
+        for _ in range(2):
+            client = _client([self._sponsored(9, sponsored)])
+            ingest_member_bills(db_session, API_KEY, client=client, include_cosponsored=False)
+
+        assert db_session.query(BillSponsorship).count() == 9
+
+    def test_referrals_are_still_stored_once_each(self, db_session, committees_hr1):
+        member = _member(db_session, bioguide="AC000001")
+        bill = Bill(
+            congress=118,
+            bill_type="hr",
+            number="1",
+            title="Test",
+            introduced_date=datetime(2024, 1, 1),
+        )
+        db_session.add(bill)
+        db_session.commit()
+        assert member.id
+
+        for _ in range(2):
+            db_session.query(Bill).update({Bill.committees_fetched: False})
+            db_session.commit()
+            client = _client([committees_hr1])
+            fetch_bill_committees(db_session, API_KEY, client=client, bills=[bill])
+
+        rows = db_session.query(BillCommittee).all()
+        keys = {(r.bill_id, r.committee_id, r.activity, r.activity_date) for r in rows}
+        assert len(keys) == len(rows), "a referral was stored twice"

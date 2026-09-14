@@ -305,7 +305,20 @@ def ingest_campaign_donations(
     pacs_queried = 0
     skipped_done = 0
     stopped_early = False
-    seen_sub_ids: Set[str] = set()
+    # Every FEC sub_id already stored, read once rather than asked per receipt.
+    # The last run imported 32,515 donations; that was 32,515 round trips to a
+    # hosted database to discover which were new, and on a rerun all of them are
+    # already present. Also the in-batch guard, since autoflush=False hides a
+    # row added earlier in this loop from a query.
+    seen_sub_ids: Set[str] = {
+        row[0]
+        for row in db.query(CampaignDonation.external_id)
+        .filter(
+            CampaignDonation.source == SOURCE,
+            CampaignDonation.external_id.isnot(None),
+        )
+        .all()
+    }
 
     try:
         committees = principal_committees(client, sorted(members_by_fec_id))
@@ -368,24 +381,26 @@ def ingest_campaign_donations(
                 # on 2024-12-31, primary and general -- so deduplicating on
                 # (member, ticker, date, amount) silently merges real donations.
                 sub_id = str(receipt.get("sub_id") or "") or None
-                if sub_id and sub_id in seen_sub_ids:
-                    duplicates += 1
-                    continue
                 if sub_id:
+                    if sub_id in seen_sub_ids:
+                        duplicates += 1
+                        continue
                     seen_sub_ids.add(sub_id)
-
-                donated = _parse_date(receipt.get("contribution_receipt_date"))
-                exists = (
+                elif (
+                    # No sub_id. One query rather than a second set, and the old
+                    # semantics kept exactly: a NULL external_id matched any
+                    # other NULL one.
                     db.query(CampaignDonation)
                     .filter(
                         CampaignDonation.source == SOURCE,
-                        CampaignDonation.external_id == sub_id,
+                        CampaignDonation.external_id.is_(None),
                     )
                     .first()
-                )
-                if exists:
+                ):
                     duplicates += 1
                     continue
+
+                donated = _parse_date(receipt.get("contribution_receipt_date"))
 
                 db.add(
                     CampaignDonation(

@@ -352,3 +352,121 @@ class TestRunTier2Detection:
 
 
 # ---------------- client methods (Tier 2 + Tier 3 endpoint routing) ----------------
+
+
+# ---------------- cost ----------------
+
+
+def _count_queries(engine, callable_):
+    from sqlalchemy import event
+
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, params, context, executemany):
+        seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        callable_()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return seen
+
+
+class TestCostDoesNotTrackTheTriggerTable:
+    """Each detector used to ask the database once per trigger row.
+
+    That is an N+1 whose N is set by an external feed rather than by anything
+    here: lobbying holds 4,920 rows, and the contract feed went from roughly 200
+    to roughly 10,000 the moment it stopped taking a global top-300 slice. Every
+    one of those is a network round trip, because `analyze` runs on a GitHub
+    runner against a hosted database.
+
+    Measured on 8,000 trades, 4,920 lobbying filings, 10,000 contract awards and
+    2,000 donations, with identical findings from both versions:
+
+        detect_donor_conflicts        2,001 queries -> 2
+        detect_lobbying_overlaps      4,921 queries -> 2
+        detect_contract_front_runs   10,001 queries -> 2
+
+    The assertion below is the shape of that, not the size: ten trigger rows
+    must not cost ten times what one costs. A count is asserted rather than a
+    duration because a timing test is flaky and does not say what broke.
+    """
+
+    def _seed(self, db_session, rows: int, tag: str = "a"):
+        member = _make_member(db_session, bioguide=f"C00000{tag}")
+        _make_trade(db_session, member, "AAPL", TransactionType.PURCHASE, datetime(2024, 3, 10))
+        for i in range(rows):
+            db_session.add(
+                LobbyingDisclosure(
+                    ticker="AAPL",
+                    registrant=f"Registrant {i}",
+                    client="Apple Inc.",
+                    filed_date=datetime(2024, 3, 1) + timedelta(days=i),
+                    source="senate-lda",
+                    external_id=f"LOB{tag}{i}",
+                )
+            )
+            db_session.add(
+                GovernmentContract(
+                    ticker="AAPL",
+                    agency="Department of Defense",
+                    description=f"Award {i}",
+                    amount=Decimal("1000000"),
+                    awarded_date=datetime(2024, 3, 12) + timedelta(days=i),
+                    source="usaspending",
+                    external_id=f"GOV{tag}{i}",
+                )
+            )
+            db_session.add(
+                CampaignDonation(
+                    member_id=member.id,
+                    ticker="AAPL",
+                    donor_name=f"Apple PAC {i}",
+                    amount=Decimal("5000"),
+                    donation_date=datetime(2024, 3, 5) + timedelta(days=i),
+                    cycle="2024",
+                    source="fec",
+                    external_id=f"FEC{tag}{i}",
+                )
+            )
+        db_session.commit()
+
+    def test_one_trigger_row_and_ten_cost_the_same(self, db_session, engine):
+        self._seed(db_session, 1, tag="a")
+        one = {
+            name: len(_count_queries(engine, lambda fn=fn: fn(db_session)))
+            for name, fn in (
+                ("donor", detect_donor_conflicts),
+                ("lobbying", detect_lobbying_overlaps),
+                ("contract", detect_contract_front_runs),
+            )
+        }
+
+        self._seed(db_session, 10, tag="b")
+        ten = {
+            name: len(_count_queries(engine, lambda fn=fn: fn(db_session)))
+            for name, fn in (
+                ("donor", detect_donor_conflicts),
+                ("lobbying", detect_lobbying_overlaps),
+                ("contract", detect_contract_front_runs),
+            )
+        }
+
+        assert one == ten, (
+            f"query count grew with the number of trigger rows: {one} -> {ten}. "
+            "That is the N+1 this was written to stop."
+        )
+
+    def test_a_detector_reads_its_trigger_table_and_the_trades_once_each(self, db_session, engine):
+        self._seed(db_session, 25)
+        statements = _count_queries(engine, lambda: detect_lobbying_overlaps(db_session))
+        assert len(statements) == 2, statements
+
+    def test_a_detector_with_no_trigger_rows_does_not_ask_about_trades(self, db_session, engine):
+        _make_member(db_session)
+        statements = _count_queries(engine, lambda: detect_contract_front_runs(db_session))
+        # Just the scan of the empty trigger table. There is no ticker to ask
+        # about, and `IN ()` against an empty set is a query that cannot match.
+        assert len(statements) == 1, statements

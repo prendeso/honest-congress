@@ -26,10 +26,11 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from sqlalchemy.exc import OperationalError
 
 from src.db.models import Bill, BillCommittee, BillSponsorship, Chamber, Disclosure, Member, Party
 from src.ingestion.bills import (
@@ -899,3 +900,145 @@ class TestCostDoesNotTrackTheNumberOfBills:
         rows = db_session.query(BillCommittee).all()
         keys = {(r.bill_id, r.committee_id, r.activity, r.activity_date) for r in rows}
         assert len(keys) == len(rows), "a referral was stored twice"
+
+
+class TestADroppedDatabaseConnectionDoesNotEndTheRun:
+    """The 06:00 cron on 2026-09-14 spent 3h54m in this loop and then died.
+
+        psycopg.OperationalError: consuming input failed:
+            SSL error: unexpected eof while reading
+          File "src/ingestion/bills.py", line 321, in ingest_member_bills
+
+    Exit code 1, the rest of the roster lost, and `continue-on-error: true` on
+    the step meant it reported success. Work is committed per member, so the
+    run was resumable -- a dropped packet four hours in should cost one member,
+    not the remainder.
+
+    The subtle half is the caches. `bills_by_key` and `known_sponsorships` are
+    read once and added to as the loop goes. A rollback undoes rows they say
+    exist, so after one they are lying: `bills_by_key` holds ids no row has any
+    more, and reusing one as a foreign key attaches a sponsorship to a bill that
+    is not there. They have to be rebuilt from the committed state, and that is
+    what `test_a_bill_lost_to_the_rollback_is_not_referenced_by_a_stale_id`
+    pins.
+    """
+
+    def _sponsored(self, sponsored: dict, numbers) -> dict:
+        one = sponsored["sponsoredLegislation"][0]
+        return {
+            "sponsoredLegislation": [
+                dict(one, number=str(n), introducedDate="2024-03-01") for n in numbers
+            ],
+            "pagination": {"count": len(list(numbers))},
+        }
+
+    def _dropped(self) -> OperationalError:
+        """The shape SQLAlchemy hands us: `connection_invalidated` is its own flag.
+
+        Set by the dialect's `is_disconnect`, which for psycopg means the
+        connection is closed or broken -- what an SSL EOF produces.
+        """
+        exc = OperationalError("SELECT 1", {}, Exception("SSL error: unexpected eof"))
+        exc.connection_invalidated = True
+        return exc
+
+    def test_the_run_continues_past_a_dropped_connection(self, db_session, sponsored):
+        first = _member(db_session, bioguide="CA000001")
+        second = _member(db_session, bioguide="CB000002")
+
+        real_commit = db_session.commit
+        calls = {"n": 0}
+
+        def flaky_commit():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise self._dropped()
+            return real_commit()
+
+        # Three responses for two members: the retry re-requests the page the
+        # failed attempt already fetched. A dropped connection costs one extra
+        # Congress.gov request, which is the right trade against losing the
+        # rest of the roster.
+        client = _client(
+            [
+                self._sponsored(sponsored, [10]),
+                self._sponsored(sponsored, [10]),
+                self._sponsored(sponsored, [20]),
+            ]
+        )
+        with patch.object(db_session, "commit", side_effect=flaky_commit):
+            result = ingest_member_bills(
+                db_session, API_KEY, client=client, include_cosponsored=False
+            )
+
+        assert result["connection_losses"] == 1
+        assert result["members_lost_to_the_database"] == []
+        assert result["members_queried"] == 2
+        # Both members' sponsorships survive: the first was retried.
+        assert db_session.query(BillSponsorship).count() == 2
+        assert {first.id, second.id} == {
+            s.member_id for s in db_session.query(BillSponsorship).all()
+        }
+
+    def test_a_bill_lost_to_the_rollback_is_not_referenced_by_a_stale_id(
+        self, db_session, sponsored
+    ):
+        """No sponsorship may point at a bill the rollback removed.
+
+        Without rebuilding the caches this is exactly what happens: the bill is
+        gone, `bills_by_key` still has its id, and the retry writes a
+        sponsorship against it.
+        """
+        _member(db_session, bioguide="CC000003")
+
+        real_commit = db_session.commit
+        calls = {"n": 0}
+
+        def flaky_commit():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise self._dropped()
+            return real_commit()
+
+        client = _client([self._sponsored(sponsored, [31, 32, 33])] * 2)
+        with patch.object(db_session, "commit", side_effect=flaky_commit):
+            ingest_member_bills(db_session, API_KEY, client=client, include_cosponsored=False)
+
+        bill_ids = {b.id for b in db_session.query(Bill).all()}
+        referenced = {s.bill_id for s in db_session.query(BillSponsorship).all()}
+        assert referenced <= bill_ids, (
+            f"sponsorships point at bills that do not exist: {referenced - bill_ids}"
+        )
+        assert db_session.query(BillSponsorship).count() == 3
+
+    def test_a_member_lost_to_repeated_drops_is_named_not_silent(self, db_session, sponsored):
+        """A silent gap is indistinguishable from a member who sponsored nothing."""
+        _member(db_session, bioguide="CD000004")
+
+        def always_dropped():
+            raise self._dropped()
+
+        client = _client([self._sponsored(sponsored, [40])] * 4)
+        with patch.object(db_session, "commit", side_effect=always_dropped):
+            result = ingest_member_bills(
+                db_session, API_KEY, client=client, include_cosponsored=False
+            )
+
+        assert result["members_lost_to_the_database"] == ["CD000004"]
+        # Three: the attempt, its one retry, and the function's closing commit,
+        # which this fixture also drops. That last one is not fatal -- every
+        # member is committed inside the loop, so there is nothing left for it
+        # to save.
+        assert result["connection_losses"] == 3
+
+    def test_a_real_database_error_still_raises(self, db_session, sponsored):
+        """Retrying a constraint violation would turn a loud bug into a silent one."""
+        _member(db_session, bioguide="CE000005")
+
+        def broken():
+            raise OperationalError("SELECT 1", {}, Exception("syntax error"))
+
+        client = _client([self._sponsored(sponsored, [50])])
+        with patch.object(db_session, "commit", side_effect=broken):
+            with pytest.raises(OperationalError):
+                ingest_member_bills(db_session, API_KEY, client=client, include_cosponsored=False)

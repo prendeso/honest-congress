@@ -585,6 +585,14 @@ def cmd_ingest_bills(args):
     print(f"  Sponsorships: {result['sponsorships']}")
     print(f"  Cosponsorships: {result['cosponsorships']}")
     print(f"  Congress.gov requests used: {result['requests_made']}")
+    if result.get("connection_losses"):
+        lost = result["members_lost_to_the_database"]
+        print(
+            f"  Database connection dropped: {result['connection_losses']} time(s)"
+            f"  - {len(lost)} member(s) lost to it"
+        )
+        for bioguide in lost[:10]:
+            print(f"      {bioguide}")
 
     if not args.skip_committees:
         # One request per bill, so only for bills that could actually produce a

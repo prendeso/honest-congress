@@ -44,6 +44,7 @@ from typing import Any, Dict, Iterator, List, Tuple
 
 import requests
 from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from src.db.models import Bill, BillCommittee, BillSponsorship, Disclosure, Member
@@ -62,6 +63,11 @@ DEFAULT_REQUESTS_PER_HOUR = 18000
 
 # The API caps `limit` at 250.
 PAGE_SIZE = 250
+
+# How many times one member is retried after the database connection drops.
+# One is the useful number: these are momentary, and a connection that fails
+# twice in a row is not going to be talked round by a third attempt.
+CONNECTION_LOSS_RETRIES = 1
 
 
 class CongressAPIClient(ThrottledClient):
@@ -298,6 +304,54 @@ def _can_produce_a_finding():
     return or_(Member.in_office.is_(True), Member.id.in_(has_filed))
 
 
+def _stored_sponsorship_keys(db: Session) -> set:
+    """Every sponsorship already stored, as the natural key the table is unique on.
+
+    A natural key rather than an external id because that is what
+    `bill_sponsorships` is unique on, and this must not change what counts as a
+    duplicate. The set is added to on insert, which also covers the in-batch
+    case: autoflush=False hides a row added earlier in the loop from a query.
+    """
+    return {
+        (row[0], row[1], bool(row[2]))
+        for row in db.query(
+            BillSponsorship.bill_id, BillSponsorship.member_id, BillSponsorship.is_sponsor
+        ).all()
+    }
+
+
+def _stored_bills_by_key(db: Session) -> Dict[Tuple[Any, str, str], Tuple[int, Tuple[Any, ...]]]:
+    """Every bill already stored, as plain columns rather than entities.
+
+    Columns, not entities, on purpose: `SessionLocal` leaves expire_on_commit at
+    its default, so entities cached here would be expired by the commit at the
+    end of each member and re-fetched one at a time on next touch -- turning the
+    cache into the very N+1 it removes.
+    """
+    return {
+        (row[0], row[1], row[2]): (row[3], tuple(row[4:]))
+        for row in db.query(
+            Bill.congress,
+            Bill.bill_type,
+            Bill.number,
+            Bill.id,
+            *(getattr(Bill, column) for column in _MERGED_COLUMNS),
+        ).all()
+    }
+
+
+def _is_a_dropped_connection(exc: SQLAlchemyError) -> bool:
+    """Whether the database connection died, as opposed to rejecting the work.
+
+    SQLAlchemy decides this, not a message match: `connection_invalidated` is
+    set when the dialect's `is_disconnect` fires, which for psycopg means the
+    connection is closed or broken. A constraint violation, a bad query or a
+    deadlock are none of those and must keep raising -- retrying them would turn
+    a loud bug into a silent one.
+    """
+    return bool(getattr(exc, "connection_invalidated", False))
+
+
 def ingest_member_bills(
     db: Session,
     api_key: str,
@@ -328,6 +382,8 @@ def ingest_member_bills(
             "bills_mapped_to_a_sector": 0,
             "requests_made": client.requests_made,
             "stopped_early": False,
+            "connection_losses": 0,
+            "members_lost_to_the_database": [],
         }
 
     from src.analysis.sectors import policy_area_sectors
@@ -337,106 +393,127 @@ def ingest_member_bills(
     members_queried = 0
     stopped_early = False
     unknown_to_congress_gov: List[str] = []
+    connection_losses = 0
+    members_lost_to_the_database: List[str] = []
 
-    # Existing sponsorships as their natural key, read once. This was a SELECT
-    # per bill per member -- one network round trip to learn whether a
-    # sponsorship already existed, repeated across every bill a member has ever
-    # sponsored. Congress.gov returns 71 sponsored bills for a typical member.
-    #
-    # A natural key rather than an external id because that is what the table is
-    # unique on, and this must not change what counts as a duplicate. The set is
-    # added to on insert, which also covers the in-batch case: autoflush=False
-    # hides a row added earlier in this loop from a query.
-    known_sponsorships: set[tuple[int, int, bool]] = {
-        (row[0], row[1], bool(row[2]))
-        for row in db.query(
-            BillSponsorship.bill_id, BillSponsorship.member_id, BillSponsorship.is_sponsor
-        ).all()
-    }
-
-    # Every bill already stored, as plain columns rather than entities, read
-    # once. Measured on this ingest: `_upsert_bill` costs three statements per
-    # bill -- a SELECT on the natural key, then the flush -- and the slope is
-    # exactly linear from 10 bills to 100. Congress.gov returns 71 sponsored
-    # bills for a typical member and the roster is several hundred, so that is
-    # of the order of a hundred thousand network round trips to Railway from a
-    # GitHub runner, which is most of what the step spends.
-    #
-    # Nearly all of them buy nothing. The same bill arrives once per member who
-    # touched it, and on a re-run every field is already stored, so the upsert
-    # reads a row and writes back exactly what was there. This skips the call
-    # entirely whenever the payload cannot change the row.
-    #
-    # Columns, not entities, on purpose: `SessionLocal` leaves expire_on_commit
-    # at its default, so entities cached here would be expired by the commit at
-    # the end of each member and re-fetched one at a time on next touch --
-    # turning the cache into the very N+1 it removes.
-    bills_by_key: Dict[Tuple[Any, str, str], Tuple[int, Tuple[Any, ...]]] = {
-        (row[0], row[1], row[2]): (row[3], tuple(row[4:]))
-        for row in db.query(
-            Bill.congress,
-            Bill.bill_type,
-            Bill.number,
-            Bill.id,
-            *(getattr(Bill, column) for column in _MERGED_COLUMNS),
-        ).all()
-    }
+    # Read once rather than per row. Rebuildable on purpose: a rollback undoes
+    # rows these caches say exist, so anything that rolls back has to rebuild
+    # them -- see the connection-loss handler below.
+    known_sponsorships = _stored_sponsorship_keys(db)
+    bills_by_key = _stored_bills_by_key(db)
 
     kinds = [("sponsored-legislation", "sponsoredLegislation", True)]
     if include_cosponsored:
         kinds.append(("cosponsored-legislation", "cosponsoredLegislation", False))
 
+    def _ingest_one_member(member: Member) -> Tuple[int, int]:
+        """One member's legislation, committed. Counts are returned, not added.
+
+        Returned rather than accumulated so a failed attempt contributes nothing:
+        the caller adds them only once the commit has actually happened.
+        """
+        gained_sponsor = 0
+        gained_cosponsor = 0
+        for path, json_key, is_sponsor in kinds:
+            pages = _sponsorship_pages(
+                client, member.bioguide_id, path, json_key, unknown_to_congress_gov
+            )
+            for payload in pages:
+                bill_key = _bill_key(payload)
+                if bill_key is None:
+                    continue
+
+                cached = bills_by_key.get(bill_key)
+                if cached is None:
+                    bill = _upsert_bill(db, payload)
+                    if bill is None:
+                        continue
+                    bill_id = bill.id
+                    bills_by_key[bill_key] = (
+                        bill_id,
+                        tuple(getattr(bill, c) for c in _MERGED_COLUMNS),
+                    )
+                else:
+                    bill_id, stored = cached
+                    merged = _merged_values(payload, stored)
+                    if merged == stored:
+                        # The row already says everything this payload does.
+                        pass
+                    else:
+                        _upsert_bill(db, payload)
+                        bills_by_key[bill_key] = (bill_id, merged)
+
+                sponsorship = (bill_id, member.id, bool(is_sponsor))
+                if sponsorship in known_sponsorships:
+                    continue
+                known_sponsorships.add(sponsorship)
+
+                db.add(BillSponsorship(bill_id=bill_id, member_id=member.id, is_sponsor=is_sponsor))
+                if is_sponsor:
+                    gained_sponsor += 1
+                else:
+                    gained_cosponsor += 1
+        db.commit()
+        return gained_sponsor, gained_cosponsor
+
     try:
         for member in roster:
             members_queried += 1
-            for path, json_key, is_sponsor in kinds:
-                pages = _sponsorship_pages(
-                    client, member.bioguide_id, path, json_key, unknown_to_congress_gov
-                )
-                for payload in pages:
-                    bill_key = _bill_key(payload)
-                    if bill_key is None:
-                        continue
+            for attempt in range(1 + CONNECTION_LOSS_RETRIES):
+                try:
+                    gained_sponsor, gained_cosponsor = _ingest_one_member(member)
+                    sponsorships += gained_sponsor
+                    cosponsorships += gained_cosponsor
+                    break
+                except SQLAlchemyError as exc:
+                    if not _is_a_dropped_connection(exc):
+                        raise
 
-                    cached = bills_by_key.get(bill_key)
-                    if cached is None:
-                        bill = _upsert_bill(db, payload)
-                        if bill is None:
-                            continue
-                        bill_id = bill.id
-                        bills_by_key[bill_key] = (
-                            bill_id,
-                            tuple(getattr(bill, c) for c in _MERGED_COLUMNS),
-                        )
-                    else:
-                        bill_id, stored = cached
-                        merged = _merged_values(payload, stored)
-                        if merged == stored:
-                            # The row already says everything this payload does.
-                            pass
-                        else:
-                            _upsert_bill(db, payload)
-                            bills_by_key[bill_key] = (bill_id, merged)
-
-                    sponsorship = (bill_id, member.id, bool(is_sponsor))
-                    if sponsorship in known_sponsorships:
-                        continue
-                    known_sponsorships.add(sponsorship)
-
-                    db.add(
-                        BillSponsorship(bill_id=bill_id, member_id=member.id, is_sponsor=is_sponsor)
+                    # Measured: the 06:00 cron on 2026-09-14 spent 3h54m in this
+                    # loop and then died on "SSL error: unexpected eof while
+                    # reading" from Railway, losing the rest of the roster. The
+                    # step is resumable -- work is committed per member -- so a
+                    # dropped packet four hours in should cost one member, not
+                    # the remainder of the run.
+                    connection_losses += 1
+                    logger.warning(
+                        "Database connection dropped while ingesting %s (attempt %d): %s",
+                        member.bioguide_id,
+                        attempt + 1,
+                        exc.__class__.__name__,
                     )
-                    if is_sponsor:
-                        sponsorships += 1
-                    else:
-                        cosponsorships += 1
-            db.commit()
+                    db.rollback()
+
+                    # Mandatory, not tidiness. The rollback undid bills this
+                    # attempt created, and `bills_by_key` is still holding their
+                    # ids -- ids no row has any more. Reusing one as a foreign
+                    # key would attach a sponsorship to a bill that does not
+                    # exist. Rebuilding from the committed state is the only
+                    # thing that makes the caches true again.
+                    known_sponsorships = _stored_sponsorship_keys(db)
+                    bills_by_key = _stored_bills_by_key(db)
+            else:
+                # Every attempt lost the connection. Said out loud and counted:
+                # this member's legislation is missing from this run, and a
+                # silent gap is indistinguishable from a member who sponsored
+                # nothing.
+                members_lost_to_the_database.append(member.bioguide_id)
 
     except RequestBudgetExhausted as exc:
         logger.warning("Congress.gov ingest stopped early: %s", exc)
         stopped_early = True
 
-    db.commit()
+    try:
+        db.commit()
+    except SQLAlchemyError as exc:
+        # Every member was already committed in the loop, so there is nothing
+        # left for this to save. Losing the connection here must not throw away
+        # a run whose work is on disk.
+        if not _is_a_dropped_connection(exc):
+            raise
+        connection_losses += 1
+        logger.warning("Database connection dropped on the final commit; work is already saved")
+        db.rollback()
 
     # Report the ceiling rather than let it pass silently: most bills cannot be
     # mapped to a sector, and a detector that finds nothing should be readable
@@ -461,6 +538,15 @@ def ingest_member_bills(
         client.requests_made,
     )
 
+    if connection_losses:
+        logger.warning(
+            "The database connection dropped %d time(s) during this ingest; "
+            "%d member(s) were lost to it (%s)",
+            connection_losses,
+            len(members_lost_to_the_database),
+            ", ".join(members_lost_to_the_database[:5]) or "none",
+        )
+
     if unknown_to_congress_gov:
         # Counted and said out loud. A silent skip would make a roster drifting
         # away from Congress.gov's ids look exactly like Congress passing no
@@ -480,6 +566,8 @@ def ingest_member_bills(
         "bills_mapped_to_a_sector": mapped,
         "requests_made": client.requests_made,
         "stopped_early": stopped_early,
+        "connection_losses": connection_losses,
+        "members_lost_to_the_database": members_lost_to_the_database,
     }
 
 

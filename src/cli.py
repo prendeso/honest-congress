@@ -862,18 +862,40 @@ def cmd_purge_non_awards(args):
     the ones already written: `persist_anomalies` only ever inserts, so a
     finding published once is served until something deletes it.
 
-    This does not match on the text of the description. It re-derives the award
-    date each finding claims -- the trade date plus the `computed_value` days
-    the detector recorded -- and keeps the finding only if some row that *is* an
-    award, under today's criteria, sits on that date for that ticker. A finding
-    left standing by a positive award on the same day as a deobligation is
-    correct and stays. That makes this a general repair for any later change to
-    what counts as an award, not a one-off for this bug.
+    What it deletes is defined as "a finding `detect_contract_front_runs` would
+    not produce today", and it tests that by applying the detector's own
+    condition: some row that *is* an award, under today's criteria, for this
+    ticker, with the trade falling inside the window the finding recorded. Not
+    by matching the description text, which would be reading this codebase's
+    own formatting back to itself and would break the day that string changes.
 
-    A finding whose transaction has since been deleted cannot be evaluated
+    Deliberately not by reconstructing the award date as trade date plus the
+    `computed_value` days either, tempting as that is. It is exact only while
+    every date in both tables is midnight. Today they are -- every parser and
+    every feed builds them with `strptime` -- but one source that ever carries
+    a time of day truncates the subtraction, moves the reconstructed date by a
+    day, and this deletes a true finding attached to a named person. Deletions
+    are the one thing re-running cannot undo, so the test that decides them has
+    to be the detector's own, not an inference about it.
+
+    The cost of that choice is narrow and the right way round: where a real
+    award and a deobligation both sit inside one trade's window, the finding
+    stays, with the deobligation's day count possibly still in its title. That
+    trade genuinely does precede a real award, so keeping it is correct; only
+    the wording is stale.
+
+    Because the condition is the detector's rather than this bug's, the same
+    command repairs the table after any later change to what counts as an award.
+
+    A finding whose transaction row has since been deleted cannot be judged
     either way, so it is counted and left alone rather than guessed at.
     """
-    from src.analysis.tier2_detectors import award_action_criteria
+    from collections import defaultdict
+
+    from src.analysis.tier2_detectors import (
+        DEFAULT_CONTRACT_WINDOW_DAYS,
+        award_action_criteria,
+    )
     from src.db.models import Anomaly, GovernmentContract, Transaction
 
     with get_db() as db:
@@ -882,12 +904,11 @@ def cmd_purge_non_awards(args):
             print("No contract front-run findings are stored; nothing to check.")
             return
 
-        supported = {
-            ((ticker or "").strip().upper(), awarded.date())
-            for ticker, awarded in db.query(
-                GovernmentContract.ticker, GovernmentContract.awarded_date
-            ).filter(*award_action_criteria())
-        }
+        awards: dict[str, list] = defaultdict(list)
+        for ticker, awarded in db.query(
+            GovernmentContract.ticker, GovernmentContract.awarded_date
+        ).filter(*award_action_criteria()):
+            awards[(ticker or "").strip().upper()].append(awarded.date())
 
         trades = {
             row.id: row
@@ -900,11 +921,22 @@ def cmd_purge_non_awards(args):
         unevaluable = 0
         for finding in findings:
             trade = trades.get(finding.transaction_id)
-            if trade is None or trade.transaction_date is None or finding.computed_value is None:
+            if trade is None or trade.transaction_date is None:
                 unevaluable += 1
                 continue
-            claimed = trade.transaction_date.date() + timedelta(days=int(finding.computed_value))
-            if ((trade.ticker or "").strip().upper(), claimed) not in supported:
+
+            # The window the finding itself recorded, so a finding written under
+            # a different setting is judged by the rule it was produced under.
+            window = timedelta(
+                days=int(finding.threshold_value)
+                if finding.threshold_value is not None
+                else DEFAULT_CONTRACT_WINDOW_DAYS
+            )
+            traded = trade.transaction_date.date()
+            if not any(
+                awarded - window <= traded <= awarded
+                for awarded in awards.get((trade.ticker or "").strip().upper(), ())
+            ):
                 unsupported.append(finding)
 
         print(f"Contract front-run findings stored: {len(findings)}")

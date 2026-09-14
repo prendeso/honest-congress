@@ -1042,3 +1042,46 @@ class TestADroppedDatabaseConnectionDoesNotEndTheRun:
         with patch.object(db_session, "commit", side_effect=broken):
             with pytest.raises(OperationalError):
                 ingest_member_bills(db_session, API_KEY, client=client, include_cosponsored=False)
+
+
+class TestTheLoopSaysWhereItHasGotTo:
+    """Two production runs spent 3h54m and 3h29m here without printing a line.
+
+    From outside, "still working" and "hung" looked identical -- which is exactly
+    the state you are in when you have to decide whether to kill a run that has
+    been going for four hours. One of those two did die, on a dropped
+    connection, and the other was still going when its job timed out; neither
+    was distinguishable from a hang while it was happening.
+    """
+
+    def _sponsored(self, sponsored: dict, n: int) -> dict:
+        one = sponsored["sponsoredLegislation"][0]
+        return {
+            "sponsoredLegislation": [dict(one, number=str(1000 + i)) for i in range(n)],
+            "pagination": {"count": n},
+        }
+
+    def test_progress_is_logged_as_the_roster_is_worked_through(
+        self, db_session, sponsored, caplog
+    ):
+        from src.ingestion.bills import PROGRESS_EVERY_MEMBERS
+
+        for i in range(PROGRESS_EVERY_MEMBERS + 1):
+            _member(db_session, bioguide=f"PR{i:06d}")
+
+        client = _client([self._sponsored(sponsored, 1)] * (PROGRESS_EVERY_MEMBERS + 1))
+        with caplog.at_level("INFO", logger="src.ingestion.bills"):
+            ingest_member_bills(db_session, API_KEY, client=client, include_cosponsored=False)
+
+        progress = [r for r in caplog.records if r.msg.startswith("Bills: %d/%d members")]
+        assert progress, "the member loop reported nothing while it ran"
+
+    def test_a_short_roster_does_not_log_progress_at_all(self, db_session, sponsored, caplog):
+        """Nothing to report on a run that is over before anyone would look."""
+        _member(db_session, bioguide="PS000001")
+
+        client = _client([self._sponsored(sponsored, 1)])
+        with caplog.at_level("INFO", logger="src.ingestion.bills"):
+            ingest_member_bills(db_session, API_KEY, client=client, include_cosponsored=False)
+
+        assert not [r for r in caplog.records if r.msg.startswith("Bills: %d/%d members")]

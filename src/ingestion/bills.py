@@ -39,6 +39,7 @@ finding; see :mod:`src.analysis.legislation`.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from typing import Any, Dict, Iterator, List, Tuple
 
@@ -63,6 +64,12 @@ DEFAULT_REQUESTS_PER_HOUR = 18000
 
 # The API caps `limit` at 250.
 PAGE_SIZE = 250
+
+# How often the member loop says where it has got to. Measured: this step ran
+# for 3h54m in one production run and 3h29m in another without printing a single
+# line, so "still working" and "hung" looked identical from the outside -- which
+# is the state you are in precisely when you need to decide whether to kill it.
+PROGRESS_EVERY_MEMBERS = 50
 
 # How many times one member is retried after the database connection drops.
 # One is the useful number: these are momentary, and a connection that fails
@@ -456,9 +463,25 @@ def ingest_member_bills(
         db.commit()
         return gained_sponsor, gained_cosponsor
 
+    started_at = time.monotonic()
+
     try:
         for member in roster:
             members_queried += 1
+            if members_queried % PROGRESS_EVERY_MEMBERS == 0:
+                elapsed = time.monotonic() - started_at
+                rate = members_queried / elapsed if elapsed else 0.0
+                remaining = (len(roster) - members_queried) / rate if rate else 0.0
+                logger.info(
+                    "Bills: %d/%d members, %d sponsorships, %d requests, "
+                    "%.0f min elapsed, ~%.0f min left",
+                    members_queried,
+                    len(roster),
+                    sponsorships + cosponsorships,
+                    client.requests_made,
+                    elapsed / 60,
+                    remaining / 60,
+                )
             for attempt in range(1 + CONNECTION_LOSS_RETRIES):
                 try:
                     gained_sponsor, gained_cosponsor = _ingest_one_member(member)

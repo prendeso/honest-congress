@@ -63,3 +63,33 @@ def test_a_run_in_progress_is_never_cancelled(name):
     """A nightly ingest halfway through must not be killed by a manual
     dispatch. Queueing is the point; cancelling would lose the work."""
     assert _workflow(name)["concurrency"].get("cancel-in-progress") is False
+
+
+def _step_commands(name: str) -> list[str]:
+    """Every `run:` line in the workflow's single job, in order."""
+    job = next(iter(_workflow(name)["jobs"].values()))
+    return [step.get("run", "") for step in job["steps"]]
+
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_the_purge_runs_before_the_analysis(name):
+    """Ordering that nothing else enforces, on a finding attached to a person.
+
+    `purge-non-awards` deletes contract front-run findings that no award in the
+    table supports -- the ones published while a deobligation counted as an
+    award. `analyze` then re-derives whatever is still justified. Run the other
+    way round and the purge deletes findings the analysis has just legitimately
+    rewritten, leaving the site short until the next run; drop the purge and the
+    bad findings are served indefinitely, because `persist_anomalies` only ever
+    inserts.
+    """
+    commands = _step_commands(name)
+    purge = [i for i, c in enumerate(commands) if "purge-non-awards" in c]
+    analyze = [i for i, c in enumerate(commands) if "cli analyze" in c]
+
+    assert purge, f"{name} never runs `cli purge-non-awards`"
+    assert analyze, f"{name} never runs `cli analyze`"
+    assert max(purge) < min(analyze), (
+        f"{name} purges contract findings after analysing, which deletes the "
+        f"findings that pass just produced"
+    )

@@ -261,6 +261,17 @@ jobs:
           CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
         run: python -m src.cli ingest-bills --sponsored-only
 
+      # Deobligations used to count as awards, so contract front-run findings
+      # were published describing a member as buying before a company "was
+      # awarded a federal contract ($-1,882,437,667)". `award_action_criteria`
+      # stops new ones; `persist_anomalies` only ever inserts, so this is what
+      # removes the ones already written. Runs before analyze so the same pass
+      # that clears them re-derives whatever is still justified.
+      - name: Drop contract findings no award supports
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli purge-non-awards
+
       - name: Run detectors, FDR correction and percentile ranks
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}

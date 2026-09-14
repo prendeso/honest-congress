@@ -45,6 +45,14 @@ members have actually traded and asks each source about those, rather than
 walking the source's own universe. Asking USASpending for every federal award
 would be millions of rows, almost none of them tradeable.
 
+This paragraph described two of the three for a while. USASpending instead took
+the largest three hundred award actions in the window and kept whatever resolved
+to a ticker, which sounds like a reasonable sample and is not one: measured
+against the live API for 2023-2026 that slice bottoms out at $733,882,415 and
+holds fourteen listed companies. Microsoft's largest federal award action in the
+same window is $56.6m, so Microsoft — and every company like it — could not
+produce a finding at all. It now asks per company like the other two.
+
 `ProPublicaClient` in `src/ingestion/__init__.py` is a backwards-compatibility
 alias for `CongressGovClient`, not a ProPublica integration. ProPublica's
 Congress API was deprecated.

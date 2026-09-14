@@ -423,20 +423,36 @@ def cmd_ingest_contracts(args):
     from src.ingestion.usaspending import ingest_government_contracts
 
     print(f"Ingesting federal contract awards ({args.start} to {args.end or 'today'})...")
+    print("Asking USASpending about the companies members have actually traded.")
 
     with get_db() as db:
         result = ingest_government_contracts(
-            db, start_date=args.start, end_date=args.end, pages=args.pages
+            db, start_date=args.start, end_date=args.end, pages=args.pages_per_company
         )
 
+    if not result["tickers_queried"] and not result["tickers_without_a_registered_name"]:
+        print(
+            "\nNo transaction carries a ticker, so there was nothing to ask about. "
+            "Run `ingest` and `parse` first."
+        )
+        return
+
     print("\nContract ingestion complete:")
+    print(f"  Companies asked about: {result['tickers_queried']}")
     print(f"  Award actions fetched: {result['fetched']}")
     print(f"  Imported: {result['imported']}")
     print(f"  Already present: {result['duplicates']}")
     print(
-        f"  Recipients not publicly traded: {result['unresolved_recipients']}"
-        "  - expected; labs, universities and private firms have no ticker to trade"
+        f"  Tickers not in the SEC register: {result['tickers_without_a_registered_name']}"
+        "  - foreign listings, funds, and misread symbols"
     )
+    # Not folded into the line above. These are awards USASpending matched to
+    # the company through its own recipient hierarchy, which the SEC register
+    # cannot confirm -- a known gap in coverage, and the numbers say how big.
+    print(f"  Rejected as a different company: {result['rejected_wrong_company']}")
+    top = sorted(result["rejected_names"].items(), key=lambda kv: -kv[1])[:10]
+    for name, count in top:
+        print(f"      {count:>5}  {name}")
 
 
 def cmd_ingest_donations(args):
@@ -983,10 +999,13 @@ def main():
     )
     contracts_parser.add_argument("--end", default=None, help="Latest action date (default: today)")
     contracts_parser.add_argument(
-        "--pages",
+        "--pages-per-company",
         type=int,
-        default=3,
-        help="Pages of 100 award actions, largest first (default: 3)",
+        default=1,
+        help=(
+            "Pages of 100 award actions per traded company, largest first "
+            "(default: 1). One request per company; most return nothing."
+        ),
     )
     contracts_parser.set_defaults(func=cmd_ingest_contracts)
 

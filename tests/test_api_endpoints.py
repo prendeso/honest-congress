@@ -569,6 +569,44 @@ class TestFdrFiltering:
         assert by_title["fdr-no-model"]["has_null_model"] is False
         assert by_title["fdr-no-model"]["q_value"] is None
 
+    def test_a_tested_category_says_so_even_when_this_finding_has_no_q(self, client, seeded_db):
+        """The case the assertions above never reached, and the one that was wrong.
+
+        `has_null_model` was computed as `q_value is not None`, which is the
+        inference the field exists to spare a consumer. It is only ever right
+        when a q-value is present. For a detector that HAS a null model but
+        produced no value for this finding -- too short a trading span, too few
+        eligible trades -- it reported false, and the page renders that as "no
+        null model exists for this category".
+
+        Measured on the live site: `/api/anomalies/types` said
+        `contract_front_run` has a null model while all ten findings of that type
+        said it does not. Two endpoints contradicting each other about one
+        detector, on the single distinction `src/analysis/catalog.py` exists to
+        keep straight.
+        """
+        self._anomaly(seeded_db, "contract_front_run", "tested-but-no-value", None)
+
+        by_title = {a["title"]: a for a in client.get("/api/anomalies/").json()["anomalies"]}
+        finding = by_title["tested-but-no-value"]
+        assert finding["q_value"] is None
+        assert finding["has_null_model"] is True
+
+    def test_the_two_endpoints_agree_about_every_detector(self, client, seeded_db):
+        """One declaration, read by both, so they cannot drift apart again."""
+        self._anomaly(seeded_db, "contract_front_run", "agree-tested", None)
+        self._anomaly(seeded_db, "large_trade", "agree-magnitude", None)
+
+        by_type = {
+            t["anomaly_type"]: t["has_null_model"]
+            for t in client.get("/api/anomalies/types").json()
+        }
+        for finding in client.get("/api/anomalies/").json()["anomalies"]:
+            assert finding["has_null_model"] is by_type[finding["anomaly_type"]], (
+                f"{finding['anomaly_type']}: the list endpoint and /types disagree "
+                f"about whether this detector is tested at all"
+            )
+
 
 class TestParseConfidenceFiltering:
     """`parsed` says the parser ran. The score says whether it worked."""

@@ -215,6 +215,24 @@ DETECTORS: List[Detector] = [
 ]
 
 
+def type_has_null_model(anomaly_type: str) -> bool:
+    """Whether a q-value can exist for this kind of finding at all.
+
+    A property of the detector, not of any one finding. Six detectors ask about
+    a coincidence in timing and have a null to shuffle; the other ten measure a
+    magnitude and have none.
+
+    The distinction matters because a missing q-value means different things on
+    either side of it, and `src.analysis.significance` assigns NULL in both
+    cases: "a magnitude rule with no null to shuffle, or testable in principle
+    but not in this run -- too short a span, no eligible trades". Reading the
+    detector off the finding's own q-value, which is what the API used to do,
+    collapses the two and reports the second as the first -- telling a reader
+    that no test exists for a category that is tested.
+    """
+    return anomaly_type not in NO_NULL_MODEL
+
+
 def live_detectors() -> List[Detector]:
     """Every detector whose findings can actually be served.
 
@@ -239,7 +257,7 @@ def as_dicts() -> List[Dict[str, object]]:
             # that has a null model means the finding did not survive; null q
             # on one that does not means no test was ever run. Conflating those
             # is the single easiest way to misread this data.
-            "has_null_model": d.anomaly_type not in NO_NULL_MODEL,
+            "has_null_model": type_has_null_model(d.anomaly_type),
         }
         for d in live_detectors()
     ]

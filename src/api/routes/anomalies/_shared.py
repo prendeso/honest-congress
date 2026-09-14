@@ -38,12 +38,23 @@ class AnomalyResponse(BaseModel):
     # Null when the population was too small to rank against.
     percentile_rank: float | None = None
     # How often chance alone produces a coincidence this strong, and the same
-    # after correcting for every test in the run. Null means the detector has no
-    # null model -- a magnitude rule, not a timing one -- never that the finding
-    # passed one. `has_null_model` says which, so a consumer does not have to
-    # infer it from a missing field.
+    # after correcting for every test in the run.
+    #
+    # Null means UNTESTED, and never that the finding passed. It covers two
+    # different situations, in `src.analysis.significance`'s own words: "a
+    # magnitude rule with no null to shuffle, or testable in principle but not
+    # in this run -- too short a span, no eligible trades."
     p_value: float | None = None
     q_value: float | None = None
+    # Which of those two a null q_value is: a property of the DETECTOR, not of
+    # this finding. It is served from the same declaration `/api/anomalies/types`
+    # reads, because the two contradicting each other about the same detector is
+    # exactly what happened when this was inferred from `q_value is not None` --
+    # `/types` said contract_front_run was tested while every finding of that
+    # type said it was not.
+    #
+    # A finding that was tested and FAILED does not appear here as a null. It
+    # carries a q_value above alpha, and the list endpoint omits it by default.
     has_null_model: bool = False
 
     model_config = ConfigDict(from_attributes=True)

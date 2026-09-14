@@ -2,6 +2,7 @@
 
 import logging
 import time
+import unicodedata
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +33,17 @@ DISCLOSURES_DIR = DATA_DIR / "disclosures"
 # Name suffixes eFD carries and the roster does not. "McConnell, Jr." has to
 # match "McConnell".
 _NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
+
+
+def fold_name(value: str) -> str:
+    """Casefolded and stripped of diacritics, for comparing names across sources.
+
+    eFD shouts names in ASCII -- "BEN RAY" "LUJAN" -- while the roster carries
+    "Ben Ray" "Lujan\u0301". Comparing them directly drops every filing by the one
+    senator whose name carries an accent.
+    """
+    decomposed = unicodedata.normalize("NFKD", value or "")
+    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold().strip()
 
 
 def normalize_surname(last_name: str) -> str:
@@ -140,6 +152,10 @@ class IngestionOrchestrator:
         # Set when eFD could not be reached at all, so a run can distinguish
         # "the Senate filed nothing" from "we never got to ask".
         self.senate_unavailable = False
+
+        # Senator lookup tables, built on first use in sync_senate_disclosures.
+        self._senate_current: Dict[str, List[Member]] | None = None
+        self._senate_all: Dict[str, List[Member]] | None = None
 
         # PDF Parsers
         self.disclosure_parser = DisclosureParser()
@@ -480,6 +496,10 @@ class IngestionOrchestrator:
         unmatched = 0
         ambiguous = 0
 
+        # Rebuilt per sync so a roster updated earlier in the same run is seen.
+        self._senate_current = None
+        self._senate_all = None
+
         seen: set[str] = set()
         for d in disclosures:
             try:
@@ -499,46 +519,22 @@ class IngestionOrchestrator:
                     )
                     continue
 
-                # Surname first, first name only to disambiguate.
+                # Matched against an index of SITTING senators, built once
+                # before the loop.
                 #
-                # Requiring both to match is what made this drop filings. eFD
-                # gives the legal name -- "A. Mitchell McConnell, Jr." -- and the
-                # roster gives the known one, "Mitch McConnell". A prefix match
-                # on the first name then fails outright: `first_name ILIKE
-                # 'David H%'` cannot match a roster entry of "David", because
-                # the pattern is applied to the ROSTER value, not to eFD's.
+                # The roster holds every member in history, so a surname is not
+                # remotely unique within a chamber: "Smith" matches 19 senators,
+                # "Scott" 7, "King" 6. Measured against eFD's own filers for
+                # 2024-2025, 33 of 105 surnames matched more than one senator --
+                # 156 filings that the ambiguity guard then refused, correctly
+                # and uselessly.
                 #
-                # A surname is near-unique within one chamber, so match on it
-                # and fall back to the first name only when it is not. The
-                # ambiguity check below is unchanged: two senators sharing a
-                # surname still refuse to guess.
-                surname = normalize_surname(last_name)
-                matches = (
-                    db.query(Member)
-                    .filter(
-                        Member.last_name.ilike(surname),
-                        Member.chamber == Chamber.SENATE,
-                    )
-                    .limit(5)
-                    .all()
-                )
-
-                if len(matches) > 1 and first_name:
-                    # Narrow on whatever the two names do share -- usually the
-                    # first initial, since "A. Mitchell" and "Mitch" share
-                    # nothing else.
-                    initial = first_name.strip().strip(".")[:1].lower()
-                    narrowed = [
-                        m
-                        for m in matches
-                        if (m.first_name or "")
-                        .strip()
-                        .lower()
-                        .startswith(first_name.split()[0].lower())
-                        or (m.first_name or "").strip()[:1].lower() == initial
-                    ]
-                    if len(narrowed) == 1:
-                        matches = narrowed
+                # A filing from 2024 is from a senator who was sitting in 2024.
+                # Restricting to in-office first resolves 102 of those 105 to
+                # exactly one person, covering 462 of 490 filings; the two
+                # Scotts are then separated by first name like anyone else.
+                # Senators who left mid-period fall back to the full roster.
+                matches = self._match_senator(db, first_name, last_name)
 
                 if not matches:
                     unmatched += 1
@@ -585,6 +581,60 @@ class IngestionOrchestrator:
             f"({unmatched} unmatched, {ambiguous} ambiguous, skipped)"
         )
         return synced
+
+    def _senate_index(self, db: Session, in_office: bool) -> Dict[str, List[Member]]:
+        """Sitting senators (or all of them) indexed by folded surname.
+
+        Loaded once per sync rather than queried per filing: there are about a
+        hundred sitting senators against hundreds of filings, so this replaces a
+        query per row with one query, and lets the comparison fold case,
+        diacritics and suffixes in Python where SQL would need an extension.
+        """
+        query = db.query(Member).filter(Member.chamber == Chamber.SENATE)
+        if in_office:
+            query = query.filter(Member.in_office.is_(True))
+
+        index: Dict[str, List[Member]] = {}
+        for member in query.all():
+            index.setdefault(fold_name(normalize_surname(member.last_name or "")), []).append(
+                member
+            )
+        return index
+
+    def _match_senator(self, db: Session, first_name: str, last_name: str) -> List[Member]:
+        """The senator who filed this, or every candidate if it is not decidable.
+
+        Returns a list so the caller's existing "refuse to guess when it is
+        ambiguous" branch is unchanged.
+        """
+        if self._senate_current is None:
+            self._senate_current = self._senate_index(db, in_office=True)
+            self._senate_all = self._senate_index(db, in_office=False)
+
+        surname = fold_name(normalize_surname(last_name))
+
+        # Sitting senators first; everyone ever, only if that finds nobody.
+        candidates = self._senate_current.get(surname) or (self._senate_all or {}).get(surname, [])
+        if len(candidates) <= 1:
+            return list(candidates)
+
+        if not first_name:
+            return list(candidates)
+
+        # Narrow on whatever the two spellings share. "David H" against "Dave"
+        # shares only the initial; "A. Mitchell" against "Mitch" shares nothing,
+        # which is why the in-office restriction above does the real work.
+        folded_first = fold_name(first_name)
+        leading = folded_first.split()[0] if folded_first.split() else ""
+        initial = folded_first.strip(".")[:1]
+
+        narrowed = [
+            m for m in candidates if leading and fold_name(m.first_name or "").startswith(leading)
+        ]
+        if len(narrowed) != 1 and initial:
+            narrowed = [m for m in candidates if fold_name(m.first_name or "")[:1] == initial]
+
+        return narrowed if len(narrowed) == 1 else list(candidates)
 
     def download_disclosure_pdf(self, disclosure: Disclosure, force: bool = False) -> Path | None:
         """

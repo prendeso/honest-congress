@@ -657,7 +657,11 @@ def cmd_ingest_lobbying(args):
 
     with get_db() as db:
         result = ingest_lobbying_disclosures(
-            db, filing_year=args.year, api_key=api_key, tickers=args.tickers
+            db,
+            filing_year=args.year,
+            api_key=api_key,
+            tickers=args.tickers,
+            max_requests=args.max_requests,
         )
 
     print("\nLobbying ingestion complete:")
@@ -670,6 +674,8 @@ def cmd_ingest_lobbying(args):
         "  - the API matches client names by substring"
     )
     print(f"  LDA requests used: {result['requests_made']}")
+    if result.get("stopped_early"):
+        print("\n  Stopped at the request cap. Rerun to continue.")
     if result.get("connection_losses"):
         lost = result["companies_lost_to_the_database"]
         print(
@@ -1282,6 +1288,15 @@ def main():
         nargs="+",
         default=None,
         help="Limit to these tickers (default: every ticker members have traded)",
+    )
+    lobbying_parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help=(
+            "Stop after this many LDA requests. The run so far is kept -- each "
+            "company is committed as it is done -- and the next run resumes."
+        ),
     )
     lobbying_parser.set_defaults(func=cmd_ingest_lobbying)
 

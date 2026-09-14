@@ -462,3 +462,66 @@ class TestADroppedDatabaseConnectionDoesNotEndTheRun:
                 ingest_lobbying_disclosures(
                     db_session, 2024, tickers=["NOC"], resolver=resolver, client=client
                 )
+
+
+class TestTheRequestBudgetStopsTheSweep:
+    """Lobbying was one of two feeds with no cap at all.
+
+    `--max-requests` exists on donations, industries and bills. It did not exist
+    here or on contracts, so 83 minutes of the pipeline had no bound -- the
+    lobbying sweep measured 22 minutes in production and the contract sweep 61.
+
+    `LDAClient` already extended the client that implements the budget, and
+    `_request` already raises `RequestBudgetExhausted`; the argument simply was
+    not forwarded, and nothing caught the exception. So a cap would not have
+    stopped the run cleanly, it would have escaped as a traceback.
+
+    Stopping must keep what is already done: the sweep commits per company, so
+    a capped run is a partial one the next run resumes -- the same contract
+    `ingest-bills` and `ingest-donations` already offer.
+    """
+
+    def test_the_cap_stops_the_run_rather_than_escaping(
+        self, db_session, resolver, northrop, universal
+    ):
+        client = _client([northrop, universal], max_requests=1)
+        result = ingest_lobbying_disclosures(
+            db_session,
+            2024,
+            tickers=["NOC", "UVV"],
+            resolver=resolver,
+            client=client,
+        )
+
+        assert result["stopped_early"] is True
+        assert result["requests_made"] <= 1
+
+    def test_what_was_ingested_before_the_cap_is_kept(
+        self, db_session, resolver, northrop, universal
+    ):
+        """A capped run is a partial run, not a lost one."""
+        client = _client([northrop, universal], max_requests=1)
+        result = ingest_lobbying_disclosures(
+            db_session,
+            2024,
+            tickers=["NOC", "UVV"],
+            resolver=resolver,
+            client=client,
+        )
+
+        stored = db_session.query(LobbyingDisclosure).count()
+        assert stored == result["imported"]
+        assert stored > 0, "the first company's filings should survive the cap"
+
+    def test_an_uncapped_run_still_reports_not_stopped(self, db_session, resolver, northrop):
+        client = _client([northrop])
+        result = ingest_lobbying_disclosures(
+            db_session, 2024, tickers=["NOC"], resolver=resolver, client=client
+        )
+
+        assert result["stopped_early"] is False
+
+    def test_the_client_forwards_the_cap_to_the_shared_budget(self):
+        """The argument existed on the base class the whole time; it was not passed."""
+        client = LDAClient("key", session=MagicMock(), max_requests=7)
+        assert client.max_requests == 7

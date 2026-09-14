@@ -55,6 +55,7 @@ from src.ingestion._helpers import traded_tickers
 from src.ingestion.rate_limit import (
     DEFAULT_BACKOFF_SECONDS,
     MINUTE,
+    RequestBudgetExhausted,
     ThrottledClient,
 )
 from src.ingestion.sec_tickers import TickerResolver
@@ -93,6 +94,7 @@ class LDAClient(ThrottledClient):
         *,
         session: requests.Session | None = None,
         requests_per_minute: int | None = None,
+        max_requests: int | None = None,
         sleeper: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         backoff_seconds: tuple[int, ...] = DEFAULT_BACKOFF_SECONDS,
@@ -108,6 +110,7 @@ class LDAClient(ThrottledClient):
             window_seconds=MINUTE,
             session=session,
             timeout=REQUEST_TIMEOUT,
+            max_requests=max_requests,
             sleeper=sleeper,
             clock=clock,
             backoff_seconds=backoff_seconds,
@@ -204,9 +207,10 @@ def ingest_lobbying_disclosures(
     tickers: List[str] | None = None,
     resolver: TickerResolver | None = None,
     client: LDAClient | None = None,
+    max_requests: int | None = None,
 ) -> Dict[str, Any]:
     """Ingest lobbying filings for the companies members have traded."""
-    client = client or LDAClient(api_key)
+    client = client or LDAClient(api_key, max_requests=max_requests)
     resolver = resolver or TickerResolver()
 
     universe = sorted(t.upper() for t in tickers) if tickers else sorted(traded_tickers(db))
@@ -224,11 +228,13 @@ def ingest_lobbying_disclosures(
             "requests_made": client.requests_made,
             "connection_losses": 0,
             "companies_lost_to_the_database": [],
+            "stopped_early": False,
         }
 
     imported = 0
     duplicates = 0
     connection_losses = 0
+    stopped_early = False
     companies_lost_to_the_database: List[str] = []
     rejected = 0
     unnamed = 0
@@ -339,7 +345,17 @@ def ingest_lobbying_disclosures(
         queried += 1
         # Materialised rather than streamed, so a retry after a dropped
         # connection replays from memory instead of paging the LDA again.
-        filings = list(client.filings(company, filing_year))
+        #
+        # This is also where a spent request budget surfaces, since paging is
+        # what spends it. Everything committed so far stays: the loop commits
+        # per company, so stopping here is a partial run the next one resumes,
+        # not a lost one.
+        try:
+            filings = list(client.filings(company, filing_year))
+        except RequestBudgetExhausted as exc:
+            logger.warning("Senate LDA ingest stopped early: %s", exc)
+            stopped_early = True
+            break
 
         # Committed per company rather than once at the end: the old shape held
         # one transaction open across the whole sweep, so a drop anywhere in it
@@ -383,4 +399,5 @@ def ingest_lobbying_disclosures(
         "requests_made": client.requests_made,
         "connection_losses": connection_losses,
         "companies_lost_to_the_database": companies_lost_to_the_database,
+        "stopped_early": stopped_early,
     }

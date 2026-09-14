@@ -285,6 +285,34 @@ def test_the_window_comes_from_the_finding_not_from_todays_default(db_session, r
     assert _stored(db_session) == 0
 
 
+def test_an_empty_award_table_deletes_nothing(db_session, run_purge):
+    """A failed contract feed must not wipe every finding on the site.
+
+    The USASpending step carries `continue-on-error: true`, and rebuild run 12's
+    contract ingest did fail inside an otherwise-complete run. The migration that
+    re-keyed contract rows also empties the table before the re-ingest refills
+    it. Judged only on "no award supports this", every contract finding is
+    unsupported at that moment -- and each one names a member.
+
+    An empty source table is "no data", never "nothing to find". That is the
+    same call `detectors_without_source_data` already makes.
+
+    The guard is on the table being empty, not on the set that survives
+    `award_action_criteria`: a table holding rows none of which are awards is
+    real data saying "no awards here", and a finding it cannot support should
+    still go. `test_a_finding_whose_award_was_a_deobligation_is_deleted` is
+    exactly that case and must keep passing.
+    """
+    member = _member(db_session, bioguide="E000001")
+    txn = _trade(db_session, member, "UNH")
+    _finding(db_session, member, txn)
+    db_session.commit()
+    assert db_session.query(GovernmentContract).count() == 0
+
+    run_purge()
+    assert _stored(db_session) == 1
+
+
 def test_other_anomaly_types_are_never_touched(db_session, run_purge):
     """The purge reasons about awards, so it has nothing to say about anything else."""
     member = _member(db_session, bioguide="L000001")

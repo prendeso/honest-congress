@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Collection, Dict, List
 
 from sqlalchemy.orm import Session
 
@@ -52,6 +52,67 @@ DEFAULT_LOBBYING_WINDOW_DAYS = 30
 DEFAULT_CONTRACT_WINDOW_DAYS = 30
 
 
+def _trades_by_ticker(
+    db: Session,
+    tickers: Collection[str],
+    *,
+    purchases_only: bool = False,
+) -> Dict[str, List[Any]]:
+    """Every disclosed trade in these tickers, grouped by ticker, in ONE query.
+
+    All three detectors here walk a table of trigger events -- donations,
+    lobbying filings, contract awards -- and ask, for each one, "what was traded
+    in this ticker near this date". Each asked the database, once per trigger
+    row. That is an N+1, and the N is not small or static: lobbying alone holds
+    4,920 rows, and the contract feed went from roughly 200 to roughly 10,000
+    when it stopped taking a global top-300 slice. Every one of those iterations
+    is a network round trip, because `analyze` runs on a GitHub runner against a
+    hosted database.
+
+    The date arithmetic never needed the database. Only the ticker does, so the
+    ticker lookup moves out of the loop and the windows are matched in Python.
+
+    Columns rather than entities: the loops read `id`, `transaction_date` and
+    the member behind the filing, nothing else. Selecting those four keeps the
+    result a list of lightweight rows instead of hydrating tens of thousands of
+    ORM objects that are then read once.
+
+    Ordered by transaction id so the output is deterministic. It was not before
+    -- neither this query nor the trigger-table scan carried an ORDER BY -- and
+    the order is load-bearing in one specific way: several trigger rows can hit
+    the same trade, `persist_anomalies` keeps one finding per
+    (member, type, transaction), and which description that finding carries was
+    therefore whatever the database happened to return first.
+    """
+    wanted = {t for t in tickers if t}
+    grouped: Dict[str, List[Any]] = {}
+    if not wanted:
+        return grouped
+
+    query = (
+        db.query(
+            Transaction.id.label("id"),
+            Transaction.ticker.label("ticker"),
+            Transaction.transaction_date.label("transaction_date"),
+            Disclosure.member_id.label("member_id"),
+        )
+        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
+        .filter(
+            Transaction.ticker.in_(wanted),
+            # The per-row queries compared transaction_date with >= and <=,
+            # which drops NULLs in SQL. Doing the comparison in Python would
+            # raise on them instead, so they are excluded here as well.
+            Transaction.transaction_date.isnot(None),
+        )
+    )
+    if purchases_only:
+        query = query.filter(Transaction.transaction_type == TransactionType.PURCHASE)
+
+    for row in query.order_by(Transaction.id).all():
+        grouped.setdefault(row.ticker, []).append(row)
+    return grouped
+
+
 def detect_donor_conflicts(
     db: Session, window_days: int = DEFAULT_DONOR_WINDOW_DAYS
 ) -> List[Dict[str, Any]]:
@@ -72,25 +133,25 @@ def detect_donor_conflicts(
         db.query(CampaignDonation)
         .filter(CampaignDonation.ticker.isnot(None))
         .filter(CampaignDonation.donation_date.isnot(None))
+        .order_by(CampaignDonation.id)
         .all()
     )
 
+    # One query for every ticker any donation names, rather than one per
+    # donation. This detector also filters on the donating member, which stays
+    # a comparison in the loop -- a ticker's trades are a short list.
+    by_ticker = _trades_by_ticker(db, {d.ticker for d in donations})
+    delta = timedelta(days=window_days)
+
     for donation in donations:
-        delta = timedelta(days=window_days)
         start = donation.donation_date - delta
         end = donation.donation_date + delta
 
-        trades = (
-            db.query(Transaction)
-            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-            .filter(
-                Disclosure.member_id == donation.member_id,
-                Transaction.ticker == donation.ticker,
-                Transaction.transaction_date >= start,
-                Transaction.transaction_date <= end,
-            )
-            .all()
-        )
+        trades = [
+            txn
+            for txn in by_ticker.get(donation.ticker, ())
+            if txn.member_id == donation.member_id and start <= txn.transaction_date <= end
+        ]
 
         for txn in trades:
             days_apart = abs((txn.transaction_date - donation.donation_date).days)
@@ -138,25 +199,27 @@ def detect_lobbying_overlaps(
     """
     anomalies: List[Dict[str, Any]] = []
 
-    filings = db.query(LobbyingDisclosure).filter(LobbyingDisclosure.filed_date.isnot(None)).all()
+    filings = (
+        db.query(LobbyingDisclosure)
+        .filter(LobbyingDisclosure.filed_date.isnot(None))
+        .order_by(LobbyingDisclosure.id)
+        .all()
+    )
+
+    # 4,920 filings in the last run, so 4,920 round trips. Now one.
+    by_ticker = _trades_by_ticker(db, {f.ticker for f in filings})
+    delta = timedelta(days=window_days)
 
     for filing in filings:
-        delta = timedelta(days=window_days)
         start = filing.filed_date - delta
         end = filing.filed_date + delta
 
-        trades = (
-            db.query(Transaction, Disclosure.member_id)
-            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-            .filter(
-                Transaction.ticker == filing.ticker,
-                Transaction.transaction_date >= start,
-                Transaction.transaction_date <= end,
-            )
-            .all()
-        )
+        trades = [
+            txn for txn in by_ticker.get(filing.ticker, ()) if start <= txn.transaction_date <= end
+        ]
 
-        for txn, member_id in trades:
+        for txn in trades:
+            member_id = txn.member_id
             days_apart = abs((txn.transaction_date - filing.filed_date).days)
             anomalies.append(
                 {
@@ -197,26 +260,29 @@ def detect_contract_front_runs(
     anomalies: List[Dict[str, Any]] = []
 
     contracts = (
-        db.query(GovernmentContract).filter(GovernmentContract.awarded_date.isnot(None)).all()
+        db.query(GovernmentContract)
+        .filter(GovernmentContract.awarded_date.isnot(None))
+        .order_by(GovernmentContract.id)
+        .all()
     )
 
+    # Purchases only, pushed into the one query rather than repeated per award.
+    # This is the loop the ticker-driven contract feed lengthened most.
+    by_ticker = _trades_by_ticker(db, {c.ticker for c in contracts}, purchases_only=True)
+    delta = timedelta(days=window_days)
+
     for contract in contracts:
-        start = contract.awarded_date - timedelta(days=window_days)
+        start = contract.awarded_date - delta
         end = contract.awarded_date
 
-        trades = (
-            db.query(Transaction, Disclosure.member_id)
-            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-            .filter(
-                Transaction.ticker == contract.ticker,
-                Transaction.transaction_type == TransactionType.PURCHASE,
-                Transaction.transaction_date >= start,
-                Transaction.transaction_date <= end,
-            )
-            .all()
-        )
+        trades = [
+            txn
+            for txn in by_ticker.get(contract.ticker, ())
+            if start <= txn.transaction_date <= end
+        ]
 
-        for txn, member_id in trades:
+        for txn in trades:
+            member_id = txn.member_id
             days_before = (contract.awarded_date - txn.transaction_date).days
             amount_str = f" (${float(contract.amount):,.0f})" if contract.amount is not None else ""
             anomalies.append(

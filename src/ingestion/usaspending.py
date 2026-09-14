@@ -53,6 +53,15 @@ Recipients that resolve to nothing at all are a different case and are correctly
 dropped: national laboratories, universities and nonprofits take an enormous
 share of federal contracting by value and none of them can be traded, so there is
 no conflict for a trade detector to find.
+
+One contract is not one award action
+------------------------------------
+Rows used to be keyed on USASpending's `internal_id`, which identifies the
+CONTRACT. Nine of the transaction rows returned for Lockheed carried one
+internal_id and six different action dates; over 500 rows the id had 437 distinct
+values. Keying on it discarded 63 real obligations, and what the discarded ones
+differ in is the action date -- the only field the front-run detector reads. See
+`award_action_key`.
 """
 
 from __future__ import annotations
@@ -92,6 +101,45 @@ EARLIEST_SEARCH_DATE = "2007-10-01"
 # How many rejected recipient names to name in the summary log. Enough to show
 # the shape of the gap; not so many that a run log becomes a company directory.
 REJECTED_NAMES_LOGGED = 10
+
+
+def award_action_key(award: Dict[str, Any]) -> str | None:
+    """A stable identifier for ONE contract action.
+
+    `internal_id` is not it, and the difference is not academic. USASpending
+    returns it on every transaction row and it looks like a row id, but it
+    identifies the AWARD: contract W31P4Q24C0022 came back as nine transaction
+    rows carrying one internal_id, with six distinct action dates from
+    2024-06-28 to 2026-03-06 and nine distinct amounts. `generated_internal_id`
+    is the same thing in a readable spelling -- 437 distinct values over 500
+    transaction rows, both of them.
+
+    Deduplicating on it discarded 63 of those 500 real award actions, and the
+    ones discarded differ from the survivor precisely in ACTION DATE, which is
+    the only field `detect_contract_front_runs` reads. A member who bought
+    before the March 2026 obligation could not be flagged, because only the
+    September 2025 one was stored.
+
+    So the key is the natural one after all: the contract, the modification, the
+    date and the amount. Measured over 1,200 live transaction rows it is unique
+    on every one, and the modification number is what separates the case the
+    previous comment worried about -- one contract modified twice on the same
+    day for the same amount.
+
+    Length is bounded well inside the column: 47 characters at the longest seen,
+    and a FAR-maximum 50-character PIID puts the ceiling at 89. See
+    tests/test_external_values_fit_columns.py.
+    """
+    award_id = str(award.get("Award ID") or "").strip()
+    if not award_id:
+        return None
+    parts = (
+        award_id,
+        str(award.get("Mod") or "").strip(),
+        str(award.get("Action Date") or "").strip()[:10],
+        str(award.get("Transaction Amount") if award.get("Transaction Amount") is not None else ""),
+    )
+    return "|".join(parts)
 
 
 def _parse_date(value: Any) -> datetime | None:
@@ -151,6 +199,9 @@ def fetch_awards(
                 "Action Date",
                 "Awarding Agency",
                 "Transaction Description",
+                # The modification number. Two actions on one contract can share
+                # a date and an amount and differ only here, so the key needs it.
+                "Mod",
             ],
             "sort": "Transaction Amount",
             "order": "desc",
@@ -246,15 +297,14 @@ def ingest_government_contracts(
             awarded = _parse_date(award.get("Action Date"))
             description = award.get("Transaction Description") or award.get("Award ID") or ""
 
-            # `internal_id` is USASpending's own identifier for the award ACTION.
-            # It is returned whether or not it is listed in `fields`, and it is
-            # what makes reruns idempotent. The natural key cannot do this job:
-            # one contract is routinely modified several times on the same day
-            # for the same amount, and collapsing those loses real award
-            # activity. (It cannot collide across two company queries -- the
-            # round trip above resolves each recipient to exactly one ticker --
-            # so `seen` is guarding repeats inside one company's pages.)
-            external_id = str(award.get("internal_id") or "") or None
+            # What makes reruns idempotent, and what stops one contract's nine
+            # separate obligations collapsing into one row. See
+            # `award_action_key` for why USASpending's own `internal_id` cannot
+            # do this job. (The key cannot collide across two company queries --
+            # the round trip above resolves each recipient to exactly one
+            # ticker -- so `seen` is guarding repeats inside one company's
+            # pages, which is where the nine appeared.)
+            external_id = award_action_key(award)
             if external_id and external_id in seen:
                 duplicates += 1
                 continue

@@ -206,3 +206,104 @@ class TestTheOrchestratorRoutesHtmlToThisParser:
             "which the landing page reports to the public as a paper scan"
         )
         assert (disclosure.parse_confidence or 0) > 0
+
+
+class TestStoredSenateFilingsCanBeReReadAtAll:
+    """The 458 already-stored Senate filings were unreachable by both modes.
+
+    Each carries `parsed=True, has_text_layer=False, confidence=0.0` — the
+    verdict pdfplumber reached when it was handed HTML. That combination is a
+    trap:
+
+      * `fresh` selects `parsed == False`, so it skips them.
+      * `--min-confidence` excludes `has_text_layer == False` as scans, so it
+        skips them too.
+
+    A correct HTML parser plus filings it can never be pointed at is a fix that
+    delivers nothing, so these pin the escape route.
+    """
+
+    def _filing(self, db, url, *, parsed, text_layer, confidence, doc_id):
+        from src.db.models import Chamber, Disclosure, Member, Party
+
+        member = db.query(Member).filter(Member.bioguide_id == "RR00001").first()
+        if member is None:
+            member = Member(
+                bioguide_id="RR00001",
+                first_name="Re",
+                last_name="Read",
+                chamber=Chamber.SENATE,
+                party=Party.DEMOCRAT,
+                state="VA",
+            )
+            db.add(member)
+            db.commit()
+
+        disclosure = Disclosure(
+            member_id=member.id,
+            filing_year=2025,
+            filing_type="PTR",
+            filing_date=datetime(2025, 6, 1),
+            document_id=doc_id,
+            document_url=url,
+            is_ptr=True,
+            parsed=parsed,
+            has_text_layer=text_layer,
+            parse_confidence=confidence,
+        )
+        db.add(disclosure)
+        db.commit()
+        return disclosure
+
+    def _selected(self, db, tmp_path):
+        """The filings a `--min-confidence 1.0` run would pick up."""
+        from src.ingestion.orchestrator import IngestionOrchestrator
+
+        picked = []
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        orch.parse_disclosure = lambda db_, d, pdf_path=None: (  # type: ignore[method-assign]
+            picked.append(d.document_id) or True
+        )
+        orch.parse_disclosures(db, min_confidence=1.0, delay=0)
+        return picked
+
+    def test_a_senate_filing_misread_as_a_scan_is_reachable(self, db_session, tmp_path):
+        self._filing(
+            db_session,
+            "https://efdsearch.senate.gov/search/view/ptr/abc/",
+            parsed=True,
+            text_layer=False,
+            confidence=0.0,
+            doc_id="SEN-TRAPPED",
+        )
+
+        assert "SEN-TRAPPED" in self._selected(db_session, tmp_path), (
+            "the HTML parser can never be pointed at the filings it was written for"
+        )
+
+    def test_a_house_scan_is_still_skipped(self, db_session, tmp_path):
+        """The exemption must not undo what the filter is for: a real PDF scan
+        scores 0.0 every time, and re-reading 12.7% of the House corpus to learn
+        that again is the cost this filter exists to avoid."""
+        self._filing(
+            db_session,
+            "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2025/123.pdf",
+            parsed=True,
+            text_layer=False,
+            confidence=0.0,
+            doc_id="HOUSE-SCAN",
+        )
+
+        assert "HOUSE-SCAN" not in self._selected(db_session, tmp_path)
+
+    def test_a_readable_house_filing_below_the_bar_is_still_reached(self, db_session, tmp_path):
+        self._filing(
+            db_session,
+            "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2025/456.pdf",
+            parsed=True,
+            text_layer=True,
+            confidence=0.4,
+            doc_id="HOUSE-POOR",
+        )
+
+        assert "HOUSE-POOR" in self._selected(db_session, tmp_path)

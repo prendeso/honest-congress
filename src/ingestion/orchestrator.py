@@ -1042,10 +1042,21 @@ class IngestionOrchestrator:
             # it reached last time. `--reparse` still reaches them; filings
             # whose text layer is unknown are still included, because nobody
             # has checked those.
+            #
+            # Senate filings are exempt, and the exemption is the point. Their
+            # `has_text_layer = False` was not a finding about the document: it
+            # was pdfplumber being handed HTML, which has no PDF text layer by
+            # definition, and reporting "likely a scan". Every one of the 458
+            # stored Senate filings carries that verdict, so without this clause
+            # they are unreachable by BOTH modes -- `fresh` skips them because
+            # they are already parsed, and this filter skips them because of a
+            # diagnosis the wrong reader made. The HTML parser would never see
+            # a single one of them.
             query = query.filter(
                 or_(
                     Disclosure.has_text_layer.is_(None),
                     Disclosure.has_text_layer.is_(True),
+                    Disclosure.document_url.ilike("%efdsearch.senate.gov%"),
                 )
             )
         elif not reparse:

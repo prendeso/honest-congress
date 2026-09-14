@@ -7,16 +7,26 @@
 #   ALLOWED_ORIGINS    — your dashboard domain(s); comma-separated
 #   ENV=production     — enables production-mode validation
 # Optional:
-#   CONGRESS_GOV_API_KEY  — Congress.gov; required by `cli ingest-bills`
-#   FEC_API_KEY           — api.data.gov; required by `cli ingest-donations`
-#   LDA_API_KEY           — Senate LDA; raises the rate limit, not required
-#   SEC_CONTACT_EMAIL     — SEC 403s a User-Agent with no real contact address
 #   LATE_FILING_MIN_DAYS (default 60), LATE_FILING_MIN_AMOUNT_USD (default 50000)
 #
-# The ingestion keys matter to the deployed service only for the admin sync
-# endpoints; the scheduled ingestion runs in GitHub Actions and reads its own
-# secrets. QUIVERQUANT_API_KEY was listed here and no longer exists — that
-# vendor was replaced by the official sources above.
+# The ingestion API keys are deliberately NOT listed here, and setting them on
+# Railway does nothing.
+#
+# Two machines run this project. Railway runs the web service, which serves what
+# is already in the database. The data pipeline -- `cli ingest`, `parse`,
+# `analyze` and every Tier-2 feed -- runs as GitHub Actions steps, so
+# CONGRESS_GOV_API_KEY, FEC_API_KEY, LDA_API_KEY and SEC_CONTACT_EMAIL belong in
+# the repository's Actions secrets. Nothing in the deployed service reads them:
+# no route under src/api/ references those settings or the ingesters that use
+# them, and the one admin endpoint that does sync anything (`sync-all-members`)
+# reads the keyless congress-legislators dataset. This note previously claimed
+# they mattered "for the admin sync endpoints", which was not true.
+#
+# RAILWAY_DATABASE_URL looks inverted for the same reason and is not: it lives in
+# GitHub because the runner writes into Railway's database from outside.
+#
+# QUIVERQUANT_API_KEY was listed here and no longer exists — that vendor was
+# replaced by the official sources above.
 
 [build]
 builder = "DOCKERFILE"

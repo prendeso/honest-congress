@@ -47,14 +47,36 @@ Still in **Variables** on the app service, add the following. **Required** ones 
 | `ADMIN_PASSWORD` | A strong random string | Required by `src/config.get_settings()` when `ENV=production`. Used for `/admin` panel login. Generate with `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `ALLOWED_ORIGINS` | Your app's public URL, e.g. `https://honest-congress-production.up.railway.app` | CORS. After Railway assigns a domain (Step 5) come back and update this. **Leaving it unset is not neutral**: the default is `*`, which allows every origin with every header — `X-Admin-Token` included — so any web page can drive the admin endpoints with a token it has obtained. |
 
-### Optional
+### The ingestion API keys do NOT go here
+
+`CONGRESS_GOV_API_KEY`, `FEC_API_KEY`, `LDA_API_KEY` and `SEC_CONTACT_EMAIL`
+belong in the repository's **GitHub Actions secrets**, not in Railway. Setting
+them on Railway does nothing.
+
+Two machines run this project. Railway runs the web service, which serves what
+is already in the database. The data pipeline — `cli ingest`, `parse`, `analyze`
+and every Tier-2 feed — runs as GitHub Actions steps, and that is the only place
+those keys are read. Nothing under `src/api/` references them: the one admin
+endpoint that syncs anything (`sync-all-members`) uses the keyless
+congress-legislators dataset.
+
+`RAILWAY_DATABASE_URL` looks inverted for the same reason and is not — it lives
+in GitHub because the runner writes into Railway's database from outside.
+
+Add them at **Settings → Secrets and variables → Actions → New repository
+secret**:
+
+| Secret | Where to get it | What stays dark without it |
+|---|---|---|
+| `SEC_CONTACT_EMAIL` | any real address you monitor | SEC 403s the company register, so no ticker resolves and both `contract_front_run` and `lobbying_overlap` go dark |
+| `FEC_API_KEY` | <https://api.data.gov/signup/> — instant | `donor_conflict` |
+| `CONGRESS_GOV_API_KEY` | <https://api.congress.gov/sign-up/> | `sponsorship_conflict`, `bill_jurisdiction_conflict` |
+| `LDA_API_KEY` | <https://lda.senate.gov/api/> | nothing — but lobbying runs at 8 requests/minute instead of 100 |
+
+### Optional Railway variables
 
 | Variable | Default | What it does |
 |---|---|---|
-| `CONGRESS_GOV_API_KEY` | empty | Backup source for member metadata; required by `cli ingest-bills` |
-| `FEC_API_KEY` | empty | Required by `cli ingest-donations`. Free at https://api.data.gov/signup/ |
-| `LDA_API_KEY` | empty | Raises the Senate LDA rate limit from ~15/min to ~120/min. Not required — `cli ingest-lobbying` runs anonymously without it |
-| `SEC_CONTACT_EMAIL` | `contact@example.com` | Goes in the User-Agent for SEC's company register. SEC returns **403** for the placeholder, so set a real address you monitor before any SEC-backed ingestion |
 | `DISABLED_ANOMALY_TYPES` | `outperforming_trades,perfect_timing,loss_avoidance` | Detectors that are never written or served. Leave it alone unless you have real price history — see D3 and D10 in `docs/DECISIONS.md` |
 | `FDR_ALPHA` | `0.05` | False-discovery rate the API filters findings at |
 | `SIGNIFICANCE_PERMUTATIONS` | `1000` | Shifted calendars per test; the p-value floor is 1/(n+1) |
@@ -243,6 +265,5 @@ Expected on Railway. The filesystem is **ephemeral** — locally-stored PDFs don
 | `ADMIN_PASSWORD` | yes (when `ENV=production`) | manually |
 | `ALLOWED_ORIGINS` | recommended | manually, after Step 5 |
 | `PORT` | auto-injected by Railway | — |
-| `CONGRESS_GOV_API_KEY` | optional | <https://api.congress.gov/sign-up/> |
 
 Full list of tunable knobs lives in `src/config.py`.

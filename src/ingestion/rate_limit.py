@@ -50,6 +50,29 @@ DEFAULT_BACKOFF_SECONDS: Tuple[int, ...] = (2, 4, 8, 16)
 # equivalents. 500 is deliberately NOT here: a genuine server-side bug repeated
 # four times is four times the load for the same answer.
 RETRYABLE_STATUS = frozenset({429, 502, 503, 504, 520, 521, 522, 523, 524})
+
+# The same idea one layer down. A status code only exists if a response arrived;
+# these are the failures that happen BEFORE one does, and the retry loop below
+# branched on status, so it never saw them at all.
+#
+# Also not hypothetical. A read timeout to SEC killed the industry sync outright:
+#
+#     requests.exceptions.ReadTimeout: HTTPSConnectionPool(host='www.sec.gov',
+#     port=443): Read timed out. (read timeout=45)
+#
+# One slow response out of roughly a thousand, on a step whose whole job is to
+# cache a value per ticker, and the step died and reported success under
+# `continue-on-error`. Fixing the transient STATUSES without the transient
+# EXCEPTIONS left exactly half the hole open.
+#
+# `requests.RequestException` is deliberately NOT the whole net: an HTTPError
+# raised by `raise_for_status` is a real answer from the server and must not be
+# retried, and `TooManyRedirects` or a malformed URL will not fix themselves.
+RETRYABLE_EXCEPTIONS = (
+    requests.exceptions.Timeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.ChunkedEncodingError,
+)
 DEFAULT_TIMEOUT = 60
 
 
@@ -166,13 +189,28 @@ class ThrottledClient:
         query = self._auth_params(dict(params or {}))
         headers = self._auth_headers()
 
-        last_status: int | None = None
+        last_failure: str | None = None
         for attempt in range(MAX_RETRIES):
             self._limiter.acquire()
             self.requests_made += 1
-            response = self.session.get(
-                f"{self.base_url}{path}", params=query, headers=headers, timeout=self._timeout
-            )
+
+            try:
+                response = self.session.get(
+                    f"{self.base_url}{path}", params=query, headers=headers, timeout=self._timeout
+                )
+            except RETRYABLE_EXCEPTIONS as exc:
+                delay = self._backoff[min(attempt, len(self._backoff) - 1)]
+                logger.warning(
+                    "%s did not answer (%s); retrying in %ss (attempt %d of %d)",
+                    self.name,
+                    type(exc).__name__,
+                    delay,
+                    attempt + 1,
+                    MAX_RETRIES,
+                )
+                self._sleeper(delay)
+                last_failure = type(exc).__name__
+                continue
 
             if response.status_code in RETRYABLE_STATUS:
                 # These services send Retry-After on throttle. Honour it when
@@ -195,12 +233,12 @@ class ThrottledClient:
                     MAX_RETRIES,
                 )
                 self._sleeper(delay)
-                last_status = response.status_code
+                last_failure = str(response.status_code)
                 continue
 
             response.raise_for_status()
             return response
 
         raise requests.exceptions.RetryError(
-            f"{self.name} still returning {last_status} after {MAX_RETRIES} attempts"
+            f"{self.name} still failing with {last_failure} after {MAX_RETRIES} attempts"
         )

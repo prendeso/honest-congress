@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, Iterator, List
+from typing import Any, Dict, Iterator, List, Tuple
 
 import requests
 from sqlalchemy import or_, select
@@ -162,13 +162,57 @@ def _parse_date(value: Any) -> datetime | None:
         return None
 
 
-def _upsert_bill(db: Session, payload: Dict[str, Any]) -> Bill | None:
-    """Store or refresh one bill, returning it. None if it is unidentifiable."""
+# The columns `_upsert_bill` can write, in the order `_BillState` holds them.
+# Named here so the cache below and the merge cannot drift apart silently.
+_MERGED_COLUMNS = (
+    "title",
+    "policy_area",
+    "introduced_date",
+    "latest_action_date",
+    "latest_action_text",
+    "origin_chamber",
+)
+
+
+def _bill_key(payload: Dict[str, Any]) -> Tuple[Any, str, str] | None:
+    """The natural key `bills` is unique on, or None if the payload lacks it."""
     congress = payload.get("congress")
     bill_type = (payload.get("type") or "").strip().lower()
     number = str(payload.get("number") or "").strip()
     if not congress or not bill_type or not number:
         return None
+    return (congress, bill_type, number)
+
+
+def _merged_values(payload: Dict[str, Any], current: Tuple[Any, ...]) -> Tuple[Any, ...]:
+    """What `_upsert_bill` would leave the row holding, without touching the database.
+
+    The same rule the upsert applies: a null in the payload never overwrites a
+    value already stored. The same bill arrives once per member who touched it,
+    and an older or thinner response must not erase a policy area a richer one
+    supplied.
+    """
+    latest = payload.get("latestAction") or {}
+    return (
+        payload.get("title") or current[0],
+        (payload.get("policyArea") or {}).get("name") or current[1],
+        _parse_date(payload.get("introducedDate")) or current[2],
+        _parse_date(latest.get("actionDate")) or current[3],
+        latest.get("text") or current[4],
+        payload.get("originChamber") or current[5],
+    )
+
+
+def _upsert_bill(db: Session, payload: Dict[str, Any]) -> Bill | None:
+    """Store or refresh one bill, returning it. None if it is unidentifiable.
+
+    A SELECT and a flush per call, which is why `ingest_member_bills` only
+    reaches here for a bill the payload actually changes -- see the cache there.
+    """
+    key = _bill_key(payload)
+    if key is None:
+        return None
+    congress, bill_type, number = key
 
     bill = (
         db.query(Bill)
@@ -183,16 +227,17 @@ def _upsert_bill(db: Session, payload: Dict[str, Any]) -> Bill | None:
         bill = Bill(congress=congress, bill_type=bill_type, number=number)
         db.add(bill)
 
-    latest = payload.get("latestAction") or {}
-    bill.title = payload.get("title") or bill.title
-    # A null never overwrites a value we already have. The same bill arrives
-    # once per member who touched it, and an older or thinner response must not
-    # erase a policy area a richer one supplied.
-    bill.policy_area = (payload.get("policyArea") or {}).get("name") or bill.policy_area
-    bill.introduced_date = _parse_date(payload.get("introducedDate")) or bill.introduced_date
-    bill.latest_action_date = _parse_date(latest.get("actionDate")) or bill.latest_action_date
-    bill.latest_action_text = latest.get("text") or bill.latest_action_text
-    bill.origin_chamber = payload.get("originChamber") or bill.origin_chamber
+    # One rule for the merge, applied here and by `_merged_values`, so the cache
+    # that decides whether to come here cannot disagree with what happens when
+    # it does.
+    for column, value in zip(
+        _MERGED_COLUMNS,
+        _merged_values(payload, tuple(getattr(bill, c) for c in _MERGED_COLUMNS)),
+        # If the column list and the merge ever fall out of step, say so loudly
+        # here rather than write the wrong field into a bill.
+        strict=True,
+    ):
+        setattr(bill, column, value)
 
     db.flush()
     return bill
@@ -291,7 +336,6 @@ def ingest_member_bills(
     cosponsorships = 0
     members_queried = 0
     stopped_early = False
-    seen_bills: set[int] = set()
     unknown_to_congress_gov: List[str] = []
 
     # Existing sponsorships as their natural key, read once. This was a SELECT
@@ -310,6 +354,34 @@ def ingest_member_bills(
         ).all()
     }
 
+    # Every bill already stored, as plain columns rather than entities, read
+    # once. Measured on this ingest: `_upsert_bill` costs three statements per
+    # bill -- a SELECT on the natural key, then the flush -- and the slope is
+    # exactly linear from 10 bills to 100. Congress.gov returns 71 sponsored
+    # bills for a typical member and the roster is several hundred, so that is
+    # of the order of a hundred thousand network round trips to Railway from a
+    # GitHub runner, which is most of what the step spends.
+    #
+    # Nearly all of them buy nothing. The same bill arrives once per member who
+    # touched it, and on a re-run every field is already stored, so the upsert
+    # reads a row and writes back exactly what was there. This skips the call
+    # entirely whenever the payload cannot change the row.
+    #
+    # Columns, not entities, on purpose: `SessionLocal` leaves expire_on_commit
+    # at its default, so entities cached here would be expired by the commit at
+    # the end of each member and re-fetched one at a time on next touch --
+    # turning the cache into the very N+1 it removes.
+    bills_by_key: Dict[Tuple[Any, str, str], Tuple[int, Tuple[Any, ...]]] = {
+        (row[0], row[1], row[2]): (row[3], tuple(row[4:]))
+        for row in db.query(
+            Bill.congress,
+            Bill.bill_type,
+            Bill.number,
+            Bill.id,
+            *(getattr(Bill, column) for column in _MERGED_COLUMNS),
+        ).all()
+    }
+
     kinds = [("sponsored-legislation", "sponsoredLegislation", True)]
     if include_cosponsored:
         kinds.append(("cosponsored-legislation", "cosponsoredLegislation", False))
@@ -317,23 +389,42 @@ def ingest_member_bills(
     try:
         for member in roster:
             members_queried += 1
-            for path, key, is_sponsor in kinds:
+            for path, json_key, is_sponsor in kinds:
                 pages = _sponsorship_pages(
-                    client, member.bioguide_id, path, key, unknown_to_congress_gov
+                    client, member.bioguide_id, path, json_key, unknown_to_congress_gov
                 )
                 for payload in pages:
-                    bill = _upsert_bill(db, payload)
-                    if bill is None:
+                    bill_key = _bill_key(payload)
+                    if bill_key is None:
                         continue
-                    seen_bills.add(bill.id)
 
-                    key = (bill.id, member.id, bool(is_sponsor))
-                    if key in known_sponsorships:
+                    cached = bills_by_key.get(bill_key)
+                    if cached is None:
+                        bill = _upsert_bill(db, payload)
+                        if bill is None:
+                            continue
+                        bill_id = bill.id
+                        bills_by_key[bill_key] = (
+                            bill_id,
+                            tuple(getattr(bill, c) for c in _MERGED_COLUMNS),
+                        )
+                    else:
+                        bill_id, stored = cached
+                        merged = _merged_values(payload, stored)
+                        if merged == stored:
+                            # The row already says everything this payload does.
+                            pass
+                        else:
+                            _upsert_bill(db, payload)
+                            bills_by_key[bill_key] = (bill_id, merged)
+
+                    sponsorship = (bill_id, member.id, bool(is_sponsor))
+                    if sponsorship in known_sponsorships:
                         continue
-                    known_sponsorships.add(key)
+                    known_sponsorships.add(sponsorship)
 
                     db.add(
-                        BillSponsorship(bill_id=bill.id, member_id=member.id, is_sponsor=is_sponsor)
+                        BillSponsorship(bill_id=bill_id, member_id=member.id, is_sponsor=is_sponsor)
                     )
                     if is_sponsor:
                         sponsorships += 1

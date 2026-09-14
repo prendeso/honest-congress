@@ -773,13 +773,100 @@ class TestCostDoesNotTrackTheNumberOfBills:
         one = selects(1)
         forty = selects(40)
 
-        # Sponsorship lookups specifically. `_upsert_bill` still issues its own
-        # query per bill to find the bill by (congress, type, number) -- that is
-        # a separate N+1, it is not what this change touched, and asserting on
-        # the total would quietly claim credit for fixing it.
+        # Sponsorship lookups specifically. `_upsert_bill` still issues a query
+        # per bill it actually has to write, which on a first pass is every one
+        # of them -- see `test_a_rerun_over_stored_bills_does_not_ask_about_each_one`
+        # for the case that was fixed, and note it is the re-run, not this one.
+        # Asserting on the total here would claim credit for a first pass that
+        # is still linear.
         assert len(one) == len(forty) == 1, (
             f"sponsorship lookups grew with the number of bills: {len(one)} -> {len(forty)}"
         )
+
+    def test_a_rerun_over_stored_bills_does_not_ask_about_each_one(
+        self, db_session, engine, sponsored
+    ):
+        """The nightly case. Every bill is already stored and nothing has changed.
+
+        `_upsert_bill` costs three statements per bill -- a SELECT on the natural
+        key, then the flush -- and it used to run for every payload. The same
+        bill arrives once per member who touched it, and on a re-run the upsert
+        reads a row and writes back exactly what was already there. Against
+        Railway from a GitHub runner each of those is a network round trip.
+
+        Asserted as "flat", not "smaller": the point is that the cost stops
+        tracking the number of bills at all.
+        """
+        _member(db_session, bioguide="AC000001")
+
+        def rerun_statements(n):
+            db_session.query(BillSponsorship).delete()
+            db_session.query(Bill).delete()
+            db_session.commit()
+            # First pass stores them; the pass being measured is the second.
+            ingest_member_bills(
+                db_session,
+                API_KEY,
+                client=_client([self._sponsored(n, sponsored)]),
+                include_cosponsored=False,
+            )
+            return _count_queries(
+                engine,
+                lambda: ingest_member_bills(
+                    db_session,
+                    API_KEY,
+                    client=_client([self._sponsored(n, sponsored)]),
+                    include_cosponsored=False,
+                ),
+            )
+
+        one = rerun_statements(1)
+        forty = rerun_statements(40)
+
+        assert len(one) == len(forty), (
+            f"re-reading stored bills still costs per bill: {len(one)} -> {len(forty)}"
+        )
+
+    def test_a_payload_that_adds_a_field_still_writes_it(self, db_session, sponsored):
+        """The risk the cache introduces, and the reason it is not just a key set.
+
+        Skipping the upsert when the payload cannot change the row is only safe
+        if "cannot change" is judged by the same rule the upsert applies. Get
+        that wrong and a later, richer response is silently dropped -- which is
+        the opposite of the null-never-overwrites rule the upsert exists to
+        enforce, and it would fail quietly and permanently.
+        """
+        _member(db_session, bioguide="AD000001")
+        thin = self._sponsored(1, sponsored)
+        thin["sponsoredLegislation"][0] = {
+            k: v
+            for k, v in thin["sponsoredLegislation"][0].items()
+            if k not in ("policyArea", "title")
+        }
+        ingest_member_bills(db_session, API_KEY, client=_client([thin]), include_cosponsored=False)
+        stored = db_session.query(Bill).one()
+        assert stored.policy_area is None
+
+        richer = self._sponsored(1, sponsored)
+        richer["sponsoredLegislation"][0]["policyArea"] = {"name": "Taxation"}
+        ingest_member_bills(
+            db_session, API_KEY, client=_client([richer]), include_cosponsored=False
+        )
+        db_session.expire_all()
+        assert db_session.query(Bill).one().policy_area == "Taxation"
+
+    def test_a_thinner_payload_still_does_not_erase_what_is_stored(self, db_session, sponsored):
+        """The same rule in the other direction, now decided by the cache too."""
+        _member(db_session, bioguide="AE000001")
+        rich = self._sponsored(1, sponsored)
+        rich["sponsoredLegislation"][0]["policyArea"] = {"name": "Health"}
+        ingest_member_bills(db_session, API_KEY, client=_client([rich]), include_cosponsored=False)
+
+        thin = self._sponsored(1, sponsored)
+        thin["sponsoredLegislation"][0].pop("policyArea", None)
+        ingest_member_bills(db_session, API_KEY, client=_client([thin]), include_cosponsored=False)
+        db_session.expire_all()
+        assert db_session.query(Bill).one().policy_area == "Health"
 
     def test_sponsorships_are_still_stored_once_each(self, db_session, sponsored):
         _member(db_session, bioguide="AB000001")

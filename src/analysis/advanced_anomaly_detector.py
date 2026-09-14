@@ -57,6 +57,48 @@ CONGRESSIONAL_SALARY_BY_YEAR = {
 }
 
 
+def _fd_disclosures_by_member(db: Session, member_ids: List[int]) -> Dict[int, List[Disclosure]]:
+    """Every member's FD filings, oldest first, in one query rather than one each.
+
+    `members_with_annual_filings` already narrows the roster to members with two
+    or more of these. What it did not remove was the follow-up query per member
+    to go and read them, which against Railway from a GitHub runner is a network
+    round trip each.
+    """
+    rows = (
+        db.query(Disclosure)
+        .filter(Disclosure.member_id.in_(member_ids), Disclosure.filing_type == "FD")
+        .order_by(Disclosure.member_id, Disclosure.filing_year)
+        .all()
+    )
+    by_member: Dict[int, List[Disclosure]] = defaultdict(list)
+    for disclosure in rows:
+        by_member[disclosure.member_id].append(disclosure)
+    return by_member
+
+
+def _assets_by_disclosure(db: Session, disclosure_ids: List[int]) -> Dict[int, List[Asset]]:
+    """All the assets at once, keyed by the filing they were reported on."""
+    by_disclosure: Dict[int, List[Asset]] = defaultdict(list)
+    if not disclosure_ids:
+        return by_disclosure
+    for asset in db.query(Asset).filter(Asset.disclosure_id.in_(disclosure_ids)).all():
+        by_disclosure[asset.disclosure_id].append(asset)
+    return by_disclosure
+
+
+def _liabilities_by_disclosure(
+    db: Session, disclosure_ids: List[int]
+) -> Dict[int, List[Liability]]:
+    """The same for liabilities, which net worth is not net worth without."""
+    by_disclosure: Dict[int, List[Liability]] = defaultdict(list)
+    if not disclosure_ids:
+        return by_disclosure
+    for liability in db.query(Liability).filter(Liability.disclosure_id.in_(disclosure_ids)).all():
+        by_disclosure[liability.disclosure_id].append(liability)
+    return by_disclosure
+
+
 class AdvancedAnomalyDetector:
     """Detect advanced anomalies in Congressional finances."""
 
@@ -90,21 +132,30 @@ class AdvancedAnomalyDetector:
 
             members = members_with_annual_filings(db)
 
+            # Three queries for the whole detector instead of three per member
+            # and per filing. This walked the roster asking for one member's
+            # disclosures, then each disclosure's assets, then its liabilities --
+            # so a member with five filings cost eleven round trips to Railway.
+            # It took 14m39s in the 2026-09-14 cron to return nothing at all.
+            by_member = _fd_disclosures_by_member(db, [m.id for m in members])
+            every_disclosure = [d.id for ds in by_member.values() for d in ds]
+            assets_by_disclosure = _assets_by_disclosure(db, every_disclosure)
+            liabilities_by_disclosure = _liabilities_by_disclosure(db, every_disclosure)
+
             for member in members:
                 try:
-                    # Get disclosures ordered by year
-                    disclosures = (
-                        db.query(Disclosure)
-                        .filter(Disclosure.member_id == member.id, Disclosure.filing_type == "FD")
-                        .order_by(Disclosure.filing_year)
-                        .all()
-                    )
+                    disclosures = by_member.get(member.id, [])
 
                     if len(disclosures) < 2:
                         continue
 
                     # Calculate net worth for each year
-                    wealth_progression = self._calculate_wealth_progression(db, disclosures)
+                    wealth_progression = self._calculate_wealth_progression(
+                        db,
+                        disclosures,
+                        assets_by_disclosure=assets_by_disclosure,
+                        liabilities_by_disclosure=liabilities_by_disclosure,
+                    )
 
                     if len(wealth_progression) < 2:
                         continue
@@ -180,13 +231,26 @@ class AdvancedAnomalyDetector:
         return anomalies
 
     def _calculate_wealth_progression(
-        self, db: Session, disclosures: List[Disclosure]
+        self,
+        db: Session,
+        disclosures: List[Disclosure],
+        *,
+        assets_by_disclosure: Dict[int, List[Asset]] | None = None,
+        liabilities_by_disclosure: Dict[int, List[Liability]] | None = None,
     ) -> List[Dict]:
-        """Calculate estimated net worth for each year's disclosure."""
+        """Calculate estimated net worth for each year's disclosure.
+
+        The two index arguments are optional so the method still works on its
+        own, which the tests rely on. When a caller is walking a whole roster it
+        passes them in, and the two queries per filing below become none.
+        """
         progression = []
 
         for disclosure in disclosures:
-            assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).all()
+            if assets_by_disclosure is not None:
+                assets = assets_by_disclosure.get(disclosure.id, [])
+            else:
+                assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).all()
 
             # Midpoint of each reported band. Disclosures report ranges, so this
             # is an estimate with real error bars -- the bounds are carried
@@ -206,7 +270,12 @@ class AdvancedAnomalyDetector:
             # Liabilities were ignored entirely, which made this gross assets
             # rather than net worth. Subtract the opposite bound of each range
             # so the interval stays honest.
-            liabilities = db.query(Liability).filter(Liability.disclosure_id == disclosure.id).all()
+            if liabilities_by_disclosure is not None:
+                liabilities = liabilities_by_disclosure.get(disclosure.id, [])
+            else:
+                liabilities = (
+                    db.query(Liability).filter(Liability.disclosure_id == disclosure.id).all()
+                )
             liab_min = Decimal(0)
             liab_max = Decimal(0)
             for liability in liabilities:
@@ -268,14 +337,16 @@ class AdvancedAnomalyDetector:
 
             members = members_with_annual_filings(db)
 
+            # Same preload as the wealth loop, for the same reason: this one
+            # took 14m40s in the same run, also to return nothing.
+            by_member = _fd_disclosures_by_member(db, [m.id for m in members])
+            assets_by_disclosure = _assets_by_disclosure(
+                db, [d.id for ds in by_member.values() for d in ds]
+            )
+
             for member in members:
                 try:
-                    disclosures = (
-                        db.query(Disclosure)
-                        .filter(Disclosure.member_id == member.id, Disclosure.filing_type == "FD")
-                        .order_by(Disclosure.filing_year)
-                        .all()
-                    )
+                    disclosures = by_member.get(member.id, [])
 
                     if len(disclosures) < 2:
                         continue
@@ -288,7 +359,7 @@ class AdvancedAnomalyDetector:
                     )
 
                     for disclosure in disclosures:
-                        assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).all()
+                        assets = assets_by_disclosure.get(disclosure.id, [])
 
                         for asset in assets:
                             key = normalize_asset_key(asset.description)

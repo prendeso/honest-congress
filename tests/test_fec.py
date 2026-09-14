@@ -444,3 +444,83 @@ def test_a_capped_run_commits_what_it_managed_and_says_so(db_session, resolver, 
 
     assert result["stopped_early"] is True
     assert result["requests_made"] == 3
+
+
+# --------------------------------------------------------------------------
+# Cost
+# --------------------------------------------------------------------------
+
+
+def _count_selects(engine, callable_):
+    from sqlalchemy import event
+
+    seen: list[str] = []
+
+    def record(conn, cursor, statement, params, context, executemany):
+        if statement.lstrip().upper().startswith("SELECT"):
+            seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        callable_()
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+    return seen
+
+
+class TestCostDoesNotTrackTheNumberOfReceipts:
+    """One SELECT per incoming receipt, to learn whether it was already stored.
+
+    The last production run imported **32,515** donations. That was 32,515
+    network round trips to a database on another host, and on a rerun every one
+    is already present -- the whole cost buys the answer "nothing to do".
+
+    Same fix as `src/ingestion/usaspending.py` and `lda.py`: read the sub_ids
+    already stored for this source once, and use that set as the in-batch guard
+    too, since autoflush=False hides a row added earlier in the loop from a
+    query. A receipt with no sub_id still falls back to a single query, so the
+    old NULL semantics are preserved exactly rather than quietly redefined.
+    """
+
+    # Sharice Davids' principal committee, the one `_seed_for_ingest` creates a
+    # member for. Cloning any other receipt gives a donation with no sitting
+    # member, which is correctly counted and not stored -- and would make this
+    # measure nothing.
+    SEEDED_COMMITTEE = "C00670034"
+
+    def _receipts(self, n: int, receipts: dict) -> dict:
+        one = dict(receipts["page1"]["results"][0], committee_id=self.SEEDED_COMMITTEE)
+        return {
+            "page1": {
+                "results": [dict(one, sub_id=f"sub-{i:05d}") for i in range(n)],
+                "pagination": {"pages": 1, "page": 1},
+            },
+            "page2": {"results": [], "pagination": {"pages": 1, "page": 1}},
+        }
+
+    def test_one_receipt_and_forty_cost_the_same_to_look_up(
+        self, db_session, engine, resolver, receipts
+    ):
+        _seed_for_ingest(db_session)
+
+        one = _count_selects(
+            engine, lambda: _ingest(db_session, resolver, self._receipts(1, receipts))
+        )
+        forty = _count_selects(
+            engine, lambda: _ingest(db_session, resolver, self._receipts(40, receipts))
+        )
+
+        assert len(one) == len(forty), (
+            f"lookups grew with the number of receipts: {len(one)} -> {len(forty)}"
+        )
+
+    def test_the_donations_are_still_stored_once_each(self, db_session, resolver, receipts):
+        _seed_for_ingest(db_session)
+        payload = self._receipts(12, receipts)
+
+        first = _ingest(db_session, resolver, payload)
+        second = _ingest(db_session, resolver, payload)
+
+        assert first["imported"] == 12
+        assert second["imported"] == 0
+        assert db_session.query(CampaignDonation).count() == 12

@@ -427,7 +427,11 @@ def cmd_ingest_contracts(args):
 
     with get_db() as db:
         result = ingest_government_contracts(
-            db, start_date=args.start, end_date=args.end, pages=args.pages_per_company
+            db,
+            start_date=args.start,
+            end_date=args.end,
+            pages=args.pages_per_company,
+            max_requests=args.max_requests,
         )
 
     if not result["tickers_queried"] and not result["tickers_without_a_registered_name"]:
@@ -458,6 +462,8 @@ def cmd_ingest_contracts(args):
     # the company through its own recipient hierarchy, which the SEC register
     # cannot confirm -- a known gap in coverage, and the numbers say how big.
     print(f"  Rejected as a different company: {result['rejected_wrong_company']}")
+    if result.get("stopped_early"):
+        print("\n  Stopped at the request cap. Rerun to continue.")
     if result.get("connection_losses"):
         lost = result["companies_lost_to_the_database"]
         print(
@@ -1183,6 +1189,15 @@ def main():
         "--start", default="2023-01-01", help="Earliest action date (default: 2023-01-01)"
     )
     contracts_parser.add_argument("--end", default=None, help="Latest action date (default: today)")
+    contracts_parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help=(
+            "Stop after this many USASpending requests. The run so far is kept -- "
+            "each company is committed as it is done -- and the next run resumes."
+        ),
+    )
     contracts_parser.add_argument(
         "--pages-per-company",
         type=int,

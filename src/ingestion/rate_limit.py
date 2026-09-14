@@ -174,12 +174,39 @@ class ThrottledClient:
         payload: Dict[str, Any] = self._request(path, params).json()
         return payload
 
-    def _request(self, path: str, params: Dict[str, Any] | None = None) -> requests.Response:
+    def post(self, path: str, json: Any = None) -> Dict[str, Any]:
+        """POST a JSON body and decode the JSON reply.
+
+        Same throttling, same retries, same request budget as `get`. USASpending
+        is the only caller: its search endpoint takes the whole query as a body.
+        """
+        payload: Dict[str, Any] = self._request(path, method="POST", json=json).json()
+        return payload
+
+    def _request(
+        self,
+        path: str,
+        params: Dict[str, Any] | None = None,
+        *,
+        method: str = "GET",
+        json: Any = None,
+    ) -> requests.Response:
         """The throttled, retried request itself, decoded by the caller.
 
         Separate from `get` because EDGAR's browse endpoint serves atom XML, and
         the rate limiting and 429 handling should not have to be written twice
         to accommodate that.
+
+        `method` and `json` are keyword-only and trailing on purpose:
+        `EdgarCompanyClient.get_text` calls this positionally as
+        `self._request(path, params)`, and the four subclasses were written
+        against that shape.
+
+        POST exists here so USASpending can stop being the one feed outside all
+        of this. It needs POST, this client only spoke GET, so it grew its own
+        retry loop -- and two rounds of work on transient failures passed it by
+        while it kept dying on the first 502. Everything below the transport
+        line is method-agnostic and always was.
         """
         if self.max_requests is not None and self.requests_made >= self.max_requests:
             raise RequestBudgetExhausted(
@@ -195,9 +222,25 @@ class ThrottledClient:
             self.requests_made += 1
 
             try:
-                response = self.session.get(
-                    f"{self.base_url}{path}", params=query, headers=headers, timeout=self._timeout
-                )
+                if method == "GET":
+                    # Unchanged, deliberately: the existing tests assert on
+                    # `session.get.call_args`, so this call's shape is a
+                    # contract, not an implementation detail.
+                    response = self.session.get(
+                        f"{self.base_url}{path}",
+                        params=query,
+                        headers=headers,
+                        timeout=self._timeout,
+                    )
+                elif method == "POST":
+                    response = self.session.post(
+                        f"{self.base_url}{path}",
+                        json=json,
+                        headers=headers or None,
+                        timeout=self._timeout,
+                    )
+                else:  # pragma: no cover - no caller needs another verb yet
+                    raise ValueError(f"unsupported method {method!r}")
             except RETRYABLE_EXCEPTIONS as exc:
                 delay = self._backoff[min(attempt, len(self._backoff) - 1)]
                 logger.warning(

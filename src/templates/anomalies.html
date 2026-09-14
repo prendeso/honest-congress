@@ -309,16 +309,20 @@
                                                     q = <span x-text="formatP(anomaly.q_value)"></span>
                                                 </span>
                                             </template>
+                                            <!-- A finding that was tested and FAILED is not here: it carries a
+                                                 q above alpha and the list endpoint omits it by default. A missing
+                                                 q means no test produced a value for this finding, which is not
+                                                 the same claim and must not be shown as one. -->
                                             <template x-if="(anomaly.q_value === null || anomaly.q_value === undefined) && anomaly.has_null_model">
                                                 <span class="px-2 py-0.5 rounded text-[11px] bg-amber-100 text-amber-900"
-                                                      title="This category is tested against a shifted-calendar null, and this finding did not survive that test at the run's false-discovery rate.">
-                                                    did not survive correction
+                                                      title="This category is tested against a shifted-calendar null, but no test produced a value for this finding -- too short a trading span, or too few eligible trades. Untested, not passed, and not failed either.">
+                                                    not tested in this run
                                                 </span>
                                             </template>
                                             <template x-if="!anomaly.has_null_model">
                                                 <span class="px-2 py-0.5 rounded text-[11px] bg-gray-100 text-gray-700"
                                                       title="No null model exists for this category -- it measures a magnitude, not a coincidence in timing. A missing q here means untested, not passed.">
-                                                    not tested
+                                                    no null model
                                                 </span>
                                             </template>
                                             <template x-if="anomaly.percentile_rank !== null && anomaly.percentile_rank !== undefined">

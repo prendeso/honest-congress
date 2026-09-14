@@ -241,11 +241,11 @@
                                                 </template>
                                                 <template x-if="(anomaly.q_value === null || anomaly.q_value === undefined) && anomaly.has_null_model">
                                                     <span class="text-[11px] px-2 py-0.5 rounded bg-amber-100 text-amber-900"
-                                                          title="Tested against a shifted-calendar null and did not survive at the run's false-discovery rate.">did not survive</span>
+                                                          title="This category is tested against a shifted-calendar null, but no test produced a value for this finding -- too short a trading span, or too few eligible trades. Untested, not passed, and not failed either.">not tested in this run</span>
                                                 </template>
                                                 <template x-if="!anomaly.has_null_model">
                                                     <span class="text-[11px] px-2 py-0.5 rounded bg-gray-100 text-gray-700"
-                                                          title="No null model exists for this category -- it measures a magnitude, not a coincidence in timing. Untested, not passed.">not tested</span>
+                                                          title="No null model exists for this category -- it measures a magnitude, not a coincidence in timing. Untested, not passed.">no null model</span>
                                                 </template>
                                                 <span class="text-xs px-2 py-0.5 rounded" :class="{
                                                     'bg-red-100 text-red-800': anomaly.severity === 'high',

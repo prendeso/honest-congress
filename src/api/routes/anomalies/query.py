@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, contains_eager
 
-from src.analysis.catalog import as_dicts
+from src.analysis.catalog import as_dicts, type_has_null_model
 from src.api.auth import require_admin
 from src.api.routes.anomalies._shared import (
     AnomalyListResponse,
@@ -148,7 +148,7 @@ async def list_anomalies(
                 percentile_rank=a.percentile_rank,
                 p_value=a.p_value,
                 q_value=a.q_value,
-                has_null_model=a.q_value is not None,
+                has_null_model=type_has_null_model(a.anomaly_type),
             )
             for a, filing_year in rows
         ],
@@ -247,7 +247,7 @@ async def get_anomaly(
         percentile_rank=anomaly.percentile_rank,
         p_value=anomaly.p_value,
         q_value=anomaly.q_value,
-        has_null_model=anomaly.q_value is not None,
+        has_null_model=type_has_null_model(anomaly.anomaly_type),
     )
 
 

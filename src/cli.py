@@ -458,6 +458,14 @@ def cmd_ingest_contracts(args):
     # the company through its own recipient hierarchy, which the SEC register
     # cannot confirm -- a known gap in coverage, and the numbers say how big.
     print(f"  Rejected as a different company: {result['rejected_wrong_company']}")
+    if result.get("connection_losses"):
+        lost = result["companies_lost_to_the_database"]
+        print(
+            f"  Database connection dropped: {result['connection_losses']} time(s)"
+            f"  - {len(lost)} company/companies lost to it"
+        )
+        for ticker in lost[:10]:
+            print(f"      {ticker}")
     top = sorted(result["rejected_names"].items(), key=lambda kv: -kv[1])[:10]
     for name, count in top:
         print(f"      {count:>5}  {name}")
@@ -497,6 +505,14 @@ def cmd_ingest_donations(args):
         f"  Receipts to committees with no sitting member: {result['skipped_unmapped_recipient']}"
     )
     print(f"  FEC requests used: {result['requests_made']}")
+    if result.get("connection_losses"):
+        lost = result["pacs_lost_to_the_database"]
+        print(
+            f"  Database connection dropped: {result['connection_losses']} time(s)"
+            f"  - {len(lost)} PAC(s) lost to it"
+        )
+        for ticker in lost[:10]:
+            print(f"      {ticker}")
     if result["stopped_early"]:
         print(
             "\n  Stopped at the request cap. Nothing is lost - rerun the same "
@@ -654,6 +670,14 @@ def cmd_ingest_lobbying(args):
         "  - the API matches client names by substring"
     )
     print(f"  LDA requests used: {result['requests_made']}")
+    if result.get("connection_losses"):
+        lost = result["companies_lost_to_the_database"]
+        print(
+            f"  Database connection dropped: {result['connection_losses']} time(s)"
+            f"  - {len(lost)} company/companies lost to it"
+        )
+        for ticker in lost[:10]:
+            print(f"      {ticker}")
 
 
 def cmd_compliance(args):

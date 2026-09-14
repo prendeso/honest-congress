@@ -118,3 +118,85 @@ class TestPersistDeduplication:
         inserted = persist_anomalies(db_session, [first, second])
 
         assert inserted == 2
+
+
+class TestPersistSurvivesADroppedConnection:
+    """The analysis step held a connection for 92 minutes in the run of 2026-09-14.
+
+    A drop at the end of a detector would throw away everything it found and
+    take the step with it -- a detector that took a quarter of an hour to
+    produce its findings, lost while writing them.
+
+    No cache to rebuild here, which is what makes the retry simple: `seen` is
+    local to each attempt and rebuilt by re-running it, and the rows the
+    rollback expunged are re-created the same way.
+    """
+
+    def _dropped(self):
+        from sqlalchemy.exc import OperationalError
+
+        exc = OperationalError("COMMIT", {}, Exception("SSL error: unexpected eof"))
+        exc.connection_invalidated = True
+        return exc
+
+    def _finding(self, member, title):
+        return {
+            "member_id": member.id,
+            "anomaly_type": "late_filing",
+            "severity": "MEDIUM",
+            "title": title,
+            "description": "test",
+        }
+
+    def test_the_findings_are_stored_after_one_drop(self, db_session, member):
+        from unittest.mock import patch
+
+        from src.analysis import persist_anomalies
+        from src.db.models import Anomaly
+
+        real = db_session.commit
+        calls = {"n": 0}
+
+        def commit():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise self._dropped()
+            return real()
+
+        with patch.object(db_session, "commit", side_effect=commit):
+            inserted = persist_anomalies(
+                db_session, [self._finding(member, "late: A"), self._finding(member, "late: B")]
+            )
+
+        assert inserted == 2
+        assert db_session.query(Anomaly).count() == 2
+
+    def test_repeated_drops_lose_the_batch_without_killing_the_run(self, db_session, member):
+        """Reported as zero rather than raised: the next analysis re-derives them."""
+        from unittest.mock import patch
+
+        from src.analysis import persist_anomalies
+        from src.db.models import Anomaly
+
+        def always_dropped():
+            raise self._dropped()
+
+        with patch.object(db_session, "commit", side_effect=always_dropped):
+            inserted = persist_anomalies(db_session, [self._finding(member, "late: C")])
+
+        assert inserted == 0
+        assert db_session.query(Anomaly).count() == 0
+
+    def test_a_real_database_error_still_raises(self, db_session, member):
+        from unittest.mock import patch
+
+        from sqlalchemy.exc import OperationalError
+
+        from src.analysis import persist_anomalies
+
+        def broken():
+            raise OperationalError("COMMIT", {}, Exception("syntax error"))
+
+        with patch.object(db_session, "commit", side_effect=broken):
+            with pytest.raises(OperationalError):
+                persist_anomalies(db_session, [self._finding(member, "late: D")])

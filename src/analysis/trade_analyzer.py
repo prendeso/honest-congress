@@ -7,12 +7,19 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from src.analysis.anomaly_key import find_existing, identity_of
+from src.analysis.anomaly_key import identity_of, stored_by_identity
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
 from src.db.models import Anomaly, Disclosure, Member, Transaction
 
 logger = logging.getLogger(__name__)
+
+# How often each analyzer says where it has got to. Both of these ran in
+# complete silence: the gap between `analyze` starting and the first detector
+# logging anything was 10m42s in the production run of 2026-09-14, and nothing
+# in the log said which of the two it was, or whether either was moving.
+PROGRESS_EVERY_MEMBERS = 100
+
 _settings = get_settings()
 
 # Sector keywords for classification
@@ -50,6 +57,10 @@ class TradeAnalyzer:
         self.min_trades_for_concentration = min_trades_for_concentration
         # Loaded lazily on first use, then reused across every member.
         self._index: SectorIndex | None = None
+        # Set once `analyze_all_members` has reconciled every large trade in a
+        # single pass, so the per-member call does not repeat it. Per analyzer
+        # instance, like `_index`, because that is the scope of one run.
+        self._large_trades_synced = False
         self.concentration_threshold_percent = concentration_threshold_percent
         self.frequency_threshold_per_month = frequency_threshold_per_month
         # The "late filing" detector previously fired on every PTR more than
@@ -81,29 +92,47 @@ class TradeAnalyzer:
         return {"title": title, "description": description}
 
     def _sync_large_trade_anomalies(self, db: Session, member_id: int | None = None) -> None:
-        """Backfill transaction_id and sync title/description for large trades."""
+        """Backfill transaction_id and sync title/description for large trades.
+
+        Three round trips per large trade, and it ran over every one of them
+        twice. `analyze_all_members` calls this once unfiltered and then
+        `analyze_member` calls it again for each member, so on the nightly path
+        every large trade was reconciled, then reconciled again.
+
+        The queries are now three for the whole call rather than three per row:
+
+        * the driving query already joins `Disclosure`, so it selects it instead
+          of fetching the same row back one at a time;
+        * the `large_trade` findings are read once and indexed twice, by
+          `transaction_id` and by the `(member, disclosure, title)` fallback the
+          backfill needs, rather than queried per trade.
+        """
         large_trade_threshold = Decimal("1000000")
         query = (
-            db.query(Transaction)
-            .join(Disclosure)
+            db.query(Transaction, Disclosure)
+            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
             .filter(Transaction.amount_min > large_trade_threshold)
         )
         if member_id:
             query = query.filter(Disclosure.member_id == member_id)
 
-        for txn in query.all():
-            disclosure = db.query(Disclosure).filter(Disclosure.id == txn.disclosure_id).first()
-            if not disclosure:
-                continue
+        rows = query.all()
+        if not rows:
+            return
 
+        # Both indexes come from one read. The second exists because a finding
+        # written before `transaction_id` was populated can only be recognised
+        # by its title, which is exactly what this function is here to repair.
+        findings = db.query(Anomaly).filter(Anomaly.anomaly_type == "large_trade").all()
+        by_transaction = {a.transaction_id: a for a in findings if a.transaction_id is not None}
+        by_title = {
+            (a.member_id, a.disclosure_id, a.title): a for a in findings if a.transaction_id is None
+        }
+
+        for txn, disclosure in rows:
             text = self._build_large_trade_text(txn)
 
-            existing = (
-                db.query(Anomaly)
-                .filter(Anomaly.anomaly_type == "large_trade", Anomaly.transaction_id == txn.id)
-                .first()
-            )
-
+            existing = by_transaction.get(txn.id)
             if existing:
                 if (
                     existing.title != text["title"]
@@ -115,34 +144,36 @@ class TradeAnalyzer:
                     existing.disclosure_id = disclosure.id
                 continue
 
-            existing_no_txn = (
-                db.query(Anomaly)
-                .filter(
-                    Anomaly.anomaly_type == "large_trade",
-                    Anomaly.member_id == disclosure.member_id,
-                    Anomaly.disclosure_id == disclosure.id,
-                    Anomaly.title == text["title"],
-                )
-                .first()
-            )
+            existing_no_txn = by_title.get((disclosure.member_id, disclosure.id, text["title"]))
 
             if existing_no_txn:
                 existing_no_txn.transaction_id = txn.id
                 if existing_no_txn.description != text["description"]:
                     existing_no_txn.description = text["description"]
+                # It has an id now, so a later row in this same pass finds it
+                # where it will look rather than matching the title again.
+                by_transaction[txn.id] = existing_no_txn
 
-    def analyze_member(self, db: Session, member_id: int) -> List[Dict[str, Any]]:
+    def analyze_member(
+        self, db: Session, member_id: int, member: Member | None = None
+    ) -> List[Dict[str, Any]]:
         """
         Analyze a single member for trade anomalies.
 
         Args:
             db: Database session
             member_id: Member ID to analyze
+            member: the already-loaded row, when the caller has it
 
         Returns:
             List of detected anomalies
         """
-        member = db.query(Member).filter(Member.id == member_id).first()
+        # `analyze_all_members` is holding this row already, having just
+        # selected it; fetching it back one member at a time is a round trip per
+        # member to learn what the caller could have said. Still optional, so the
+        # single-member entry point keeps working unchanged.
+        if member is None:
+            member = db.query(Member).filter(Member.id == member_id).first()
         if not member:
             return []
 
@@ -160,7 +191,11 @@ class TradeAnalyzer:
         if not transactions:
             return []
 
-        self._sync_large_trade_anomalies(db, member_id=member_id)
+        # Skipped when `analyze_all_members` has already reconciled every large
+        # trade in one pass. Not deleted: `analyze_member` is also the public
+        # `--member-id` entry point, and there it is the only pass there is.
+        if not self._large_trades_synced:
+            self._sync_large_trade_anomalies(db, member_id=member_id)
 
         anomalies.extend(self._check_late_filings(db, member_id, member))
         anomalies.extend(
@@ -187,8 +222,17 @@ class TradeAnalyzer:
         anomalies = []
         min_amount = Decimal(str(self.late_filing_min_amount_usd))
 
-        ptr_disclosures = (
-            db.query(Disclosure)
+        # One query, not one per filing. This read the member's PTRs and then
+        # asked for each one's transactions in turn, so a member with forty
+        # filings was forty-one round trips -- and PTRs are the most numerous
+        # filing type there is.
+        #
+        # The join is equivalent rather than merely similar: a filing with no
+        # transactions contributed nothing to the loop before, and does not
+        # appear in the join now.
+        rows = (
+            db.query(Transaction, Disclosure)
+            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
             .filter(
                 Disclosure.member_id == member_id,
                 Disclosure.is_ptr == True,
@@ -197,55 +241,50 @@ class TradeAnalyzer:
             .all()
         )
 
-        for disclosure in ptr_disclosures:
-            transactions = (
-                db.query(Transaction).filter(Transaction.disclosure_id == disclosure.id).all()
+        for txn, disclosure in rows:
+            if not (txn.transaction_date and disclosure.filing_date):
+                continue
+
+            days_to_file = (disclosure.filing_date - txn.transaction_date).days
+            if days_to_file <= self.late_filing_min_days:
+                continue
+
+            # Skip small trades — late filings on de minimis amounts are
+            # mostly clerical and we don't want to flood the table.
+            txn_amount = txn.amount_max or txn.amount_min
+            if txn_amount is None or txn_amount < min_amount:
+                continue
+
+            days_late = days_to_file - self.ptr_deadline_days
+            if days_late <= 30:
+                severity = "low"
+                late_range = "moderately late (1-4 weeks)"
+            elif days_late <= 90:
+                severity = "medium"
+                late_range = "significantly late (1-3 months)"
+            else:
+                severity = "high"
+                late_range = "severely late (over 3 months)"
+
+            anomalies.append(
+                {
+                    "member_id": member_id,
+                    "disclosure_id": disclosure.id,
+                    "transaction_id": txn.id,
+                    "anomaly_type": "late_filing",
+                    "severity": severity,
+                    "title": f"Late PTR filing: {late_range}",
+                    "description": (
+                        f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
+                        f"was filed {late_range} on "
+                        f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
+                        f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
+                        f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
+                    ),
+                    "computed_value": Decimal(str(days_to_file)),
+                    "threshold_value": Decimal(str(self.ptr_deadline_days)),
+                }
             )
-
-            for txn in transactions:
-                if not (txn.transaction_date and disclosure.filing_date):
-                    continue
-
-                days_to_file = (disclosure.filing_date - txn.transaction_date).days
-                if days_to_file <= self.late_filing_min_days:
-                    continue
-
-                # Skip small trades — late filings on de minimis amounts are
-                # mostly clerical and we don't want to flood the table.
-                txn_amount = txn.amount_max or txn.amount_min
-                if txn_amount is None or txn_amount < min_amount:
-                    continue
-
-                days_late = days_to_file - self.ptr_deadline_days
-                if days_late <= 30:
-                    severity = "low"
-                    late_range = "moderately late (1-4 weeks)"
-                elif days_late <= 90:
-                    severity = "medium"
-                    late_range = "significantly late (1-3 months)"
-                else:
-                    severity = "high"
-                    late_range = "severely late (over 3 months)"
-
-                anomalies.append(
-                    {
-                        "member_id": member_id,
-                        "disclosure_id": disclosure.id,
-                        "transaction_id": txn.id,
-                        "anomaly_type": "late_filing",
-                        "severity": severity,
-                        "title": f"Late PTR filing: {late_range}",
-                        "description": (
-                            f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
-                            f"was filed {late_range} on "
-                            f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
-                            f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
-                            f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
-                        ),
-                        "computed_value": Decimal(str(days_to_file)),
-                        "threshold_value": Decimal(str(self.ptr_deadline_days)),
-                    }
-                )
 
         return anomalies
 
@@ -465,16 +504,27 @@ class TradeAnalyzer:
         member_ids = [row[0] for row in traded.distinct()]
         members = db.query(Member).filter(Member.id.in_(member_ids)).all() if member_ids else []
 
-        all_anomalies = []
+        all_anomalies: List[Dict[str, Any]] = []
         members_analyzed = 0
         members_with_anomalies = 0
         seen: set[tuple] = set()
+        # See `stored_by_identity`. The rows matter here, not just the keys: a
+        # trade-level finding is restated in place below rather than duplicated.
+        stored = stored_by_identity(db)
 
         self._sync_large_trade_anomalies(db)
+        self._large_trades_synced = True
 
         for member in members:
-            anomalies = self.analyze_member(db, member.id)
+            anomalies = self.analyze_member(db, member.id, member=member)
             members_analyzed += 1
+            if members_analyzed % PROGRESS_EVERY_MEMBERS == 0:
+                logger.info(
+                    "Trade analysis: %d/%d members, %d findings so far",
+                    members_analyzed,
+                    len(members),
+                    len(all_anomalies),
+                )
 
             if anomalies:
                 members_with_anomalies += 1
@@ -494,7 +544,7 @@ class TradeAnalyzer:
                     if key is None or key in seen:
                         continue
 
-                    existing = find_existing(db, key)
+                    existing = stored.get(key)
                     if existing is not None:
                         # A trade-level finding is allowed to be restated: the
                         # trade is the same, so the row is updated in place

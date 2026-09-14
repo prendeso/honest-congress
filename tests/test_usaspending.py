@@ -629,3 +629,108 @@ class TestCostDoesNotTrackTheNumberOfAwards:
                 )
         selects = [s for s in statements if s.lstrip().upper().startswith("SELECT")]
         assert len(selects) == 1, selects
+
+
+class TestADroppedDatabaseConnectionDoesNotEndTheRun:
+    """This sweep held one transaction open for 61 minutes in the run that failed.
+
+    Committing only at the end meant a connection dropped at any point took
+    every company with it and left nothing to resume from. It is now committed
+    per company, and a drop costs one.
+
+    The cache is the subtle half. `seen` holds the award-action keys already
+    stored, and is added to as the loop goes. A rollback undoes rows it says
+    exist, so without a rebuild the retry SKIPS re-importing every one of them --
+    the opposite failure to the duplicate one `seen` exists to prevent, and
+    silent. `test_the_rows_lost_to_the_rollback_are_re_imported` is that case.
+    """
+
+    def _awards(self, n: int):
+        return [
+            {
+                "Award ID": f"W912{i:04d}",
+                "Recipient Name": "GENERAL DYNAMICS CORP",
+                "Transaction Amount": 1_000_000 + i,
+                "Action Date": "2024-03-01",
+                "Awarding Agency": "Department of Defense",
+                "Transaction Description": "TEST",
+                "Mod": str(i),
+            }
+            for i in range(n)
+        ]
+
+    def _dropped(self):
+        from sqlalchemy.exc import OperationalError
+
+        exc = OperationalError("COMMIT", {}, Exception("SSL error: unexpected eof"))
+        exc.connection_invalidated = True
+        return exc
+
+    def _flaky_commit(self, db_session, fail_on):
+        real = db_session.commit
+        calls = {"n": 0}
+
+        def commit():
+            calls["n"] += 1
+            if calls["n"] in fail_on:
+                raise self._dropped()
+            return real()
+
+        return commit, calls
+
+    def test_the_sweep_continues_past_a_dropped_connection(self, db_session, resolver):
+        commit, _ = self._flaky_commit(db_session, fail_on={1})
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=self._awards(3)):
+            with patch.object(db_session, "commit", side_effect=commit):
+                result = ingest_government_contracts(
+                    db_session, "2024-01-01", "2024-12-31", tickers=["GD"], resolver=resolver
+                )
+
+        assert result["connection_losses"] == 1
+        assert result["companies_lost_to_the_database"] == []
+        assert db_session.query(GovernmentContract).count() == 3
+
+    def test_the_rows_lost_to_the_rollback_are_re_imported(self, db_session, resolver):
+        """The test that fails if `seen` is not rebuilt.
+
+        The first attempt adds three rows and puts their keys in `seen`. The
+        commit drops the connection and the rollback removes them. If `seen`
+        still claims they exist, the retry counts all three as duplicates and
+        stores nothing -- a silent, permanent loss.
+        """
+        commit, _ = self._flaky_commit(db_session, fail_on={1})
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=self._awards(3)):
+            with patch.object(db_session, "commit", side_effect=commit):
+                result = ingest_government_contracts(
+                    db_session, "2024-01-01", "2024-12-31", tickers=["GD"], resolver=resolver
+                )
+
+        assert db_session.query(GovernmentContract).count() == 3
+        assert result["imported"] == 3
+        # And not counted twice by the attempt that was rolled back.
+        assert result["duplicates"] == 0
+
+    def test_a_company_lost_to_repeated_drops_is_named(self, db_session, resolver):
+        commit, _ = self._flaky_commit(db_session, fail_on={1, 2, 3})
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=self._awards(2)):
+            with patch.object(db_session, "commit", side_effect=commit):
+                result = ingest_government_contracts(
+                    db_session, "2024-01-01", "2024-12-31", tickers=["GD"], resolver=resolver
+                )
+
+        assert result["companies_lost_to_the_database"] == ["GD"]
+        assert db_session.query(GovernmentContract).count() == 0
+
+    def test_a_real_database_error_still_raises(self, db_session, resolver):
+        """Retrying a constraint violation would turn a loud bug into a silent one."""
+        from sqlalchemy.exc import OperationalError
+
+        def broken():
+            raise OperationalError("COMMIT", {}, Exception("syntax error"))
+
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=self._awards(1)):
+            with patch.object(db_session, "commit", side_effect=broken):
+                with pytest.raises(OperationalError):
+                    ingest_government_contracts(
+                        db_session, "2024-01-01", "2024-12-31", tickers=["GD"], resolver=resolver
+                    )

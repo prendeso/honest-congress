@@ -25,10 +25,11 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
+from sqlalchemy.exc import OperationalError
 
 from src.db.models import LobbyingDisclosure
 from src.ingestion.lda import (
@@ -383,3 +384,81 @@ class TestCostDoesNotTrackTheNumberOfFilings:
         assert result["imported"] == 0
         assert result["duplicates"] == 12
         assert db_session.query(LobbyingDisclosure).count() == 12
+
+
+class TestADroppedDatabaseConnectionDoesNotEndTheRun:
+    """This sweep held one transaction open across every company it asked about.
+
+    Committed only at the end, a connection dropped anywhere in a 22-minute run
+    took every filing with it. It is now committed per company, and the filings
+    are materialised first so a retry replays from memory rather than paging the
+    LDA again.
+
+    `seen` is the part that needs care: it holds the filing uuids already
+    stored, and a rollback undoes rows it claims exist. Without a rebuild the
+    retry counts them all as duplicates and stores nothing.
+    """
+
+    def _dropped(self) -> OperationalError:
+        exc = OperationalError("COMMIT", {}, Exception("SSL error: unexpected eof"))
+        exc.connection_invalidated = True
+        return exc
+
+    def _flaky_commit(self, db_session, fail_on):
+        real = db_session.commit
+
+        calls = {"n": 0}
+
+        def commit():
+            calls["n"] += 1
+            if calls["n"] in fail_on:
+                raise self._dropped()
+            return real()
+
+        return commit
+
+    def test_the_sweep_continues_and_the_filings_are_stored(self, db_session, resolver, northrop):
+        client = _client([northrop])
+        with patch.object(db_session, "commit", side_effect=self._flaky_commit(db_session, {1})):
+            result = ingest_lobbying_disclosures(
+                db_session, 2024, tickers=["NOC"], resolver=resolver, client=client
+            )
+
+        assert result["connection_losses"] == 1
+        assert result["companies_lost_to_the_database"] == []
+        assert db_session.query(LobbyingDisclosure).count() == result["imported"] > 0
+
+    def test_the_rows_lost_to_the_rollback_are_re_imported(self, db_session, resolver, northrop):
+        """Fails if `seen` is not rebuilt: the retry would skip every row."""
+        client = _client([northrop])
+        with patch.object(db_session, "commit", side_effect=self._flaky_commit(db_session, {1})):
+            result = ingest_lobbying_disclosures(
+                db_session, 2024, tickers=["NOC"], resolver=resolver, client=client
+            )
+
+        assert db_session.query(LobbyingDisclosure).count() > 0
+        assert result["duplicates"] == 0
+
+    def test_a_company_lost_to_repeated_drops_is_named(self, db_session, resolver, northrop):
+        client = _client([northrop])
+        with patch.object(
+            db_session, "commit", side_effect=self._flaky_commit(db_session, {1, 2, 3})
+        ):
+            result = ingest_lobbying_disclosures(
+                db_session, 2024, tickers=["NOC"], resolver=resolver, client=client
+            )
+
+        assert result["companies_lost_to_the_database"] == ["NOC"]
+        assert db_session.query(LobbyingDisclosure).count() == 0
+
+    def test_a_real_database_error_still_raises(self, db_session, resolver, northrop):
+        client = _client([northrop])
+
+        def broken():
+            raise OperationalError("COMMIT", {}, Exception("syntax error"))
+
+        with patch.object(db_session, "commit", side_effect=broken):
+            with pytest.raises(OperationalError):
+                ingest_lobbying_disclosures(
+                    db_session, 2024, tickers=["NOC"], resolver=resolver, client=client
+                )

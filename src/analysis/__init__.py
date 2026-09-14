@@ -9,7 +9,7 @@ from src.analysis.advanced_anomaly_detector import (
     AdvancedAnomalyDetector,
     run_advanced_anomaly_detection,
 )
-from src.analysis.anomaly_key import find_existing, identity_of
+from src.analysis.anomaly_key import identity_of, stored_by_identity
 from src.analysis.clustering import (
     detect_cross_member_clusters,
     run_cluster_detection,
@@ -162,7 +162,38 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
 
     Deduplicates by (member_id, anomaly_type, title). Commits at the end.
     Returns the number of newly inserted rows.
+
+    Retried once if the database connection dies on that commit. The analysis
+    step held a connection for 92 minutes in the run of 2026-09-14, and a drop
+    at the end of a detector would otherwise throw away everything it found and
+    take the step with it -- a detector that took a quarter of an hour to
+    produce its findings, lost to a dropped packet while writing them.
+
+    There is no cache to rebuild here, which is what makes the retry simple:
+    `seen` is local to each attempt and rebuilt by re-running, and the pending
+    rows the rollback expunged are re-created the same way. The existence check
+    reads committed state, so it is correct on the second pass without help.
     """
+    from src.db.resilience import CONNECTION_LOSS_RETRIES, commit_or_recover
+
+    for _attempt in range(1 + CONNECTION_LOSS_RETRIES):
+        inserted = _add_anomalies(db, anomalies)
+        # Nothing new to write, so nothing to lose: the old shape skipped the
+        # commit in this case and there is no reason to start issuing one.
+        if not inserted:
+            return 0
+        if commit_or_recover(db, rebuild_caches=lambda: None, unit="anomalies"):
+            return inserted
+    logger.warning(
+        "The database connection dropped on every attempt to store %d finding(s); "
+        "they are not saved, and the next analysis run re-derives them",
+        len(anomalies),
+    )
+    return 0
+
+
+def _add_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
+    """Add the rows, without committing. Safe to call again after a rollback."""
     from src.config import get_settings
 
     disabled = get_settings().disabled_anomaly_types_set
@@ -175,6 +206,10 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
     # autoflush=False) -- so track them here too, or a batch containing the same
     # anomaly twice fails the whole commit.
     seen: set[tuple] = set()
+    # One query for everything already stored, rather than one per candidate.
+    # `seen` is still needed for the in-batch case: rows added below are not
+    # committed, and autoflush=False means a query would not see them either.
+    stored = stored_by_identity(db)
     for a in anomalies:
         member_id = a.get("member_id")
         anomaly_type = a.get("anomaly_type")
@@ -196,7 +231,7 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
         if key is None or key in seen:
             continue
 
-        if find_existing(db, key) is not None:
+        if key in stored:
             continue
 
         seen.add(key)
@@ -223,8 +258,6 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
             ", ".join(sorted(disabled)),
         )
 
-    if inserted:
-        db.commit()
     return inserted
 
 

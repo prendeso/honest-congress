@@ -414,3 +414,143 @@ class TestSenatorsAreMatchedDespiteNameDrift:
         )
 
         assert synced == 0
+
+
+class TestSittingSenatorsWinAgainstAHistoricalRoster:
+    """A surname is nowhere near unique once the roster holds all of history.
+
+    Measured against eFD's own filers for 2024-2025: 33 of 105 surnames matched
+    more than one senator in the roster -- "Smith" 19, "Scott" 7, "King" 6 --
+    and those 33 accounted for 156 filings the ambiguity guard then refused.
+    Correctly: it cannot know which Smith. And uselessly: a filing from 2024 is
+    from a senator sitting in 2024.
+
+    Restricting to in-office first resolves 102 of the 105 to exactly one
+    person, covering 462 of the 490 filings.
+    """
+
+    def _senator(self, db, first, last, bioguide, in_office=True):
+        from src.db.models import Chamber, Member, Party
+
+        member = Member(
+            bioguide_id=bioguide,
+            first_name=first,
+            last_name=last,
+            chamber=Chamber.SENATE,
+            party=Party.REPUBLICAN,
+            state="FL",
+            in_office=in_office,
+        )
+        db.add(member)
+        db.commit()
+        return member
+
+    def _entry(self, first, last, doc_id):
+        from datetime import datetime
+
+        return {
+            "first_name": first,
+            "last_name": last,
+            "filing_year": 2025,
+            "filing_type": "PTR",
+            "filing_date": datetime(2025, 5, 1),
+            "document_id": doc_id,
+            "document_url": f"https://efdsearch.senate.gov/search/view/ptr/{doc_id}/",
+            "chamber": "senate",
+            "is_ptr": True,
+        }
+
+    def _sync(self, db, tmp_path, entries):
+        from src.ingestion.orchestrator import IngestionOrchestrator
+
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        orch.senate.search_all_disclosures = lambda year: entries  # type: ignore[method-assign]
+        return orch.sync_senate_disclosures(db, 2025)
+
+    def test_a_historical_namesake_does_not_block_a_sitting_senator(self, db_session, tmp_path):
+        """The real case: 19 Smiths in the roster, one of them in office."""
+        for i, first in enumerate(["Benjamin", "Delazon", "Ellison", "Hoke"]):
+            self._senator(db_session, first, "Smith", f"HIST{i:04d}", in_office=False)
+        self._senator(db_session, "Tina", "Smith", "SITTING01", in_office=True)
+
+        synced = self._sync(db_session, tmp_path, [self._entry("Tina", "Smith", "SMITH-1")])
+
+        assert synced == 1, "a sitting senator lost to four dead namesakes"
+
+    def test_it_works_even_when_the_first_names_share_nothing(self, db_session, tmp_path):
+        """'A. Mitchell McConnell, Jr.' against a roster entry of 'Mitch'.
+
+        No prefix and no shared initial, so first-name narrowing cannot save
+        this one — the in-office restriction is what does.
+        """
+        self._senator(db_session, "William", "McConnell", "HISTMC01", in_office=False)
+        self._senator(db_session, "Mitch", "McConnell", "SITTMC01", in_office=True)
+
+        synced = self._sync(
+            db_session, tmp_path, [self._entry("A. Mitchell", "McConnell, Jr.", "MCC-1")]
+        )
+
+        assert synced == 1
+
+    def test_two_sitting_senators_sharing_a_surname_split_on_first_name(self, db_session, tmp_path):
+        """Rick and Tim Scott: the one pair the in-office filter cannot separate."""
+        self._senator(db_session, "Rick", "Scott", "SCOTT01", in_office=True)
+        self._senator(db_session, "Tim", "Scott", "SCOTT02", in_office=True)
+
+        assert self._sync(db_session, tmp_path, [self._entry("Rick", "Scott", "SC-1")]) == 1
+        assert self._sync(db_session, tmp_path, [self._entry("Tim", "Scott", "SC-2")]) == 1
+
+    def test_a_senator_who_has_left_office_still_matches(self, db_session, tmp_path):
+        """The fallback. Filings persist after a term ends, and restricting to
+        sitting senators must not become a new way to lose them."""
+        self._senator(db_session, "Former", "Retiree", "GONE0001", in_office=False)
+
+        synced = self._sync(db_session, tmp_path, [self._entry("Former", "Retiree", "RET-1")])
+
+        assert synced == 1
+
+    def test_an_accent_in_the_roster_still_matches(self, db_session, tmp_path):
+        """eFD shouts ASCII: 'BEN RAY' 'LUJAN'. The roster carries 'Lujan' with
+        an acute accent. This was the one filer of 105 whose surname matched
+        nothing at all."""
+        self._senator(db_session, "Ben Ray", "Luján", "LUJAN001", in_office=True)
+
+        synced = self._sync(db_session, tmp_path, [self._entry("BEN RAY", "LUJAN", "LUJ-1")])
+
+        assert synced == 1, "an accented surname was unmatchable from eFD's ASCII"
+
+    def test_it_still_refuses_when_it_genuinely_cannot_tell(self, db_session, tmp_path):
+        """Unchanged, and the point of the whole design: two sitting senators,
+        no usable first name, so the filing is not stored rather than pinned on
+        the wrong person."""
+        self._senator(db_session, "Rick", "Scott", "SCOTT03", in_office=True)
+        self._senator(db_session, "Tim", "Scott", "SCOTT04", in_office=True)
+
+        synced = self._sync(db_session, tmp_path, [self._entry("", "Scott", "SC-3")])
+
+        assert synced == 0
+
+    def test_the_roster_is_read_once_not_per_filing(self, db_session, tmp_path):
+        """A query per filing is how the leaderboards got slow."""
+        from sqlalchemy import event
+
+        from src.db import engine
+
+        self._senator(db_session, "Solo", "Senator", "SOLO0001", in_office=True)
+        entries = [self._entry("Solo", "Senator", f"MANY-{i}") for i in range(25)]
+
+        seen: list[str] = []
+
+        def record(conn, cursor, statement, params, context, executemany):
+            if "FROM members" in statement:
+                seen.append(statement)
+
+        event.listen(engine, "before_cursor_execute", record)
+        try:
+            self._sync(db_session, tmp_path, entries)
+        finally:
+            event.remove(engine, "before_cursor_execute", record)
+
+        assert len(seen) <= 3, (
+            f"{len(seen)} member queries for 25 filings — the roster is being re-read per row"
+        )

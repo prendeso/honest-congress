@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -554,3 +555,100 @@ class TestSittingSenatorsWinAgainstAHistoricalRoster:
         assert len(seen) <= 3, (
             f"{len(seen)} member queries for 25 filings — the roster is being re-read per row"
         )
+
+
+class TestTheDownloadNeedsTheAgreementFirst:
+    """Three rebuilds produced no Senate finding because of this.
+
+    eFD serves no document to a session that has not POSTed the prohibition
+    agreement -- it answers **200** with the agreement page instead. Every other
+    method on this client reaches the agreement through `_get_csrf_token`;
+    `download_disclosure` did not.
+
+    `cli parse` runs in a different process from `cli ingest` and never
+    searches, so its session was ALWAYS unaccepted. Measured against production:
+    19 of 20 Senate filings stored `parsed=True`, `has_text_layer=True`,
+    confidence 0.0, zero transactions, and the same 12,189-byte file every time
+    -- one copy of the agreement page per filing. `parse_senate_html` then
+    reported "no transaction table", which is true of the agreement page and
+    says nothing at all about the filing.
+
+    With the session accepted, the same eight filings through the same
+    orchestrator path yield 39 transactions.
+    """
+
+    def _response(self, *, url, body, content_type="text/html"):
+        response = MagicMock()
+        response.url = url
+        response.text = body
+        response.content = body.encode()
+        response.headers = {"Content-Type": content_type}
+        response.raise_for_status.return_value = None
+        return response
+
+    def test_the_agreement_is_accepted_before_the_document_is_fetched(self, tmp_path):
+        ingester = SenateIngester()
+        ingester._session_initialized = False
+        with patch.object(ingester, "_init_session", return_value=True) as init:
+            ingester.session = MagicMock()
+            ingester.session.get.return_value = self._response(
+                url="https://efdsearch.senate.gov/search/view/ptr/abc/",
+                body="<html><table><th>Amount</th><th>Transaction Date</th></table></html>",
+            )
+            ok = ingester.download_disclosure(
+                "https://efdsearch.senate.gov/search/view/ptr/abc/",
+                str(tmp_path / "f.pdf"),
+            )
+
+        assert ok is True
+        init.assert_called_once()
+
+    def test_the_agreement_page_is_not_saved_as_a_filing(self, tmp_path):
+        ingester = SenateIngester()
+        with patch.object(ingester, "_init_session", return_value=True):
+            ingester.session = MagicMock()
+            # What eFD actually returns to an unaccepted session: a 200, at the
+            # search home, carrying the agreement wording.
+            ingester.session.get.return_value = self._response(
+                url="https://efdsearch.senate.gov/search/home",
+                body=(
+                    "<html>You must agree to the prohibitions on obtaining and use "
+                    "of financial disclosure reports</html>"
+                ),
+            )
+            ok = ingester.download_disclosure(
+                "https://efdsearch.senate.gov/search/view/ptr/abc/",
+                str(tmp_path / "f.pdf"),
+            )
+
+        assert ok is False, "the agreement page was accepted as a filing"
+        assert not (tmp_path / "f.html").exists()
+        assert not (tmp_path / "f.pdf").exists()
+
+    def test_a_session_that_cannot_agree_downloads_nothing(self, tmp_path):
+        ingester = SenateIngester()
+        with patch.object(ingester, "_init_session", return_value=False):
+            ingester.session = MagicMock()
+            ok = ingester.download_disclosure(
+                "https://efdsearch.senate.gov/search/view/ptr/abc/",
+                str(tmp_path / "f.pdf"),
+            )
+
+        assert ok is False
+        ingester.session.get.assert_not_called()
+
+    def test_a_real_filing_still_saves_as_html(self, tmp_path):
+        ingester = SenateIngester()
+        with patch.object(ingester, "_init_session", return_value=True):
+            ingester.session = MagicMock()
+            ingester.session.get.return_value = self._response(
+                url="https://efdsearch.senate.gov/search/view/ptr/abc/",
+                body="<html><table><th>Amount</th><th>Transaction Date</th></table></html>",
+            )
+            ok = ingester.download_disclosure(
+                "https://efdsearch.senate.gov/search/view/ptr/abc/",
+                str(tmp_path / "f.pdf"),
+            )
+
+        assert ok is True
+        assert (tmp_path / "f.html").exists()

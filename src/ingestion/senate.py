@@ -89,6 +89,20 @@ def _as_json_array(value: str) -> str:
     return "[" + ",".join(part.strip() for part in value.split(",") if part.strip()) + "]"
 
 
+def _is_the_agreement_page(response: requests.Response) -> bool:
+    """Whether eFD answered with its prohibition agreement rather than a filing.
+
+    It is a 200 either way, so the status code cannot be used. Two signals, both
+    cheap: the request ended up at the search home rather than a `/view/` path,
+    or the body carries the agreement's own wording.
+    """
+    final_url = str(getattr(response, "url", "") or "")
+    if "/view/" not in final_url:
+        return True
+    body = response.text or ""
+    return "prohibitions on obtaining and use of financial disclosure" in body.lower()
+
+
 class SenateIngester(BaseIngester):
     """Ingester for Senate financial disclosures (eFD system)."""
 
@@ -451,8 +465,42 @@ class SenateIngester(BaseIngester):
             True if successful, False otherwise
         """
         try:
+            # eFD serves no document to a session that has not accepted the
+            # prohibition agreement -- it answers 200 with the agreement page
+            # instead. Every other method here reaches the agreement through
+            # `_get_csrf_token`; this one did not, and nothing noticed because
+            # the agreement page is a perfectly valid 200.
+            #
+            # `cli parse` runs in a different process from `cli ingest` and never
+            # searches, so its session was ALWAYS unaccepted. Every Senate filing
+            # it downloaded was a 12,189-byte copy of the same agreement page,
+            # saved as the filing, and `parse_senate_html` then reported "no
+            # transaction table" -- which is true of the agreement page and says
+            # nothing whatever about the filing.
+            #
+            # The visible result was 19 of 20 Senate filings stored as parsed,
+            # with a text layer, zero transactions, and not one Senate finding on
+            # the site after three rebuilds.
+            if not self._init_session():
+                logger.error(
+                    "Senate eFD session could not accept the prohibition agreement; "
+                    "refusing to download %s",
+                    disclosure_url,
+                )
+                return False
+
             response = self.session.get(disclosure_url, timeout=60)
             response.raise_for_status()
+
+            # Redirected back to the search home means the agreement did not
+            # stick after all. Saving that page would produce exactly the silent
+            # failure above, so it is an error rather than a document.
+            if _is_the_agreement_page(response):
+                logger.error(
+                    "eFD returned the prohibition agreement instead of %s; not saving it",
+                    disclosure_url,
+                )
+                return False
 
             # Ensure directory exists
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)

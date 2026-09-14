@@ -124,6 +124,42 @@ SUBSIDIARY_OVERRIDES: Dict[str, str] = {
     "v2x": "VVX",
     "health net federal services": "CNC",
     "honeywell federal manufacturing": "HON",
+    # The federal-division names, found when the contract feed stopped taking a
+    # global top-300 slice and started asking per traded company. Each of these
+    # was rejected on every one of the hundred awards measured for its ticker,
+    # so the company kept nothing at all: CACI, KBR, Dell, Chevron, Oracle and
+    # Merck each scored zero.
+    #
+    # Every entry here is a claim about a NAME, not about corporate ownership.
+    # The registrant's own name is the leading word or words and what follows is
+    # a division: "KBR, INC." and "KBR WYLE SERVICES, LLC"; "CHEVRON CORP" and
+    # "CHEVRON USA INC."; "ORACLE CORP" and "ORACLE AMERICA, INC"; "Merck & Co."
+    # and "MERCK SHARP & DOHME LLC". Dell and CACI are the same shape one step
+    # removed -- the registered name carries a descriptor the federal entity
+    # drops ("Dell Technologies", "CACI International") -- which is still legible
+    # in the string rather than a fact about who owns whom.
+    #
+    # The fragments are checked against all 8,007 registered names, because the
+    # match here is an unanchored substring. A bare "caci" is NOT usable and is
+    # why these two are spelled out: "acacia research" contains it, and ACTG
+    # would have been handed every CACI award.
+    "caci federal": "CACI",
+    "caci nss": "CACI",
+    "kbr wyle": "KBR",
+    "dell federal systems": "DELL",
+    "dell marketing": "DELL",
+    "chevron usa": "CVX",
+    "oracle america": "ORCL",
+    "merck sharp": "MRK",
+    # Deliberately NOT asserted, though USASpending's hierarchy offers them:
+    # QTC Medical Services, Cepheid, Life Technologies, Thermo Electron,
+    # National Instruments, Meridian Medical Technologies, Valor Healthcare,
+    # Magellan Federal, Foundation Care, Ortho-Clinical Diagnostics. Each may
+    # well belong to a listed parent, but nothing in the name says so and the
+    # SEC register does not carry parentage -- and at least one of them is a
+    # trap: Ortho-Clinical was Johnson & Johnson's until 2014 and is not now,
+    # so the hierarchy that offers it is stale. `rejected_wrong_company` in
+    # src/ingestion/usaspending.py counts what this costs on every run.
     # Privately held, recorded so nobody adds a guess later. These are the
     # largest recurring misses in the 2024 contract data, and every one of them
     # is correctly a miss -- there is no security to trade.

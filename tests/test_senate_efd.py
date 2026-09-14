@@ -294,3 +294,123 @@ class TestAnOutageIsNotAnEmptyYear:
         assert orch.senate_unavailable is True, (
             "an outage was recorded as a year in which the Senate filed nothing"
         )
+
+
+class TestSenatorsAreMatchedDespiteNameDrift:
+    """eFD reports the legal name; the roster reports the known one.
+
+    Three of the eight senators on a captured search page differ between the
+    two, and every filing by those three was silently dropped:
+
+        eFD "A. Mitchell" / "McConnell, Jr."   roster "Mitch"  / "McConnell"
+        eFD "Angela D"    / "Alsobrooks"       roster "Angela" / "Alsobrooks"
+        eFD "David H"     / "McCormick"        roster "David"  / "McCormick"
+
+    The old query required BOTH a surname equality and a first-name prefix, and
+    the prefix was applied to the ROSTER value -- so `first_name ILIKE 'David
+    H%'` could never match a roster entry of "David". A surname is near-unique
+    within one chamber, so it carries the match and the first name only breaks
+    ties.
+    """
+
+    def _senator(self, db, first, last, bioguide):
+        from src.db.models import Chamber, Member, Party
+
+        member = Member(
+            bioguide_id=bioguide,
+            first_name=first,
+            last_name=last,
+            chamber=Chamber.SENATE,
+            party=Party.REPUBLICAN,
+            state="KY",
+        )
+        db.add(member)
+        db.commit()
+        return member
+
+    def _entry(self, first, last, doc_id):
+        from datetime import datetime
+
+        return {
+            "first_name": first,
+            "last_name": last,
+            "filing_year": 2025,
+            "filing_type": "PTR",
+            "filing_date": datetime(2025, 5, 1),
+            "document_id": doc_id,
+            "document_url": f"https://efdsearch.senate.gov/search/view/ptr/{doc_id}/",
+            "chamber": "senate",
+            "is_ptr": True,
+        }
+
+    def _sync(self, db, tmp_path, roster, entries):
+        from src.ingestion.orchestrator import IngestionOrchestrator
+
+        for first, last, bioguide in roster:
+            self._senator(db, first, last, bioguide)
+
+        orch = IngestionOrchestrator(data_dir=tmp_path)
+        orch.senate.search_all_disclosures = lambda year: entries  # type: ignore[method-assign]
+        return orch.sync_senate_disclosures(db, 2025)
+
+    def test_a_suffix_on_the_surname_still_matches(self, db_session, tmp_path):
+        synced = self._sync(
+            db_session,
+            tmp_path,
+            [("Mitch", "McConnell", "SEN00001")],
+            [self._entry("A. Mitchell", "McConnell, Jr.", "SEN-DOC-1")],
+        )
+
+        assert synced == 1, "a filing was dropped because eFD appends ', Jr.'"
+
+    def test_a_middle_initial_in_the_first_name_still_matches(self, db_session, tmp_path):
+        synced = self._sync(
+            db_session,
+            tmp_path,
+            [("David", "McCormick", "SEN00002")],
+            [self._entry("David H", "McCormick", "SEN-DOC-2")],
+        )
+
+        assert synced == 1, "a filing was dropped because eFD carries a middle initial"
+
+    def test_case_differences_still_match(self, db_session, tmp_path):
+        synced = self._sync(
+            db_session,
+            tmp_path,
+            [("Richard", "Blumenthal", "SEN00003")],
+            [self._entry("RICHARD", "BLUMENTHAL", "SEN-DOC-3")],
+        )
+
+        assert synced == 1
+
+    def test_two_senators_sharing_a_surname_are_disambiguated(self, db_session, tmp_path):
+        synced = self._sync(
+            db_session,
+            tmp_path,
+            [("Ron", "Johnson", "SEN00004"), ("Tim", "Johnson", "SEN00005")],
+            [self._entry("Ron", "Johnson", "SEN-DOC-4")],
+        )
+
+        assert synced == 1, "a shared surname should be resolved by the first name"
+
+    def test_it_still_refuses_to_guess(self, db_session, tmp_path):
+        """The guarantee this must not trade away: attaching a filing to the
+        wrong senator is worse than not storing it."""
+        synced = self._sync(
+            db_session,
+            tmp_path,
+            [("Ron", "Johnson", "SEN00006"), ("Tim", "Johnson", "SEN00007")],
+            [self._entry("", "Johnson", "SEN-DOC-5")],
+        )
+
+        assert synced == 0, "an unresolvable filing was attached to a senator anyway"
+
+    def test_an_unknown_senator_is_still_skipped(self, db_session, tmp_path):
+        synced = self._sync(
+            db_session,
+            tmp_path,
+            [("Mitch", "McConnell", "SEN00008")],
+            [self._entry("Nobody", "Nosuchsenator", "SEN-DOC-6")],
+        )
+
+        assert synced == 0

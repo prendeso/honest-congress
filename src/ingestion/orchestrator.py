@@ -29,6 +29,27 @@ DATA_DIR = Path("data")
 DISCLOSURES_DIR = DATA_DIR / "disclosures"
 
 
+# Name suffixes eFD carries and the roster does not. "McConnell, Jr." has to
+# match "McConnell".
+_NAME_SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
+
+
+def normalize_surname(last_name: str) -> str:
+    """The surname without the suffix eFD appends to it.
+
+    eFD reports the filer's legal name; the roster reports the name they are
+    known by. Three of the eight senators in a captured search page differ
+    between the two, and every one of those filings was silently dropped:
+
+        eFD "McConnell, Jr."  roster "McConnell"
+        eFD "Angela D"        roster "Angela"
+        eFD "David H"         roster "David"
+    """
+    cleaned = last_name.split(",")[0].strip()
+    tokens = [t for t in cleaned.split() if t.lower().strip(".") not in _NAME_SUFFIXES]
+    return " ".join(tokens) or cleaned
+
+
 class UnmatchedFilers:
     """Filings dropped because their filer matched no member in the roster.
 
@@ -478,16 +499,46 @@ class IngestionOrchestrator:
                     )
                     continue
 
+                # Surname first, first name only to disambiguate.
+                #
+                # Requiring both to match is what made this drop filings. eFD
+                # gives the legal name -- "A. Mitchell McConnell, Jr." -- and the
+                # roster gives the known one, "Mitch McConnell". A prefix match
+                # on the first name then fails outright: `first_name ILIKE
+                # 'David H%'` cannot match a roster entry of "David", because
+                # the pattern is applied to the ROSTER value, not to eFD's.
+                #
+                # A surname is near-unique within one chamber, so match on it
+                # and fall back to the first name only when it is not. The
+                # ambiguity check below is unchanged: two senators sharing a
+                # surname still refuse to guess.
+                surname = normalize_surname(last_name)
                 matches = (
                     db.query(Member)
                     .filter(
-                        Member.last_name.ilike(last_name),
-                        Member.first_name.ilike(f"{first_name}%"),
+                        Member.last_name.ilike(surname),
                         Member.chamber == Chamber.SENATE,
                     )
-                    .limit(2)
+                    .limit(5)
                     .all()
                 )
+
+                if len(matches) > 1 and first_name:
+                    # Narrow on whatever the two names do share -- usually the
+                    # first initial, since "A. Mitchell" and "Mitch" share
+                    # nothing else.
+                    initial = first_name.strip().strip(".")[:1].lower()
+                    narrowed = [
+                        m
+                        for m in matches
+                        if (m.first_name or "")
+                        .strip()
+                        .lower()
+                        .startswith(first_name.split()[0].lower())
+                        or (m.first_name or "").strip()[:1].lower() == initial
+                    ]
+                    if len(narrowed) == 1:
+                        matches = narrowed
 
                 if not matches:
                     unmatched += 1

@@ -272,6 +272,53 @@ def test_every_fetched_action_is_accounted_for(db_session, resolver, over_matchi
     )
 
 
+class TestDeobligationsAreStoredButCounted:
+    """An action that takes money back is real, and it is not an award.
+
+    Asking USASpending for Lockheed Martin since 2023 ascending returns an
+    action at -$1,882,437,667 -- the Navy releasing money it no longer owed.
+    The row belongs in the table (it happened, and the table is the record of
+    the feed), but the ingest has to say how many of these it stored, because
+    the detector will silently not count them and a silent difference between
+    "imported" and "treated as awards" is how a number goes unexplained.
+    """
+
+    def _awards(self, amounts):
+        return [
+            {
+                "Award ID": f"W9124{i}",
+                "Recipient Name": "GENERAL DYNAMICS CORP",
+                "Transaction Amount": amount,
+                "Action Date": f"2024-03-0{i + 1}",
+                "Awarding Agency": "Department of Defense",
+                "Transaction Description": "TEST",
+                "Mod": str(i),
+            }
+            for i, amount in enumerate(amounts)
+        ]
+
+    def _ingest(self, db, resolver, amounts):
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=self._awards(amounts)):
+            return ingest_government_contracts(
+                db, "2024-01-01", "2024-12-31", tickers=["GD"], resolver=resolver
+            )
+
+    def test_the_negative_action_is_stored(self, db_session, resolver):
+        result = self._ingest(db_session, resolver, [5_000_000, -1_882_437_667.02])
+        assert result["imported"] == 2
+        stored = {c.amount for c in db_session.query(GovernmentContract).all()}
+        assert any(a is not None and a < 0 for a in stored)
+
+    def test_deobligations_and_zero_dollar_mods_are_counted(self, db_session, resolver):
+        result = self._ingest(db_session, resolver, [5_000_000, -1_882_437_667.02, 0])
+        assert result["imported"] == 3
+        assert result["money_taken_back"] == 2
+
+    def test_a_feed_of_real_awards_reports_none(self, db_session, resolver):
+        result = self._ingest(db_session, resolver, [5_000_000, 12_000])
+        assert result["money_taken_back"] == 0
+
+
 # ---------------- one award is not one action ----------------
 
 

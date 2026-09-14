@@ -93,7 +93,10 @@ DETECTORS: List[Detector] = [
         "federal award actions to each company anyone in Congress has traded, so "
         "a smaller award to a heavily contracted company is not in it, and an "
         "award booked to a subsidiary the SEC register does not tie back to its "
-        "parent is missing entirely. An absence here is not evidence of none.",
+        "parent is missing entirely. An absence here is not evidence of none. "
+        "Actions that take money back off a contract, and modifications that "
+        "move no money at all, are excluded: they are in the federal feed but "
+        "they are not an award being made.",
         f"{PTR} joined to USASpending federal award actions",
     ),
     Detector(

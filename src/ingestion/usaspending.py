@@ -254,12 +254,18 @@ def ingest_government_contracts(
             "fetched": 0,
             "imported": 0,
             "duplicates": 0,
+            "money_taken_back": 0,
             "rejected_wrong_company": 0,
             "rejected_names": {},
         }
 
     imported = 0
     duplicates = 0
+    # Award actions that removed money from a contract or moved none at all.
+    # Stored, because they happened and the table is the record of the feed, but
+    # counted here because `detect_contract_front_runs` will not call any of them
+    # an award -- see `award_action_criteria`.
+    money_taken_back = 0
     rejected = 0
     unnamed = 0
     queried = 0
@@ -337,12 +343,16 @@ def ingest_government_contracts(
                 continue
             seen.add(external_id)
 
+            amount = _parse_amount(award.get("Transaction Amount"))
+            if amount is not None and amount <= 0:
+                money_taken_back += 1
+
             db.add(
                 GovernmentContract(
                     ticker=ticker,
                     agency=award.get("Awarding Agency"),
                     description=description,
-                    amount=_parse_amount(award.get("Transaction Amount")),
+                    amount=amount,
                     awarded_date=awarded,
                     source=SOURCE,
                     external_id=external_id,
@@ -353,9 +363,12 @@ def ingest_government_contracts(
     db.commit()
 
     logger.info(
-        "Government contracts: %d imported, %d duplicates, %d rejected as a "
-        "different company, across %d tickers (%d not in the SEC register)",
+        "Government contracts: %d imported (%d of them deobligations or "
+        "zero-dollar modifications, which the front-run detector will not treat "
+        "as awards), %d duplicates, %d rejected as a different company, across "
+        "%d tickers (%d not in the SEC register)",
         imported,
+        money_taken_back,
         duplicates,
         rejected,
         queried,
@@ -379,6 +392,7 @@ def ingest_government_contracts(
         "fetched": fetched,
         "imported": imported,
         "duplicates": duplicates,
+        "money_taken_back": money_taken_back,
         "rejected_wrong_company": rejected,
         "rejected_names": rejected_names,
     }

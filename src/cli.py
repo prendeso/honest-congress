@@ -442,6 +442,14 @@ def cmd_ingest_contracts(args):
     print(f"  Award actions fetched: {result['fetched']}")
     print(f"  Imported: {result['imported']}")
     print(f"  Already present: {result['duplicates']}")
+    # Stored but not treated as awards. A feed of award *actions* includes the
+    # ones that take money back off a contract, and calling those an award is
+    # how a deobligation ends up described to a reader as good news a member
+    # bought ahead of.
+    print(
+        f"      of which deobligations or $0 modifications: {result['money_taken_back']}"
+        "  - kept, but not counted as awards"
+    )
     print(
         f"  Tickers not in the SEC register: {result['tickers_without_a_registered_name']}"
         "  - foreign listings, funds, and misread symbols"

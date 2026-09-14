@@ -310,6 +310,87 @@ class TestContractFrontRun:
         assert detect_contract_front_runs(db_session) == []
 
 
+class TestDeobligationsAreNotAwards:
+    """USASpending's feed is award *actions*, and an action can remove money.
+
+    Lockheed Martin's largest single action since 2023, by absolute size, is a
+    -$1.88bn deobligation. Before this, a purchase in the thirty days before it
+    was reported as a member buying ahead of the company being "awarded a
+    federal contract ... ($-1,882,437,667)".
+    """
+
+    def _purchase_before(self, db, *, ticker: str, amount, bioguide: str):
+        member = _make_member(db, bioguide=bioguide)
+        awarded = datetime(2024, 8, 1)
+        db.add(
+            GovernmentContract(
+                ticker=ticker,
+                agency="Department of Defense",
+                amount=amount,
+                awarded_date=awarded,
+            )
+        )
+        db.commit()
+        _make_trade(db, member, ticker, TransactionType.PURCHASE, awarded - timedelta(days=14))
+        return detect_contract_front_runs(db)
+
+    def test_a_deobligation_is_not_an_award(self, db_session):
+        assert (
+            self._purchase_before(
+                db_session, ticker="LMT", amount=Decimal("-1882437667.02"), bioguide="D000001"
+            )
+            == []
+        )
+
+    def test_a_zero_dollar_modification_is_not_an_award(self, db_session):
+        """An administrative restructure obligates nothing, so it front-runs nothing."""
+        assert (
+            self._purchase_before(db_session, ticker="NOC", amount=Decimal("0"), bioguide="Z000001")
+            == []
+        )
+
+    def test_an_award_with_no_amount_is_still_an_award(self, db_session):
+        """A missing figure is not evidence of a deobligation.
+
+        Dropping these would narrow coverage on the strength of an absent field,
+        which is a different and worse error than the one above.
+        """
+        found = self._purchase_before(db_session, ticker="GD", amount=None, bioguide="N000001")
+        assert len(found) == 1
+
+    def test_the_null_model_sees_the_same_events_the_detector_does(self, db_session):
+        """The q-value has to be measured against the events it was drawn from.
+
+        If `_collect_contracts` counted deobligations the detector refuses, the
+        permutation test would shuffle trades against award dates no finding
+        could ever have come from, and every contract q-value would be deflated
+        by events that are not awards. The two call the same function; this
+        asserts they still agree.
+        """
+        from src.analysis.significance import _collect_contracts
+
+        member = _make_member(db_session, bioguide="Q000001")
+        awarded = datetime(2024, 8, 1)
+        db_session.add_all(
+            [
+                GovernmentContract(ticker="RTX", amount=Decimal("5000000"), awarded_date=awarded),
+                GovernmentContract(
+                    ticker="RTX",
+                    amount=Decimal("-9000000"),
+                    awarded_date=awarded + timedelta(days=200),
+                ),
+            ]
+        )
+        db_session.commit()
+        _make_trade(
+            db_session, member, "RTX", TransactionType.PURCHASE, awarded - timedelta(days=14)
+        )
+
+        streams = _collect_contracts(db_session)
+        _, event_dates = streams[member.id]["RTX"]
+        assert len(event_dates) == 1
+
+
 # ---------------- orchestration ----------------
 
 

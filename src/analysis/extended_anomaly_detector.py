@@ -58,7 +58,11 @@ class ExtendedAnomalyDetector:
         skip_perfect_timing = detector_is_disabled("perfect_timing")
 
         try:
-            members = db.query(Member).all()
+            # Members who have actually traded. The loop below skips anyone with
+            # no transactions, which is all but a few hundred of the roster.
+            from src.analysis import members_who_traded
+
+            members = members_who_traded(db)
 
             for member in members:
                 try:

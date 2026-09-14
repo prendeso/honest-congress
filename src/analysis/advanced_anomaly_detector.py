@@ -83,8 +83,12 @@ class AdvancedAnomalyDetector:
         anomalies = []
 
         try:
-            # Get all members with multiple years of FD data
-            members = db.query(Member).all()
+            # Members with multiple years of FD data -- asked for as such,
+            # rather than walking all 12,770 and discovering it one query at a
+            # time. See `members_with_annual_filings`.
+            from src.analysis import members_with_annual_filings
+
+            members = members_with_annual_filings(db)
 
             for member in members:
                 try:
@@ -258,7 +262,11 @@ class AdvancedAnomalyDetector:
         anomalies = []
 
         try:
-            members = db.query(Member).all()
+            # Same precondition as the wealth loop above: two FD filings to
+            # compare. Same scoping, for the same reason.
+            from src.analysis import members_with_annual_filings
+
+            members = members_with_annual_filings(db)
 
             for member in members:
                 try:

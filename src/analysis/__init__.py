@@ -90,6 +90,49 @@ def _build_title(a: Dict[str, Any]) -> str:
     return atype.replace("_", " ").title()
 
 
+def members_with_annual_filings(db, minimum: int = 2):
+    """Members with at least `minimum` annual (FD) filings, as Member rows.
+
+    Two detectors open with `db.query(Member).all()` and then skip any member
+    with fewer than two FD disclosures. The roster is every member in history --
+    12,770 rows -- so the skip fires about 12,400 times, each after a query that
+    had to cross the network to find out.
+
+    Asking the database the same question once is behaviour-preserving by
+    construction: the members this returns are exactly the ones that got past
+    the `continue`. Same shape as the scoping in `WealthAnalyzer` and
+    `TradeAnalyzer`, which were fixed for the same reason.
+    """
+    from sqlalchemy import func
+
+    from src.db.models import Disclosure, Member
+
+    comparable = (
+        db.query(Disclosure.member_id)
+        .filter(Disclosure.filing_type == "FD")
+        .group_by(Disclosure.member_id)
+        .having(func.count(Disclosure.id) >= minimum)
+    )
+    member_ids = [row[0] for row in comparable]
+    return db.query(Member).filter(Member.id.in_(member_ids)).all() if member_ids else []
+
+
+def members_who_traded(db):
+    """Members with at least one disclosed transaction, as Member rows.
+
+    The trade-timing detector skips any member with no trades, which is all but
+    a few hundred of the roster. Retired members are deliberately included:
+    membership of this set is decided by having traded, not by being in office.
+    """
+    from src.db.models import Disclosure, Member, Transaction
+
+    traded = db.query(Disclosure.member_id).join(
+        Transaction, Transaction.disclosure_id == Disclosure.id
+    )
+    member_ids = [row[0] for row in traded.distinct()]
+    return db.query(Member).filter(Member.id.in_(member_ids)).all() if member_ids else []
+
+
 def detector_is_disabled(anomaly_type: str) -> bool:
     """Whether a detector's output would be thrown away if it ran.
 

@@ -222,3 +222,97 @@ def test_normalize_only_strips_the_alias_for_political_names():
     # but the filing name is what the LDA matched on).
     assert _normalize("AFLAC PAC (AFLAC POLITICAL ACTION COMMITTEE)", political=True) == "aflac"
     assert "aurora" in _normalize("BOEING (F.N.A. AURORA FLIGHT SCIENCES)")
+
+
+class TestTheFederalDivisionNames:
+    """Six listed companies kept zero federal awards until these were written.
+
+    The contract feed used to take a global top-300 slice, so it only ever saw
+    the primes. Asking per traded company surfaced a different population of
+    recipient names, and for CACI, KBR, Dell, Chevron, Oracle and Merck the
+    entity holding the federal business is named for a division. Measured
+    against the live API, each of those six kept NOTHING from its hundred
+    largest awards; with these entries they keep 503 award actions between them.
+
+    Every entry is a claim about a name, not about who owns whom. See the
+    comment beside them in src/ingestion/sec_tickers.py, and the list of
+    subsidiaries deliberately left unasserted.
+    """
+
+    @pytest.mark.parametrize(
+        "name,expected",
+        [
+            ("CACI, INC. - FEDERAL", "CACI"),
+            ("CACI NSS, LLC", "CACI"),
+            ("KBR WYLE SERVICES, LLC", "KBR"),
+            ("DELL FEDERAL SYSTEMS L.P", "DELL"),
+            ("DELL MARKETING L.P.", "DELL"),
+            ("CHEVRON USA INC.", "CVX"),
+            ("ORACLE AMERICA, INC", "ORCL"),
+            ("MERCK SHARP & DOHME LLC", "MRK"),
+        ],
+    )
+    def test_the_federal_entity_resolves_to_its_registrant(self, resolver, name, expected):
+        assert resolver.resolve(name) == expected
+
+    def test_a_bare_caci_fragment_would_have_taken_acacia_research(self, resolver):
+        """The measured near-miss, pinned.
+
+        SUBSIDIARY_OVERRIDES is an unanchored substring test, so the obvious
+        spelling of the CACI entry -- "caci" -- also matches "acacia research",
+        and every CACI award would have been filed under ACTG. That is why the
+        entry is spelled "caci federal" and "caci nss".
+        """
+        from src.ingestion.sec_tickers import SUBSIDIARY_OVERRIDES
+
+        assert "caci" not in SUBSIDIARY_OVERRIDES
+        assert resolver.resolve("Acacia Research Corp") == "ACTG"
+        assert resolver.resolve("Acacia Research") == "ACTG"
+
+    def test_no_new_fragment_hijacks_a_registered_company(self, resolver):
+        """The general form of the check above, over the whole register.
+
+        The fixture is small, so this is a floor rather than a proof -- the real
+        register has 8,007 names and was checked against these fragments when
+        they were written. It still catches the case where someone adds a
+        fragment short enough to swallow a company already in the index.
+        """
+        from src.ingestion.sec_tickers import SUBSIDIARY_OVERRIDES
+
+        resolver.load()
+        conflicts = [
+            (fragment, indexed, ticker)
+            for fragment, ticker_for_fragment in SUBSIDIARY_OVERRIDES.items()
+            for indexed, ticker in resolver._index.items()
+            if fragment in indexed and ticker != ticker_for_fragment
+        ]
+        assert not conflicts, (
+            "an override fragment matches a registered company name and would "
+            f"take its awards: {conflicts}"
+        )
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "QTC MEDICAL SERVICES INC",
+            "CEPHEID",
+            "LIFE TECHNOLOGIES CORPORATION",
+            "THERMO ELECTRON NORTH AMERICA LLC",
+            "NATIONAL INSTRUMENTS CORP",
+            "MERIDIAN MEDICAL TECHNOLOGIES, LLC",
+            "VALOR HEALTHCARE INC",
+            "ORTHO-CLINICAL DIAGNOSTICS, INC",
+        ],
+    )
+    def test_ownership_that_only_usaspending_asserts_is_not_adopted(self, resolver, name):
+        """These come back from USASpending's recipient hierarchy for a listed
+        parent, and are refused.
+
+        Each may well belong to one. Nothing in the name says so, the SEC
+        register carries no parentage, and at least one is a trap:
+        Ortho-Clinical Diagnostics was Johnson & Johnson's until 2014 and is
+        not now, so the hierarchy offering it is out of date. Refusing costs
+        coverage, which `rejected_wrong_company` counts on every run; guessing
+        would cost a false attribution under a named person.
+        """
+        assert resolver.resolve(name) is None

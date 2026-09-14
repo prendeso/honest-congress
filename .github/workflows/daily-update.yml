@@ -70,6 +70,7 @@ jobs:
       # `stats` command reports any detector left with an empty source table,
       # so a silent zero here still surfaces.
       - name: Ingest federal contract awards
+        id: contracts
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -79,6 +80,7 @@ jobs:
       # FEC allows 1,000 requests/hour and a full cycle costs more than that,
       # so the run is capped and resumes tomorrow where it stopped.
       - name: Ingest corporate PAC donations
+        id: donations
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -89,6 +91,7 @@ jobs:
       # LDA_API_KEY is optional: without it the ingester paces itself down to
       # the anonymous rate rather than failing.
       - name: Ingest lobbying disclosures
+        id: lobbying
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -101,6 +104,7 @@ jobs:
       # without this they see only the ~70 large caps in the hand-written list.
       # Incremental -- only tickers not already cached.
       - name: Sync SEC industry codes
+        id: industries
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -113,6 +117,7 @@ jobs:
       # ten thousand requests on data nothing looks at. Drop the flag for a
       # backfill when a cosponsorship detector exists.
       - name: Ingest bill sponsorship and committee referrals
+        id: bills
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -127,11 +132,34 @@ jobs:
       # Names any detector whose source table is empty, so "no findings" stays
       # distinguishable from "no data" in the run log.
       - name: Report detector coverage
+        if: always()
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: |
           echo "## Disclosure Update Summary - $(date -u +%Y-%m-%d)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          # A feed that DIED shows a green tick, because every step above
+          # carries continue-on-error. That is the right default -- a throttled
+          # source must not stop the nightly analysis -- but on this workflow it
+          # is worse than on the manual one: nobody is watching a 06:00 cron, so
+          # a feed can stay dead for weeks while the job stays green. A single
+          # Cloudflare 522 did exactly that to the sponsorship ingest.
+          FAILED=""
+          for step in \
+            "contracts:${{ steps.contracts.outcome }}" \
+            "donations:${{ steps.donations.outcome }}" \
+            "lobbying:${{ steps.lobbying.outcome }}" \
+            "industries:${{ steps.industries.outcome }}" \
+            "bills:${{ steps.bills.outcome }}"; do
+            if [ "${step#*:}" = "failure" ]; then FAILED="$FAILED ${step%%:*}"; fi
+          done
+          if [ -n "$FAILED" ]; then
+            echo "### ⚠️ Feeds that FAILED despite the green tick" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`$FAILED\` — their data is missing or partial. Open the step log before trusting any detector that reads from them." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
           echo '```' >> $GITHUB_STEP_SUMMARY
           python -m src.cli stats >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

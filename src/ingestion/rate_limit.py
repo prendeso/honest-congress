@@ -29,6 +29,27 @@ MINUTE = 60
 
 MAX_RETRIES = 4
 DEFAULT_BACKOFF_SECONDS: Tuple[int, ...] = (2, 4, 8, 16)
+
+# Retried on the same backoff as a 429, because they mean the same thing to a
+# caller: the service did not answer this time, and might next time.
+#
+# This is not a theoretical list. A single 522 from Congress.gov killed a
+# production sponsorship ingest outright:
+#
+#     requests.exceptions.HTTPError: 522 Server Error: status code 522 for url:
+#     https://api.congress.gov/v3/member/D000243/sponsored-legislation
+#
+# It was raised on the first attempt with no retry at all -- the loop below only
+# ever retried 429 -- and it aborted the sweep for every member after that one.
+# The workflow step carries `continue-on-error: true`, so the run reported
+# success and two detectors sat empty.
+#
+# 520-524 are Cloudflare's origin errors and every one of these services sits
+# behind a CDN: 520 unknown, 521 origin down, 522 connection timed out, 523
+# origin unreachable, 524 origin timed out. 502/503/504 are the plain gateway
+# equivalents. 500 is deliberately NOT here: a genuine server-side bug repeated
+# four times is four times the load for the same answer.
+RETRYABLE_STATUS = frozenset({429, 502, 503, 504, 520, 521, 522, 523, 524})
 DEFAULT_TIMEOUT = 60
 
 
@@ -145,6 +166,7 @@ class ThrottledClient:
         query = self._auth_params(dict(params or {}))
         headers = self._auth_headers()
 
+        last_status: int | None = None
         for attempt in range(MAX_RETRIES):
             self._limiter.acquire()
             self.requests_made += 1
@@ -152,7 +174,7 @@ class ThrottledClient:
                 f"{self.base_url}{path}", params=query, headers=headers, timeout=self._timeout
             )
 
-            if response.status_code == 429:
+            if response.status_code in RETRYABLE_STATUS:
                 # These services send Retry-After on throttle. Honour it when
                 # present; the backoff table is only a fallback for when it is
                 # not, and guessing shorter than the server asked for is how a
@@ -164,13 +186,21 @@ class ThrottledClient:
                         delay = int(retry_after)
                     except ValueError:
                         pass
-                logger.warning("%s throttled (429); retrying in %ss", self.name, delay)
+                logger.warning(
+                    "%s returned %s; retrying in %ss (attempt %d of %d)",
+                    self.name,
+                    response.status_code,
+                    delay,
+                    attempt + 1,
+                    MAX_RETRIES,
+                )
                 self._sleeper(delay)
+                last_status = response.status_code
                 continue
 
             response.raise_for_status()
             return response
 
         raise requests.exceptions.RetryError(
-            f"{self.name} still throttling after {MAX_RETRIES} attempts"
+            f"{self.name} still returning {last_status} after {MAX_RETRIES} attempts"
         )

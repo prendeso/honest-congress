@@ -117,3 +117,58 @@ class TestTheEndpointServesIt:
     def test_types_is_not_swallowed_by_the_anomaly_id_route(self, client):
         """`/{anomaly_id}` takes an int; registered first it would 422 this."""
         assert client.get("/api/anomalies/types").status_code == 200
+
+
+class TestTheLoudestDetectorSaysWhyItIsLoud:
+    """`lobbying_overlap` produced 629 findings in the first run that had
+    lobbying data — four times `late_filing` and the largest category on the
+    site by a wide margin.
+
+    That is a property of lobbying, not of trading. A large company files
+    quarterly, often through several registrants, and each filing opens a
+    ±30-day window; for a company that lobbies continuously those windows cover
+    most of the year, so almost any trade in its stock falls inside one.
+
+    The permutation null is exactly the right guard -- a shuffled calendar hits
+    those windows just as often, so the q-value stays high, and none of the 629
+    passed FDR. But a reader looking at a count does not see that, and a count
+    is what the page leads with. The limits text has to say so.
+    """
+
+    def _detector(self, anomaly_type):
+        from src.analysis.catalog import DETECTORS
+
+        found = next((d for d in DETECTORS if d.anomaly_type == anomaly_type), None)
+        assert found is not None, f"{anomaly_type} is not in the catalogue"
+        return found
+
+    def test_it_warns_that_the_count_is_not_the_signal(self):
+        limits = self._detector("lobbying_overlap").limits.lower()
+
+        assert "q-value" in limits, (
+            "the loudest detector on the site does not tell the reader to weigh "
+            "its findings by the q-value rather than the count"
+        )
+
+    def test_it_explains_the_base_rate(self):
+        limits = self._detector("lobbying_overlap").limits.lower()
+
+        assert "quarterly" in limits or "most of the year" in limits, (
+            "the limits text does not explain why this detector fires so often"
+        )
+
+    def test_it_still_states_the_attribution_limit(self):
+        """The original caveat must survive: a lobbying filing names the issuer,
+        never the member lobbied."""
+        limits = self._detector("lobbying_overlap").limits.lower()
+
+        assert "issuer" in limits and "member" in limits
+
+    def test_every_detector_that_carries_a_null_model_mentions_a_caveat(self):
+        """A blanket floor: an empty or one-clause limits field on a detector
+        that publishes findings under a member's name is not acceptable."""
+        from src.analysis.catalog import DETECTORS
+
+        thin = [d.anomaly_type for d in DETECTORS if len(d.limits) < 40]
+
+        assert not thin, f"these detectors state no meaningful limit: {thin}"

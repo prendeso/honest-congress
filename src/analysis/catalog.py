@@ -71,8 +71,14 @@ DETECTORS: List[Detector] = [
         "Lobbying Overlap",
         "The member traded a company's stock around the time that company "
         "disclosed lobbying Congress.",
-        "Lobbying disclosures name the issuer, not the member lobbied. This "
-        "cannot show the member was among them.",
+        "Lobbying disclosures name the issuer, not the member lobbied, so this "
+        "cannot show the member was among them. It is also the most common "
+        "finding on this site by a wide margin, and that is a property of "
+        "lobbying rather than of trading: a large company files quarterly, "
+        "often through several registrants, and each filing opens a window "
+        "either side of it. For a company that lobbies continuously those "
+        "windows cover most of the year, so almost any trade in its stock "
+        "falls inside one. Read the q-value, not the count.",
         f"{PTR} joined to Senate LDA lobbying filings",
     ),
     Detector(

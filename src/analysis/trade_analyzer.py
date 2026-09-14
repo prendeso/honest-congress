@@ -154,18 +154,26 @@ class TradeAnalyzer:
                 # where it will look rather than matching the title again.
                 by_transaction[txn.id] = existing_no_txn
 
-    def analyze_member(self, db: Session, member_id: int) -> List[Dict[str, Any]]:
+    def analyze_member(
+        self, db: Session, member_id: int, member: Member | None = None
+    ) -> List[Dict[str, Any]]:
         """
         Analyze a single member for trade anomalies.
 
         Args:
             db: Database session
             member_id: Member ID to analyze
+            member: the already-loaded row, when the caller has it
 
         Returns:
             List of detected anomalies
         """
-        member = db.query(Member).filter(Member.id == member_id).first()
+        # `analyze_all_members` is holding this row already, having just
+        # selected it; fetching it back one member at a time is a round trip per
+        # member to learn what the caller could have said. Still optional, so the
+        # single-member entry point keeps working unchanged.
+        if member is None:
+            member = db.query(Member).filter(Member.id == member_id).first()
         if not member:
             return []
 
@@ -214,8 +222,17 @@ class TradeAnalyzer:
         anomalies = []
         min_amount = Decimal(str(self.late_filing_min_amount_usd))
 
-        ptr_disclosures = (
-            db.query(Disclosure)
+        # One query, not one per filing. This read the member's PTRs and then
+        # asked for each one's transactions in turn, so a member with forty
+        # filings was forty-one round trips -- and PTRs are the most numerous
+        # filing type there is.
+        #
+        # The join is equivalent rather than merely similar: a filing with no
+        # transactions contributed nothing to the loop before, and does not
+        # appear in the join now.
+        rows = (
+            db.query(Transaction, Disclosure)
+            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
             .filter(
                 Disclosure.member_id == member_id,
                 Disclosure.is_ptr == True,
@@ -224,55 +241,50 @@ class TradeAnalyzer:
             .all()
         )
 
-        for disclosure in ptr_disclosures:
-            transactions = (
-                db.query(Transaction).filter(Transaction.disclosure_id == disclosure.id).all()
+        for txn, disclosure in rows:
+            if not (txn.transaction_date and disclosure.filing_date):
+                continue
+
+            days_to_file = (disclosure.filing_date - txn.transaction_date).days
+            if days_to_file <= self.late_filing_min_days:
+                continue
+
+            # Skip small trades — late filings on de minimis amounts are
+            # mostly clerical and we don't want to flood the table.
+            txn_amount = txn.amount_max or txn.amount_min
+            if txn_amount is None or txn_amount < min_amount:
+                continue
+
+            days_late = days_to_file - self.ptr_deadline_days
+            if days_late <= 30:
+                severity = "low"
+                late_range = "moderately late (1-4 weeks)"
+            elif days_late <= 90:
+                severity = "medium"
+                late_range = "significantly late (1-3 months)"
+            else:
+                severity = "high"
+                late_range = "severely late (over 3 months)"
+
+            anomalies.append(
+                {
+                    "member_id": member_id,
+                    "disclosure_id": disclosure.id,
+                    "transaction_id": txn.id,
+                    "anomaly_type": "late_filing",
+                    "severity": severity,
+                    "title": f"Late PTR filing: {late_range}",
+                    "description": (
+                        f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
+                        f"was filed {late_range} on "
+                        f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
+                        f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
+                        f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
+                    ),
+                    "computed_value": Decimal(str(days_to_file)),
+                    "threshold_value": Decimal(str(self.ptr_deadline_days)),
+                }
             )
-
-            for txn in transactions:
-                if not (txn.transaction_date and disclosure.filing_date):
-                    continue
-
-                days_to_file = (disclosure.filing_date - txn.transaction_date).days
-                if days_to_file <= self.late_filing_min_days:
-                    continue
-
-                # Skip small trades — late filings on de minimis amounts are
-                # mostly clerical and we don't want to flood the table.
-                txn_amount = txn.amount_max or txn.amount_min
-                if txn_amount is None or txn_amount < min_amount:
-                    continue
-
-                days_late = days_to_file - self.ptr_deadline_days
-                if days_late <= 30:
-                    severity = "low"
-                    late_range = "moderately late (1-4 weeks)"
-                elif days_late <= 90:
-                    severity = "medium"
-                    late_range = "significantly late (1-3 months)"
-                else:
-                    severity = "high"
-                    late_range = "severely late (over 3 months)"
-
-                anomalies.append(
-                    {
-                        "member_id": member_id,
-                        "disclosure_id": disclosure.id,
-                        "transaction_id": txn.id,
-                        "anomaly_type": "late_filing",
-                        "severity": severity,
-                        "title": f"Late PTR filing: {late_range}",
-                        "description": (
-                            f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
-                            f"was filed {late_range} on "
-                            f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
-                            f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
-                            f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
-                        ),
-                        "computed_value": Decimal(str(days_to_file)),
-                        "threshold_value": Decimal(str(self.ptr_deadline_days)),
-                    }
-                )
 
         return anomalies
 
@@ -501,7 +513,7 @@ class TradeAnalyzer:
         self._large_trades_synced = True
 
         for member in members:
-            anomalies = self.analyze_member(db, member.id)
+            anomalies = self.analyze_member(db, member.id, member=member)
             members_analyzed += 1
             if members_analyzed % PROGRESS_EVERY_MEMBERS == 0:
                 logger.info(

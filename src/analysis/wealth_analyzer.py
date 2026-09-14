@@ -38,18 +38,24 @@ class WealthAnalyzer:
         self.threshold_percent = threshold_percent or settings.wealth_growth_threshold_percent
         self.congressional_salary = congressional_salary or settings.congressional_salary
 
-    def analyze_member(self, db: Session, member_id: int) -> List[Dict[str, Any]]:
+    def analyze_member(
+        self, db: Session, member_id: int, member: Member | None = None
+    ) -> List[Dict[str, Any]]:
         """
         Analyze a single member for wealth anomalies.
 
         Args:
             db: Database session
             member_id: Member ID to analyze
+            member: the already-loaded row, when the caller has it
 
         Returns:
             List of detected anomalies
         """
-        member = db.query(Member).filter(Member.id == member_id).first()
+        # Same as TradeAnalyzer.analyze_member: the roster walk above already
+        # holds this row, and fetching it back costs one round trip per member.
+        if member is None:
+            member = db.query(Member).filter(Member.id == member_id).first()
         if not member:
             return []
 
@@ -191,7 +197,7 @@ class WealthAnalyzer:
         seen: set[tuple] = set()
 
         for member in members:
-            anomalies = self.analyze_member(db, member.id)
+            anomalies = self.analyze_member(db, member.id, member=member)
 
             if anomalies:
                 members_with_anomalies += 1

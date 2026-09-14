@@ -6,6 +6,31 @@ on:
     - cron: '0 6 * * *'
   workflow_dispatch:  # Allow manual trigger
 
+# One database, one writer at a time.
+#
+# `daily-update` and `rebuild` both write to the same production database, and
+# nothing kept them apart. Measured: the 11:18 cron overlapped rebuild runs 12
+# and 13 in their entirety -- six hours of two workflows ingesting and analysing
+# concurrently -- and both run `cli analyze` against the same `anomalies` table.
+#
+# Two costs, one of them already paid. Findings appeared on the site that had to
+# be traced by timestamp to work out which run produced them: rebuild 13's parse
+# created the Senate transactions and the cron's analysis step, started
+# thirty-six minutes later, wrote the findings. Nothing was wrong with the data,
+# but nobody could say where it came from without reading four job logs.
+#
+# The second is not yet paid and is worse. `persist_anomalies` deduplicates with
+# a SELECT followed by an INSERT; two analysis passes interleaving can both see
+# "not present" and both insert.
+#
+# The group name is shared between the two workflows on purpose -- that is the
+# entire mechanism. `cancel-in-progress: false` because a nightly run halfway
+# through an ingest should finish, not be killed by somebody dispatching a
+# rebuild.
+concurrency:
+  group: honest-congress-production-database
+  cancel-in-progress: false
+
 env:
   PYTHON_VERSION: '3.11'
 

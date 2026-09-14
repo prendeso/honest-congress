@@ -192,6 +192,7 @@ jobs:
       # src/config.py absorbs a blank as well, so neither layer alone is
       # load-bearing.
       - name: Ingest federal contract awards
+        id: contracts
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -199,6 +200,7 @@ jobs:
         run: python -m src.cli ingest-contracts
 
       - name: Ingest corporate PAC donations
+        id: donations
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -207,6 +209,7 @@ jobs:
         run: python -m src.cli ingest-donations --cycle 2024 --max-requests 800
 
       - name: Ingest lobbying disclosures
+        id: lobbying
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -218,6 +221,7 @@ jobs:
       # to a sector, and without these codes they see only the ~70 large caps
       # in the hand-written list.
       - name: Sync SEC industry codes
+        id: industries
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -225,6 +229,7 @@ jobs:
         run: python -m src.cli sync-industries
 
       - name: Ingest bill sponsorship and committee referrals
+        id: bills
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -247,6 +252,30 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Mode \`${{ inputs.mode }}\`, years \`${{ inputs.years }}\`, parse limit \`${{ inputs.limit }}\`." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Every Tier-2 step carries continue-on-error, which is right -- a
+          # throttled feed must not stop the analysis of data already ingested
+          # -- but it means a step that DIED shows a green tick. That is not a
+          # hypothetical: a single Cloudflare 522 from Congress.gov aborted the
+          # sponsorship ingest, the step reported success, and the only visible
+          # symptom was two detectors reporting zero findings three hours later.
+          # `continue-on-error` hides the outcome from the job; it does not hide
+          # it from `steps.<id>.outcome`.
+          FAILED=""
+          for step in \
+            "contracts:${{ steps.contracts.outcome }}" \
+            "donations:${{ steps.donations.outcome }}" \
+            "lobbying:${{ steps.lobbying.outcome }}" \
+            "industries:${{ steps.industries.outcome }}" \
+            "bills:${{ steps.bills.outcome }}"; do
+            if [ "${step#*:}" = "failure" ]; then FAILED="$FAILED ${step%%:*}"; fi
+          done
+          if [ -n "$FAILED" ]; then
+            echo "### ⚠️ Feeds that FAILED despite the green tick" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "\`$FAILED\` — these steps carry \`continue-on-error\`, so the job is green and their data is missing or partial. Open the step log before trusting any detector that reads from them." >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+          fi
           echo '```' >> $GITHUB_STEP_SUMMARY
           python -m src.cli stats >> $GITHUB_STEP_SUMMARY 2>&1 || echo "stats failed" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY

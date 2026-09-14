@@ -8,6 +8,7 @@ The detectors were also never invoked anywhere and never persisted their
 results to the database.
 """
 
+from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 
@@ -31,6 +32,31 @@ from src.db.models import (
 )
 
 # ---------------- helpers ----------------
+
+
+@contextmanager
+def _enabling(anomaly_type: str, monkeypatch):
+    """Run a block with `anomaly_type` temporarily enabled.
+
+    Three detector types are disabled by default because their arithmetic is
+    indefensible, and they are now SKIPPED rather than computed and thrown
+    away. Their logic is still worth testing -- they are disabled for being
+    wrong, not for being uninteresting, and whoever re-enables one needs a test
+    that still describes what it does.
+
+    `get_settings` is lru_cached, so the cache has to be cleared on the way in
+    and on the way out or the override leaks into the next test.
+    """
+    from src.config import get_settings
+
+    remaining = get_settings().disabled_anomaly_types_set - {anomaly_type}
+    monkeypatch.setenv("DISABLED_ANOMALY_TYPES", ",".join(sorted(remaining)))
+    get_settings.cache_clear()
+    try:
+        yield
+    finally:
+        monkeypatch.delenv("DISABLED_ANOMALY_TYPES", raising=False)
+        get_settings.cache_clear()
 
 
 def _make_member(db, bioguide="A000001", first="Test", last="Member") -> Member:
@@ -220,7 +246,7 @@ class TestTradeTiming:
         types = [a["anomaly_type"] for a in anomalies]
         assert "trade_clustering" in types
 
-    def test_perfect_timing_flagged_when_all_buys_precede_sells(self, db_session):
+    def test_perfect_timing_flagged_when_all_buys_precede_sells(self, db_session, monkeypatch):
         member = _make_member(db_session, bioguide="P000001", last="Prophet")
         d = _make_disclosure(db_session, member, 2024, "PT1", is_ptr=True)
         # 5 buys early in the year, 5 sells later — every buy precedes every sell
@@ -246,9 +272,45 @@ class TestTradeTiming:
             )
 
         detector = ExtendedAnomalyDetector()
-        anomalies = detector.detect_trade_timing_anomalies(db_session)
+        # `perfect_timing` is disabled by default and is now SKIPPED rather than
+        # computed and discarded, so the logic has to be asked for explicitly.
+        # It is still worth a test: the type is disabled because its arithmetic
+        # is wrong, not because the pattern is uninteresting, and anyone
+        # re-enabling it needs this to still describe what it does.
+        with _enabling("perfect_timing", monkeypatch):
+            anomalies = detector.detect_trade_timing_anomalies(db_session)
         types = [a["anomaly_type"] for a in anomalies]
         assert "perfect_timing" in types
+
+    def test_perfect_timing_is_not_computed_while_it_is_disabled(self, db_session):
+        """The default. It shares a loop with three enabled patterns, so the
+        detector still runs -- only the disabled check inside it is skipped."""
+        member = _make_member(db_session, bioguide="P000002", last="Skipped")
+        d = _make_disclosure(db_session, member, 2024, "PT2", is_ptr=True)
+        for i in range(5):
+            _make_txn(
+                db_session,
+                d,
+                TransactionType.PURCHASE,
+                f"B{i}",
+                1000,
+                5000,
+                when=datetime(2024, 1, i + 1),
+            )
+        for i in range(5):
+            _make_txn(
+                db_session,
+                d,
+                TransactionType.SALE,
+                f"S{i}",
+                10000,
+                50000,
+                when=datetime(2024, 11, i + 1),
+            )
+
+        anomalies = ExtendedAnomalyDetector().detect_trade_timing_anomalies(db_session)
+
+        assert "perfect_timing" not in [a["anomaly_type"] for a in anomalies]
 
     def test_volume_spikes_attached_to_member(self, db_session):
         """Previously the volume_spikes anomaly was emitted with no
@@ -516,3 +578,90 @@ class TestEdgeCases:
         db_session.add(t)
         db_session.commit()
         assert transaction_amount(t) == 500.0
+
+
+# ---------------- disabled detectors are not run ----------------
+
+
+class TestADisabledDetectorIsNotRunAtAll:
+    """Three types are gated at persist time and in the multi-factor map.
+    Neither gate stops the detector RUNNING, and two of them walk the whole
+    roster with per-member queries.
+
+    Measured on one production rebuild:
+
+        3. Detecting stock outperformance...   17m15s  ->  23 findings, all dropped
+        3. Detecting loss avoidance patterns... 17m17s  ->  18 findings, all dropped
+
+    Thirty-four minutes of a 168-minute analysis step, spent computing rows the
+    project has already judged unfit to publish. Skipping them is
+    behaviour-preserving by construction: `persist_anomalies` refused to store
+    them and `detect_red_flag_combinations` refused to count them, so nothing
+    downstream can tell the difference.
+    """
+
+    def test_stock_outperformance_is_skipped_while_disabled(self, db_session, monkeypatch):
+        from unittest.mock import patch
+
+        with patch.object(
+            AdvancedAnomalyDetector, "detect_stock_outperformance_anomalies"
+        ) as detect:
+            result = run_advanced_anomaly_detection(db_session, persist=False)
+
+        detect.assert_not_called()
+        assert result["stock_anomalies"] == []
+
+    def test_stock_outperformance_runs_when_enabled(self, db_session, monkeypatch):
+        from unittest.mock import patch
+
+        with _enabling("outperforming_trades", monkeypatch):
+            with patch.object(
+                AdvancedAnomalyDetector,
+                "detect_stock_outperformance_anomalies",
+                return_value=[],
+            ) as detect:
+                run_advanced_anomaly_detection(db_session, persist=False)
+
+        detect.assert_called_once()
+
+    def test_loss_avoidance_is_skipped_while_disabled(self, db_session, monkeypatch):
+        from unittest.mock import patch
+
+        from src.analysis import run_extended_anomaly_detection
+
+        with patch.object(ExtendedAnomalyDetector, "detect_loss_avoidance") as detect:
+            result = run_extended_anomaly_detection(db_session, persist=False)
+
+        detect.assert_not_called()
+        assert result["loss_avoidance_anomalies"] == []
+
+    def test_loss_avoidance_runs_when_enabled(self, db_session, monkeypatch):
+        from unittest.mock import patch
+
+        from src.analysis import run_extended_anomaly_detection
+
+        with _enabling("loss_avoidance", monkeypatch):
+            with patch.object(
+                ExtendedAnomalyDetector, "detect_loss_avoidance", return_value=[]
+            ) as detect:
+                run_extended_anomaly_detection(db_session, persist=False)
+
+        detect.assert_called_once()
+
+    def test_the_result_shape_is_unchanged_for_callers(self, db_session):
+        from src.analysis import run_extended_anomaly_detection
+
+        advanced = run_advanced_anomaly_detection(db_session, persist=False)
+        extended = run_extended_anomaly_detection(db_session, persist=False)
+
+        # `cli analyze` reads every one of these keys to print its summary.
+        for key in ("wealth_anomalies", "asset_anomalies", "stock_anomalies", "total"):
+            assert key in advanced
+        for key in (
+            "timing_anomalies",
+            "conflict_anomalies",
+            "loss_avoidance_anomalies",
+            "combination_anomalies",
+            "total",
+        ):
+            assert key in extended

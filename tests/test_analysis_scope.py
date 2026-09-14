@@ -191,3 +191,100 @@ class TestTheFindingsAreUnchanged:
         _, result = _count_queries(lambda: WealthAnalyzer().analyze_all_members(seeded))
 
         assert result["members_analyzed"] == 1, result
+
+
+class TestTheDetectorsStopTrackingTheRosterToo:
+    """The same defect, three detectors further on.
+
+    `TradeAnalyzer` and `WealthAnalyzer` were scoped after `analyze` was found
+    still running two hours in. The advanced and extended detectors were not,
+    and one production run shows what that costs:
+
+        1. Detecting wealth vs salary anomalies...    17m14s  ->  0 findings
+        2. Detecting rapid asset appreciation...      17m14s  ->  0 findings
+        1. Detecting trade timing anomalies...        17m16s  -> 108 findings
+
+    Fifty-one minutes of a 168-minute step, almost all of it spent issuing a
+    query per member to learn that the member has nothing to analyse. Each loop
+    opens with an explicit `continue` -- fewer than two FD filings, or no trades
+    -- so the scoping asks for exactly the members that got past it.
+    """
+
+    def _detect(self, name):
+        from src.analysis import AdvancedAnomalyDetector, ExtendedAnomalyDetector
+
+        if name == "trade_timing":
+            return lambda db: ExtendedAnomalyDetector().detect_trade_timing_anomalies(db)
+        detector = AdvancedAnomalyDetector()
+        return lambda db: getattr(detector, name)(db)
+
+    @pytest.mark.parametrize(
+        "detector",
+        [
+            "detect_wealth_vs_salary_anomalies",
+            "detect_asset_appreciation_anomalies",
+            "trade_timing",
+        ],
+    )
+    def test_cost_does_not_grow_with_members_who_have_nothing(self, seeded, detector):
+        run = self._detect(detector)
+
+        before, _ = _count_queries(lambda: run(seeded))
+        _add_members_with_no_filings(seeded, 50)
+        after, _ = _count_queries(lambda: run(seeded))
+
+        assert len(after) == len(before), (
+            f"{detector} issued {len(after) - len(before)} extra queries for 50 "
+            "members with no filings at all"
+        )
+
+    @pytest.mark.parametrize(
+        "detector",
+        [
+            "detect_wealth_vs_salary_anomalies",
+            "detect_asset_appreciation_anomalies",
+            "trade_timing",
+        ],
+    )
+    def test_the_findings_do_not_change(self, seeded, detector):
+        run = self._detect(detector)
+
+        _, before = _count_queries(lambda: run(seeded))
+        _add_members_with_no_filings(seeded, 50)
+        _, after = _count_queries(lambda: run(seeded))
+
+        # Scoping is only defensible if it drops members whose output was empty.
+        assert [a.get("title") for a in before] == [a.get("title") for a in after]
+
+    def test_a_member_who_filed_once_is_not_asked_about_twice(self, seeded):
+        """The FD loops need two filings to compare. One is not two."""
+        from src.db.models import Disclosure as D
+
+        member = Member(
+            bioguide_id="SC00002",
+            first_name="One",
+            last_name="Filing",
+            chamber=Chamber.HOUSE,
+            party=Party.REPUBLICAN,
+            state="OR",
+        )
+        seeded.add(member)
+        seeded.commit()
+        seeded.refresh(member)
+        seeded.add(
+            D(
+                member_id=member.id,
+                filing_year=2024,
+                filing_type="FD",
+                filing_date=datetime(2024, 5, 1),
+                document_id="SC-ONE",
+                is_ptr=False,
+                parsed=True,
+            )
+        )
+        seeded.commit()
+
+        run = self._detect("detect_wealth_vs_salary_anomalies")
+        seen, _ = _count_queries(lambda: run(seeded))
+
+        assert not any(f"member_id = {member.id}" in s for s in seen)

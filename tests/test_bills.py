@@ -557,3 +557,85 @@ class TestTheRosterIsScopedToMembersAFindingCanBeAbout:
         )
 
         assert result["members_queried"] == 1
+
+
+# --------------------------------------------------------------------------
+# Transient gateway errors
+# --------------------------------------------------------------------------
+
+
+class TestATransientGatewayErrorIsRetriedNotFatal:
+    """The 522 that killed a production sponsorship ingest.
+
+        requests.exceptions.HTTPError: 522 Server Error: status code 522 for url:
+        https://api.congress.gov/v3/member/D000243/sponsored-legislation
+
+    It was raised on the FIRST attempt, because the retry loop only ever
+    retried 429. `_sponsorship_pages` re-raises anything that is not a 404 by
+    design -- a 403 on a bad key must never read as "this member has no bills"
+    -- so one gateway hiccup ended the sweep for every member after that one,
+    the CLI exited non-zero, and `continue-on-error: true` on the workflow step
+    reported the run as a success. `sponsorship_conflict` and
+    `bill_jurisdiction_conflict` both showed zero findings afterwards.
+
+    522 is Cloudflare's "connection timed out to the origin". It is the most
+    transient error there is: the same URL answered on the next run.
+    """
+
+    @pytest.mark.parametrize("status", [429, 502, 503, 504, 520, 521, 522, 523, 524])
+    def test_it_is_retried_and_then_succeeds(self, sponsored, status):
+        slept: list[float] = []
+        session = MagicMock()
+        session.get.side_effect = [_response({}, status_code=status), _response(sponsored)]
+        client = CongressAPIClient(API_KEY, session=session, sleeper=slept.append)
+
+        payload = client.get("/member/D000243/sponsored-legislation")
+
+        assert payload == sponsored
+        assert slept == [2], "should have backed off once before the retry"
+        assert session.get.call_count == 2
+
+    def test_the_exact_production_failure_no_longer_ends_the_sweep(self, db_session, sponsored):
+        # Three members; the middle one 522s once and then answers.
+        self._roster(db_session, ["A000001", "D000243", "C000003"])
+        session = MagicMock()
+        session.get.side_effect = [
+            _response(sponsored),
+            _response({}, status_code=522),
+            _response(sponsored),
+            _response(sponsored),
+        ]
+        client = CongressAPIClient(API_KEY, session=session, sleeper=lambda _: None)
+
+        result = ingest_member_bills(db_session, API_KEY, client=client, include_cosponsored=False)
+
+        assert result["members_queried"] == 3
+        assert not result["stopped_early"]
+
+    def test_a_server_error_that_never_clears_still_stops(self, sponsored):
+        # Four attempts, four failures: give up rather than retry forever, and
+        # say which status it was rather than "still throttling".
+        session = MagicMock()
+        session.get.side_effect = [_response({}, status_code=522) for _ in range(8)]
+        client = CongressAPIClient(API_KEY, session=session, sleeper=lambda _: None)
+
+        with pytest.raises(requests.exceptions.RetryError, match="522"):
+            client.get("/member/D000243/sponsored-legislation")
+
+        assert session.get.call_count == 4
+
+    def test_a_genuine_server_bug_is_not_retried(self, sponsored):
+        # 500 is deliberately outside the retry set: repeating a real crash four
+        # times is four times the load for the same answer.
+        session = MagicMock()
+        session.get.side_effect = [_response({}, status_code=500), _response(sponsored)]
+        client = CongressAPIClient(API_KEY, session=session, sleeper=lambda _: None)
+
+        with pytest.raises(requests.exceptions.HTTPError):
+            client.get("/member/X/sponsored-legislation")
+
+        assert session.get.call_count == 1
+
+    def _roster(self, db, bioguides):
+        for bioguide in bioguides:
+            _member(db, bioguide=bioguide)

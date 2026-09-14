@@ -160,6 +160,25 @@ class SenateHtmlParser(PTRParser):
             quality.rows_detected = 0
             return []
 
+        # Reading columns by header name is the whole design of this parser --
+        # `_column_index` maps every field from the table's own `<th>` text --
+        # but it never said so, and `score_ptr_parse` believes the opposite by
+        # default. Two consequences, both measured on the live site:
+        #
+        #   * every Senate filing was published carrying the warning "column
+        #     positions assumed, not read from a header row", which is the exact
+        #     reverse of what happened;
+        #   * confidence was capped at NO_HEADER_CEILING, 0.5, so every Senate
+        #     filing permanently matched `parse --min-confidence 1.0`. The
+        #     re-parse queue could never converge: every future run would
+        #     re-download and re-read the entire Senate corpus to arrive at the
+        #     same 0.5 again.
+        #
+        # Set here rather than in `_column_index` because this is the point at
+        # which the headers are known to have yielded the columns the parse
+        # actually needs.
+        quality.headers_recognised = True
+
         transactions: List[Dict[str, Any]] = []
 
         for row in table.find_all("tr"):

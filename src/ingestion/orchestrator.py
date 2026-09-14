@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Sequence
 
 import requests
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from src.db import Chamber, Disclosure, Member, Party, get_db
-from src.db.models import Asset, AssetType, Liability, Transaction, TransactionType
+from src.db.models import Anomaly, Asset, AssetType, Liability, Transaction, TransactionType
 from src.ingestion import _helpers
 from src.ingestion.congress_gov import CongressGovClient
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
@@ -883,9 +883,46 @@ class IngestionOrchestrator:
         delete good rows a previous parse got right. Replacing is only safe when
         there is something to replace them with; otherwise the old rows stay and
         the confidence score records that this read found nothing.
+
+        Findings attached to those trades have to go first. `anomalies` holds a
+        foreign key to `transactions`, so Postgres refuses the delete while one
+        points at a row in it, and the whole filing fails to parse:
+
+            ERROR - Error parsing disclosure 20025799:
+            (psycopg.errors.ForeignKeyViolation) update or delete on table
+            "transactions" violates foreign key constraint
+            "anomalies_transaction_id_fkey" on table "anomalies"
+            DETAIL: Key (id)=(36079) is still referenced from table "anomalies".
+
+        That is rebuild run 13 on 2026-09-14: one filing out of 744. It is not
+        one for long. A filing can only hit this once a finding has been written
+        about one of its trades, so the failure spreads as the anomalies table
+        fills -- and the operation it breaks is `--min-confidence`, whose entire
+        purpose is to re-read the corpus after a parser fix.
+
+        Dropping the finding is not a loss of information. It was derived from a
+        transaction row that is being replaced, and `analyze` re-derives it from
+        whatever the new read produces. Keeping it would mean a published
+        finding pointing at a row id that no longer exists.
         """
         if not incoming:
             return
+
+        replaced = select(Transaction.id).where(Transaction.disclosure_id == disclosure.id)
+        dropped = (
+            db.query(Anomaly)
+            .filter(Anomaly.transaction_id.in_(replaced))
+            .delete(synchronize_session=False)
+        )
+        if dropped:
+            # Said out loud. These are published findings about a named person,
+            # and the only thing that puts them back is the analysis step.
+            logger.info(
+                "Re-reading %s dropped %d finding(s) attached to its trades; "
+                "`analyze` re-derives them from the new read",
+                disclosure.document_id,
+                dropped,
+            )
 
         for model in (Transaction, Asset, Liability):
             db.query(model).filter(model.disclosure_id == disclosure.id).delete(

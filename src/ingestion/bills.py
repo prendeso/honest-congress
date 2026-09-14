@@ -197,6 +197,31 @@ def _upsert_bill(db: Session, payload: Dict[str, Any]) -> Bill | None:
     return bill
 
 
+def _sponsorship_pages(client, bioguide_id: str, path: str, key: str, skipped: List[str]):
+    """Pages of one member's legislation, or nothing if Congress.gov lacks them.
+
+    Congress.gov answers 404 for a bioguide id it does not carry, and this
+    project's roster holds every member in history -- so one id it has never
+    heard of aborted the sponsorship ingest for all 12,770 of them, leaving two
+    detectors with no data at all:
+
+        404 Client Error: Not Found for url:
+        https://api.congress.gov/v3/member/M000633/sponsored-legislation
+
+    A member it cannot resolve is a gap in that member, not a reason to abandon
+    everyone after them. Anything other than a 404 still propagates -- a 403 on
+    a bad key, or a 429, must not be mistaken for "this member has no bills".
+    """
+    try:
+        yield from client.paginate(f"/member/{bioguide_id}/{path}", key)
+    except requests.HTTPError as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status != 404:
+            raise
+        skipped.append(bioguide_id)
+        logger.debug("Congress.gov has no record for %s; skipping", bioguide_id)
+
+
 def ingest_member_bills(
     db: Session,
     api_key: str,
@@ -234,6 +259,7 @@ def ingest_member_bills(
     members_queried = 0
     stopped_early = False
     seen_bills: set[int] = set()
+    unknown_to_congress_gov: List[str] = []
 
     kinds = [("sponsored-legislation", "sponsoredLegislation", True)]
     if include_cosponsored:
@@ -243,7 +269,10 @@ def ingest_member_bills(
         for member in roster:
             members_queried += 1
             for path, key, is_sponsor in kinds:
-                for payload in client.paginate(f"/member/{member.bioguide_id}/{path}", key):
+                pages = _sponsorship_pages(
+                    client, member.bioguide_id, path, key, unknown_to_congress_gov
+                )
+                for payload in pages:
                     bill = _upsert_bill(db, payload)
                     if bill is None:
                         continue
@@ -298,6 +327,17 @@ def ingest_member_bills(
         members_queried,
         client.requests_made,
     )
+
+    if unknown_to_congress_gov:
+        # Counted and said out loud. A silent skip would make a roster drifting
+        # away from Congress.gov's ids look exactly like Congress passing no
+        # legislation.
+        logger.warning(
+            "Congress.gov had no record for %d of %d members queried (e.g. %s)",
+            len(unknown_to_congress_gov),
+            members_queried,
+            ", ".join(unknown_to_congress_gov[:5]),
+        )
     return {
         "members_queried": members_queried,
         "bills": total_bills,

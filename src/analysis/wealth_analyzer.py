@@ -195,6 +195,12 @@ class WealthAnalyzer:
         members_with_anomalies = 0
 
         seen: set[tuple] = set()
+        # Deliberately NOT using `stored_by_identity` here, unlike the trade
+        # analyzer and `persist_anomalies`. This one proposes a handful of
+        # findings across the whole roster -- seven in the last production run --
+        # so preloading every stored anomaly would load thousands of rows into
+        # the session to save seven queries. Measured: it took the roster pass
+        # from 38 statements to 39.
 
         for member in members:
             anomalies = self.analyze_member(db, member.id, member=member)

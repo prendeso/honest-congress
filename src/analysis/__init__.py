@@ -9,7 +9,7 @@ from src.analysis.advanced_anomaly_detector import (
     AdvancedAnomalyDetector,
     run_advanced_anomaly_detection,
 )
-from src.analysis.anomaly_key import find_existing, identity_of
+from src.analysis.anomaly_key import identity_of, stored_by_identity
 from src.analysis.clustering import (
     detect_cross_member_clusters,
     run_cluster_detection,
@@ -206,6 +206,10 @@ def _add_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
     # autoflush=False) -- so track them here too, or a batch containing the same
     # anomaly twice fails the whole commit.
     seen: set[tuple] = set()
+    # One query for everything already stored, rather than one per candidate.
+    # `seen` is still needed for the in-batch case: rows added below are not
+    # committed, and autoflush=False means a query would not see them either.
+    stored = stored_by_identity(db)
     for a in anomalies:
         member_id = a.get("member_id")
         anomaly_type = a.get("anomaly_type")
@@ -227,7 +231,7 @@ def _add_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
         if key is None or key in seen:
             continue
 
-        if find_existing(db, key) is not None:
+        if key in stored:
             continue
 
         seen.add(key)

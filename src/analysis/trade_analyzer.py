@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from src.analysis.anomaly_key import find_existing, identity_of
+from src.analysis.anomaly_key import identity_of, stored_by_identity
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
 from src.db.models import Anomaly, Disclosure, Member, Transaction
@@ -508,6 +508,9 @@ class TradeAnalyzer:
         members_analyzed = 0
         members_with_anomalies = 0
         seen: set[tuple] = set()
+        # See `stored_by_identity`. The rows matter here, not just the keys: a
+        # trade-level finding is restated in place below rather than duplicated.
+        stored = stored_by_identity(db)
 
         self._sync_large_trade_anomalies(db)
         self._large_trades_synced = True
@@ -541,7 +544,7 @@ class TradeAnalyzer:
                     if key is None or key in seen:
                         continue
 
-                    existing = find_existing(db, key)
+                    existing = stored.get(key)
                     if existing is not None:
                         # A trade-level finding is allowed to be restated: the
                         # trade is the same, so the row is updated in place

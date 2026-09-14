@@ -81,3 +81,41 @@ def find_existing(db: "Session", identity: Identity) -> Any:
     else:
         query = query.filter(Anomaly.transaction_id.is_(None), Anomaly.title == value)
     return query.first()
+
+
+def identity_of_row(row: Any) -> Identity:
+    """The same key, derived from a stored row rather than a candidate dict.
+
+    The two branches mirror the two partial unique indexes exactly: a row that
+    carries a `transaction_id` is keyed by the trade, and a row without one is
+    keyed by its title. That is what makes a dict built from this equivalent to
+    `find_existing`'s per-row query, including the `transaction_id IS NULL`
+    clause -- a title key can only ever match a row that has no trade.
+    """
+    if row.transaction_id is not None:
+        return (row.member_id, row.anomaly_type, "transaction", row.transaction_id)
+    return (row.member_id, row.anomaly_type, "title", (row.title or "")[:TITLE_LIMIT])
+
+
+def stored_by_identity(db: "Session") -> Dict[Identity, Any]:
+    """Every stored finding, keyed by identity, in one query rather than one each.
+
+    `find_existing` is a round trip per candidate finding, and it is called from
+    three places: both analyzers' roster walks and `persist_anomalies`. Against a
+    hosted database that is one network round trip per finding the suite
+    proposes, on every run, almost all of them answering "yes, already there".
+
+    The rows are returned rather than just the keys because `TradeAnalyzer` uses
+    the existing row: a trade-level finding is allowed to be restated, and it
+    updates in place instead of duplicating.
+
+    Two stored rows cannot collide here -- the partial unique indexes are exactly
+    these two identities -- so building a dict cannot silently drop one.
+
+    Callers still need their own in-batch `seen` set: rows added but not
+    committed are not in here, and `SessionLocal` is autoflush=False so a query
+    would not see them either.
+    """
+    from src.db.models import Anomaly
+
+    return {identity_of_row(row): row for row in db.query(Anomaly).all()}

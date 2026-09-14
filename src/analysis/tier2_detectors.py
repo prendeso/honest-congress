@@ -30,6 +30,7 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any, Collection, Dict, List
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from src.db.models import (
@@ -50,6 +51,39 @@ logger = logging.getLogger(__name__)
 DEFAULT_DONOR_WINDOW_DAYS = 90
 DEFAULT_LOBBYING_WINDOW_DAYS = 30
 DEFAULT_CONTRACT_WINDOW_DAYS = 30
+
+
+def award_action_criteria() -> List[Any]:
+    """Which stored contract rows are an *award* a purchase could run ahead of.
+
+    USASpending's transaction feed is award *actions*, not awards, and an action
+    can take money off a contract as easily as put it on. Asking it for Lockheed
+    Martin since 2023 returns a single action at **-$1,882,437,667** -- a
+    deobligation, the Navy releasing money it had committed and no longer owed.
+    Nothing about that is an award being made, and a member who bought the stock
+    in the thirty days before it is not, on the face of it, ahead of good news.
+    Yet `detect_contract_front_runs` would have reported exactly that, in the
+    detector's own words, as "awarded a federal contract ... ($-1,882,437,668)".
+
+    A zero-dollar action is excluded for the same reason: it is an
+    administrative modification -- a restructure, a re-code, an address change --
+    that obligates nothing.
+
+    A row with **no** amount at all is kept. An absent figure is not evidence of
+    a deobligation, and dropping it would quietly narrow coverage on the
+    strength of a missing field.
+
+    This is one function rather than a filter written twice because
+    :func:`src.analysis.significance._collect_contracts` builds the null model
+    from the same table. If the detector and its null model disagree about which
+    rows are awards, the q-value is measured against a set of events the finding
+    was never drawn from -- and that is the kind of disagreement that stays
+    silent forever.
+    """
+    return [
+        GovernmentContract.awarded_date.isnot(None),
+        or_(GovernmentContract.amount.is_(None), GovernmentContract.amount > 0),
+    ]
 
 
 def _trades_by_ticker(
@@ -261,7 +295,7 @@ def detect_contract_front_runs(
 
     contracts = (
         db.query(GovernmentContract)
-        .filter(GovernmentContract.awarded_date.isnot(None))
+        .filter(*award_action_criteria())
         .order_by(GovernmentContract.id)
         .all()
     )

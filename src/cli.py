@@ -4,7 +4,7 @@
 import argparse
 import logging
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.analysis import analyze_wealth
 from src.analysis.baselines import annotate_percentile_ranks, detection_summary
@@ -442,6 +442,14 @@ def cmd_ingest_contracts(args):
     print(f"  Award actions fetched: {result['fetched']}")
     print(f"  Imported: {result['imported']}")
     print(f"  Already present: {result['duplicates']}")
+    # Stored but not treated as awards. A feed of award *actions* includes the
+    # ones that take money back off a contract, and calling those an award is
+    # how a deobligation ends up described to a reader as good news a member
+    # bought ahead of.
+    print(
+        f"      of which deobligations or $0 modifications: {result['money_taken_back']}"
+        "  - kept, but not counted as awards"
+    )
     print(
         f"  Tickers not in the SEC register: {result['tickers_without_a_registered_name']}"
         "  - foreign listings, funds, and misread symbols"
@@ -843,6 +851,90 @@ def cmd_purge_disabled(args):
         print(f"\nDeleted {deleted} anomalies of disabled types.")
 
 
+def cmd_purge_non_awards(args):
+    """Delete contract front-run findings no award in the table supports.
+
+    `detect_contract_front_runs` used to call every row of
+    `government_contracts` an award, deobligations included, so a member who
+    bought before the Navy released $1.88bn it no longer owed was published as
+    having bought before Lockheed "was awarded a federal contract ...
+    ($-1,882,437,667)". `award_action_criteria` stops new ones. Nothing stops
+    the ones already written: `persist_anomalies` only ever inserts, so a
+    finding published once is served until something deletes it.
+
+    This does not match on the text of the description. It re-derives the award
+    date each finding claims -- the trade date plus the `computed_value` days
+    the detector recorded -- and keeps the finding only if some row that *is* an
+    award, under today's criteria, sits on that date for that ticker. A finding
+    left standing by a positive award on the same day as a deobligation is
+    correct and stays. That makes this a general repair for any later change to
+    what counts as an award, not a one-off for this bug.
+
+    A finding whose transaction has since been deleted cannot be evaluated
+    either way, so it is counted and left alone rather than guessed at.
+    """
+    from src.analysis.tier2_detectors import award_action_criteria
+    from src.db.models import Anomaly, GovernmentContract, Transaction
+
+    with get_db() as db:
+        findings = db.query(Anomaly).filter(Anomaly.anomaly_type == "contract_front_run").all()
+        if not findings:
+            print("No contract front-run findings are stored; nothing to check.")
+            return
+
+        supported = {
+            ((ticker or "").strip().upper(), awarded.date())
+            for ticker, awarded in db.query(
+                GovernmentContract.ticker, GovernmentContract.awarded_date
+            ).filter(*award_action_criteria())
+        }
+
+        trades = {
+            row.id: row
+            for row in db.query(
+                Transaction.id, Transaction.ticker, Transaction.transaction_date
+            ).filter(Transaction.id.in_([f.transaction_id for f in findings if f.transaction_id]))
+        }
+
+        unsupported: list[Anomaly] = []
+        unevaluable = 0
+        for finding in findings:
+            trade = trades.get(finding.transaction_id)
+            if trade is None or trade.transaction_date is None or finding.computed_value is None:
+                unevaluable += 1
+                continue
+            claimed = trade.transaction_date.date() + timedelta(days=int(finding.computed_value))
+            if ((trade.ticker or "").strip().upper(), claimed) not in supported:
+                unsupported.append(finding)
+
+        print(f"Contract front-run findings stored: {len(findings)}")
+        print(f"  Supported by an award: {len(findings) - len(unsupported) - unevaluable}")
+        print(f"  Not supported by any award: {len(unsupported)}")
+        if unevaluable:
+            print(f"  Could not be checked (trade row gone): {unevaluable}  - left in place")
+
+        if not unsupported:
+            return
+
+        for finding in unsupported[:10]:
+            print(f"      {finding.title}")
+        if len(unsupported) > 10:
+            print(f"      ... and {len(unsupported) - 10} more")
+
+        if args.dry_run:
+            print(
+                f"\nDry run - {len(unsupported)} findings would be deleted. "
+                f"Re-run without --dry-run to apply."
+            )
+            return
+
+        for finding in unsupported:
+            db.delete(finding)
+        db.commit()
+        recalculate_member_counts(db)
+        print(f"\nDeleted {len(unsupported)} findings that no award supports.")
+
+
 def cmd_serve(args):
     """Start the API server."""
     import os
@@ -1164,6 +1256,16 @@ def main():
         "--dry-run", action="store_true", help="Preview deletions without applying them"
     )
     purge_parser.set_defaults(func=cmd_purge_disabled)
+
+    # Contract findings whose "award" was a deobligation
+    non_awards_parser = subparsers.add_parser(
+        "purge-non-awards",
+        help="Delete contract front-run findings no award in the table supports",
+    )
+    non_awards_parser.add_argument(
+        "--dry-run", action="store_true", help="Preview deletions without applying them"
+    )
+    non_awards_parser.set_defaults(func=cmd_purge_non_awards)
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start API server")

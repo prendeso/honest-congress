@@ -67,6 +67,7 @@ from src.analysis.tier2_detectors import (
     DEFAULT_CONTRACT_WINDOW_DAYS,
     DEFAULT_DONOR_WINDOW_DAYS,
     DEFAULT_LOBBYING_WINDOW_DAYS,
+    award_action_criteria,
 )
 from src.db.models import (
     Anomaly,
@@ -347,13 +348,20 @@ def _collect_lobbying(db: Session) -> Dict[int, Streams]:
 
 
 def _collect_contracts(db: Session) -> Dict[int, Streams]:
-    """Purchases only: the detector's claim is about buying *before* an award."""
+    """Purchases only: the detector's claim is about buying *before* an award.
+
+    Filtered by :func:`award_action_criteria`, the same call the detector makes,
+    so the events the null model shuffles are exactly the events the findings
+    were drawn from. A deobligation counted here but not there would deflate
+    every contract q-value by padding the event stream with dates no finding
+    could ever have come from.
+    """
     trades = _member_trades(db)
 
     awards: Dict[str, List[float]] = defaultdict(list)
     for ticker, when in (
         db.query(GovernmentContract.ticker, GovernmentContract.awarded_date)
-        .filter(GovernmentContract.awarded_date.isnot(None))
+        .filter(*award_action_criteria())
         .all()
     ):
         awards[(ticker or "").strip().upper()].append(_days(when))

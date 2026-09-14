@@ -93,3 +93,44 @@ def test_the_purge_runs_before_the_analysis(name):
         f"{name} purges contract findings after analysing, which deletes the "
         f"findings that pass just produced"
     )
+
+
+# GitHub terminates a job at 360 minutes. That is a hard kill of the runner, not
+# a cancellation, so nothing runs afterwards -- an `if: always()` step included.
+GITHUB_HARD_KILL_MINUTES = 360
+
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_the_workflow_stops_before_github_kills_it(name):
+    """Both pipelines end with a summary step that must be allowed to run.
+
+    Measured on 2026-09-14: `daily-update` run 224 started at 11:18 and ended at
+    17:20 marked "cancelled" -- the 360-minute wall, with no `timeout-minutes` of
+    its own. Six hours of ingest, and the "Feeds that FAILED despite the green
+    tick" block never printed, because a hard kill takes the runner with it and
+    `if: always()` has nothing to run on.
+
+    A job timeout below the wall is a cancellation instead, and `always()` does
+    survive a cancellation. So the last thing a truncated run does is still say
+    how far it got, which for an unwatched 06:00 cron is the whole point.
+    """
+    job = next(iter(_workflow(name)["jobs"].values()))
+    timeout = job.get("timeout-minutes")
+
+    assert timeout is not None, (
+        f"{name} declares no timeout-minutes, so GitHub hard-kills it at "
+        f"{GITHUB_HARD_KILL_MINUTES} and its summary step never runs"
+    )
+    assert timeout < GITHUB_HARD_KILL_MINUTES, (
+        f"{name} times out at {timeout}, at or past GitHub's own "
+        f"{GITHUB_HARD_KILL_MINUTES}-minute kill, which defeats the point"
+    )
+
+
+@pytest.mark.parametrize("name", PIPELINES)
+def test_the_summary_step_runs_even_when_something_failed(name):
+    """The timeout above only helps if there is a step for it to protect."""
+    job = next(iter(_workflow(name)["jobs"].values()))
+    always = [s for s in job["steps"] if str(s.get("if", "")).strip() == "always()"]
+
+    assert always, f"{name} has no `if: always()` step, so a failed run reports nothing"

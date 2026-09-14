@@ -37,6 +37,17 @@ env:
 jobs:
   update-disclosures:
     runs-on: ubuntu-latest
+    # GitHub hard-kills a job at 360 minutes, and a hard kill terminates the
+    # runner -- `if: always()` does not save the summary step from it, because
+    # nothing runs at all. Cancelling at 350 is a cancellation, which `always()`
+    # does survive, so a truncated nightly still reports where it got to.
+    #
+    # Measured: run 224 started 11:18 and ended 17:20 marked "cancelled" -- the
+    # 360-minute wall. Six hours, no summary, and the block that names a feed
+    # which died behind a green tick never printed. That block exists precisely
+    # so an unwatched 06:00 cron cannot fail quietly, and without this line it
+    # was the first thing the failure took out.
+    timeout-minutes: 350
 
     steps:
       - name: Checkout repository

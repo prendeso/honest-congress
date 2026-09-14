@@ -918,6 +918,29 @@ def cmd_purge_non_awards(args):
         ).filter(*award_action_criteria()):
             awards[(ticker or "").strip().upper()].append(awarded.date())
 
+        # An empty award table means the contract ingest failed, not that every
+        # published finding is wrong. That is not hypothetical: the USASpending
+        # step carries `continue-on-error: true` and has failed inside a
+        # completed run before, and the migration that re-keyed contract rows
+        # empties the table before the re-ingest fills it. Without this, one
+        # failed feed deletes every contract finding on the site -- each one
+        # naming a member -- and the only thing that would put them back is a
+        # later run whose own ingest happened to work.
+        #
+        # Same judgement `detectors_without_source_data` makes: an empty source
+        # table is "no data", never "nothing to find".
+        # Deliberately the whole table, not the set that survives
+        # `award_action_criteria`. A table holding rows none of which are awards
+        # is real data saying "no awards here" -- the feed worked, and a finding
+        # it cannot support should go. A table holding nothing at all is a feed
+        # that did not run.
+        if db.query(GovernmentContract.id).first() is None:
+            print(
+                "No contract rows are stored at all, so nothing here can be judged. "
+                "The contract ingest has failed or has not run; deleting nothing."
+            )
+            return
+
         trades = {
             row.id: row
             for row in db.query(

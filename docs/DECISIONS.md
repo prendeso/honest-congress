@@ -25,7 +25,8 @@ US federal government data is public domain with no redistribution limit, so
 the official sources are also strictly better for this purpose than the vendor
 feeds they replace.
 
-**Status:** accepted. Migration in progress — see D2.
+**Status:** accepted, and the migration is finished — every row in D2 is now
+done or deliberately dropped. No vendor feed remains.
 
 ## D2. Replace vendor feeds with official sources
 
@@ -39,7 +40,7 @@ feeds they replace.
 | Gov contracts | USASpending (`src/ingestion/usaspending.py`) | — | **done** |
 | Bills and sponsorship | Congress.gov (`src/ingestion/bills.py`) | — | **done** |
 | Company → sector | SEC EDGAR industry codes (`src/ingestion/sec_industries.py`) | — | **done** |
-| Senate trades | — (vendor removed) | Senate eFD | not started |
+| Senate trades | — (vendor removed) | Senate eFD (`src/ingestion/senate.py`) | **done** |
 | Benchmark prices | — | dropped, see D10 | **dropped** |
 
 The Tier-2 detector logic in `src/analysis/tier2_detectors.py` does not change;
@@ -53,12 +54,25 @@ endpoint.
 Two consequences worth stating plainly, because neither is fixed by deleting
 the client:
 
-- **Senate trade coverage is currently zero.** The House path
-  (Clerk XML → PDF → `ptr_parser`) never used the vendor and is unaffected, but
-  it filters on `Member.chamber == HOUSE`. `senate.py` does search for Senate
-  PTRs and the download/parse path is chamber-agnostic, so Senate is reachable
-  in principle — but nothing has shown the scraper survives eFD's anti-bot
-  protection, or that `ptr_parser` handles the Senate PDF layout.
+- **Senate trades no longer depend on the vendor.** This entry used to say
+  coverage was zero and that nothing had shown the scraper survives eFD's
+  protections or that `ptr_parser` handles the Senate layout. Both questions are
+  now answered, and the second was the wrong question: eFD serves **HTML**, not
+  PDF, so `ptr_parser` never applies — `src/parsing/senate_html_parser.py` reads
+  the filing's one named-column table, subclassing `PTRParser` so amount bands
+  and "Sale (Partial)" are not implemented twice.
+
+  Re-checked live against efdsearch.senate.gov on 2026-09-14, end to end: the
+  prohibition-agreement POST establishes a session, a paginated search returns
+  123 Senate trade reports for 2026, a document fetch returns the filing rather
+  than the agreement page, and its table headers are exactly the ones
+  `_COLUMN_ALIASES` expects. `sync_senate_disclosures` is called from
+  `run_ingestion` for every year in the sweep, so this is wired in rather than
+  merely reachable.
+
+  What this does **not** claim is freshness. Senate filings become transactions
+  on the same cadence as House ones — when something runs `cli parse` — and the
+  House path's `Member.chamber == HOUSE` filter is unrelated to it.
 - **The three Tier-2 tables now have ingesters** and all three detectors emit.
   `detection_summary()` — and `cli stats` — still names any detector whose
   source table is empty, so a silent zero stays distinguishable from a clean

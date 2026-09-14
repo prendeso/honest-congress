@@ -79,10 +79,9 @@ from src.db.models import GovernmentContract
 from src.db.resilience import CONNECTION_LOSS_RETRIES, commit_or_recover
 from src.ingestion._helpers import traded_tickers
 from src.ingestion.rate_limit import (
-    DEFAULT_BACKOFF_SECONDS,
-    MAX_RETRIES,
-    RETRYABLE_EXCEPTIONS,
-    RETRYABLE_STATUS,
+    MINUTE,
+    RequestBudgetExhausted,
+    ThrottledClient,
 )
 from src.ingestion.sec_tickers import TickerResolver
 
@@ -94,6 +93,14 @@ logger = logging.getLogger(__name__)
 # traded shortly before an award. `spending_by_transaction` returns individual
 # award actions with the date each one happened.
 SEARCH_URL = "https://api.usaspending.gov/api/v2/search/spending_by_transaction/"
+API_BASE_URL = "https://api.usaspending.gov/api/v2"
+SEARCH_PATH = "/search/spending_by_transaction/"
+
+# Not calibrated against a published limit -- USASpending does not document one.
+# Deliberately generous: the sweep makes roughly one request per traded company
+# and spends most of its hour waiting on USASpending's own latency, not on
+# pacing, so this is a politeness ceiling rather than a throttle that binds.
+REQUESTS_PER_MINUTE = 120
 
 # Contract award types: A/B/C/D are the definitive contract vehicles.
 CONTRACT_AWARD_TYPES = ["A", "B", "C", "D"]
@@ -168,61 +175,43 @@ def _parse_amount(value: Any) -> Decimal | None:
         return None
 
 
-def _post_with_retries(
-    http: requests.Session,
-    payload: Dict[str, Any],
-    *,
-    sleeper: Callable[[float], None] = time.sleep,
-) -> requests.Response:
-    """POST to USASpending, retrying the failures that mean "try again".
+class USASpendingClient(ThrottledClient):
+    """The contract feed, on the same footing as every other one at last.
 
-    This feed never had any retry at all. Every other ingester routes through
-    `ThrottledClient._request`, which grew a retry for transient statuses and
-    then for transient exceptions; USASpending does not, because it needs POST
-    and that client only speaks GET. So the whole of that work passed it by, and
-    it kept failing on the first transient error like everything else used to:
+    It was the only ingester outside `ThrottledClient`, because its search
+    endpoint takes a POST body and this client only spoke GET. That exclusion
+    cost real work: the retry for transient statuses and then the one for
+    transient exceptions were both written for the shared client, and neither
+    reached here -- so a single 502 ended sixty-one minutes of ingestion in
+    rebuild run 13, on a status the shared list had retried for hours.
 
-        requests.exceptions.HTTPError: 502 Server Error: Bad Gateway for url:
-        https://api.usaspending.gov/api/v2/search/spending_by_transaction/
-
-    That is rebuild run 13 on 2026-09-14, and 502 is a status the shared list
-    has retried since the Congress.gov 522 was fixed. Sixty-one minutes of
-    contract ingestion ended on a code the project already knew to retry,
-    because the code that knew it was somewhere this feed does not go.
-
-    The policy is imported rather than restated. Which statuses and which
-    exceptions are worth retrying is a judgement that took two goes to get right
-    and must not now exist in two places.
+    Joining it up also brings the two things the feed never had: a rate limit,
+    and a request budget, so `--max-requests` now means something here.
     """
-    last_failure = "no attempt was made"
-    for attempt in range(MAX_RETRIES):
-        try:
-            response = http.post(SEARCH_URL, json=payload, timeout=REQUEST_TIMEOUT)
-        except RETRYABLE_EXCEPTIONS as exc:
-            last_failure = type(exc).__name__
-        else:
-            if response.status_code not in RETRYABLE_STATUS:
-                # Anything else is a real answer, including a 4xx or a 500, and
-                # `raise_for_status` is the right way to report it.
-                response.raise_for_status()
-                return response
-            last_failure = f"HTTP {response.status_code}"
 
-        if attempt == MAX_RETRIES - 1:
-            break
-        delay = DEFAULT_BACKOFF_SECONDS[min(attempt, len(DEFAULT_BACKOFF_SECONDS) - 1)]
-        logger.warning(
-            "USASpending: %s; retrying in %ss (attempt %d of %d)",
-            last_failure,
-            delay,
-            attempt + 1,
-            MAX_RETRIES,
+    base_url = API_BASE_URL
+    name = "USASpending"
+
+    def __init__(
+        self,
+        *,
+        session: requests.Session | None = None,
+        requests_per_minute: int = REQUESTS_PER_MINUTE,
+        max_requests: int | None = None,
+        sleeper: Callable[[float], None] = time.sleep,
+        clock: Callable[[], float] = time.monotonic,
+        **kwargs: Any,
+    ):
+        super().__init__(
+            limit=requests_per_minute,
+            window_seconds=MINUTE,
+            session=session,
+            timeout=REQUEST_TIMEOUT,
+            max_requests=max_requests,
+            sleeper=sleeper,
+            clock=clock,
+            **kwargs,
         )
-        sleeper(delay)
-
-    raise requests.exceptions.HTTPError(
-        f"USASpending did not answer after {MAX_RETRIES} attempts ({last_failure})"
-    )
 
 
 def fetch_awards(
@@ -231,8 +220,7 @@ def fetch_awards(
     *,
     recipient: str | None = None,
     pages: int = 1,
-    session: requests.Session | None = None,
-    sleeper: Callable[[float], None] = time.sleep,
+    client: USASpendingClient | None = None,
 ) -> List[Dict[str, Any]]:
     """Fetch contract award actions in a date range, largest first.
 
@@ -245,7 +233,7 @@ def fetch_awards(
     actions this company received", which is a rule that can be stated on the
     site rather than an arbitrary slice.
     """
-    http = session or requests.Session()
+    client = client or USASpendingClient()
     awards: List[Dict[str, Any]] = []
 
     filters: Dict[str, Any] = {
@@ -274,7 +262,7 @@ def fetch_awards(
             "limit": PAGE_LIMIT,
             "page": page,
         }
-        body = _post_with_retries(http, payload, sleeper=sleeper).json()
+        body = client.post(SEARCH_PATH, json=payload)
 
         results = body.get("results", [])
         awards.extend(results)
@@ -293,6 +281,8 @@ def ingest_government_contracts(
     pages: int = 1,
     tickers: List[str] | None = None,
     resolver: TickerResolver | None = None,
+    client: USASpendingClient | None = None,
+    max_requests: int | None = None,
 ) -> Dict[str, Any]:
     """Fetch federal awards for the companies members have traded, and store them."""
     end_date = end_date or datetime.now().strftime("%Y-%m-%d")
@@ -305,6 +295,11 @@ def ingest_government_contracts(
         start_date = EARLIEST_SEARCH_DATE
 
     resolver = resolver or TickerResolver()
+    # One client for the whole sweep, so the rate limit and the request budget
+    # span it rather than resetting per company -- the old code built a fresh
+    # `requests.Session()` inside every `fetch_awards` call, which also meant no
+    # connection reuse across nine hundred companies.
+    client = client or USASpendingClient(max_requests=max_requests)
 
     universe = sorted(t.upper() for t in tickers) if tickers else sorted(traded_tickers(db))
     if not universe:
@@ -323,11 +318,13 @@ def ingest_government_contracts(
             "rejected_names": {},
             "connection_losses": 0,
             "companies_lost_to_the_database": [],
+            "stopped_early": False,
         }
 
     imported = 0
     duplicates = 0
     connection_losses = 0
+    stopped_early = False
     companies_lost_to_the_database: List[str] = []
     # Award actions that removed money from a contract or moved none at all.
     # Stored, because they happened and the table is the record of the feed, but
@@ -445,7 +442,16 @@ def ingest_government_contracts(
             continue
 
         queried += 1
-        awards = fetch_awards(start_date, end_date, recipient=company, pages=pages)
+        try:
+            awards = fetch_awards(
+                start_date, end_date, recipient=company, pages=pages, client=client
+            )
+        except RequestBudgetExhausted as exc:
+            # Everything committed so far stays: the loop commits per company,
+            # so this is a partial run the next one resumes, not a lost one.
+            logger.warning("USASpending ingest stopped early: %s", exc)
+            stopped_early = True
+            break
         fetched += len(awards)
 
         # Committed per company rather than once at the end. The old shape held
@@ -512,4 +518,5 @@ def ingest_government_contracts(
         "rejected_names": rejected_names,
         "connection_losses": connection_losses,
         "companies_lost_to_the_database": companies_lost_to_the_database,
+        "stopped_early": stopped_early,
     }

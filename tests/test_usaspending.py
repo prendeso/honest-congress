@@ -42,6 +42,7 @@ from src.ingestion.sec_tickers import TickerResolver
 from src.ingestion.usaspending import (
     EARLIEST_SEARCH_DATE,
     SEARCH_URL,
+    USASpendingClient,
     award_action_key,
     fetch_awards,
     ingest_government_contracts,
@@ -49,6 +50,16 @@ from src.ingestion.usaspending import (
 
 AWARDS = Path(__file__).parent / "fixtures" / "usaspending" / "spending_by_transaction_2024.json"
 SEC = Path(__file__).parent / "fixtures" / "sec" / "company_tickers.json"
+
+
+def _client(session) -> USASpendingClient:
+    """The real client over a mock session.
+
+    `fetch_awards` takes a client now rather than a bare session: the contract
+    feed went onto `ThrottledClient` so it stops being the one ingester outside
+    the shared retry, rate limit and request budget.
+    """
+    return USASpendingClient(session=session, sleeper=lambda _: None)
 
 
 def _http(payload) -> MagicMock:
@@ -94,7 +105,7 @@ def over_matching_search(awards_payload):
 
 def test_fetch_uses_the_transaction_endpoint(awards_payload):
     session = _http(awards_payload)
-    fetch_awards("2024-01-01", "2024-12-31", pages=1, session=session)
+    fetch_awards("2024-01-01", "2024-12-31", pages=1, client=_client(session))
     url, kwargs = session.post.call_args[0][0], session.post.call_args[1]
     assert url == SEARCH_URL
     assert url.endswith("spending_by_transaction/")
@@ -103,26 +114,28 @@ def test_fetch_uses_the_transaction_endpoint(awards_payload):
 
 def test_fetch_restricts_the_search_to_one_recipient(awards_payload):
     session = _http(awards_payload)
-    fetch_awards("2024-01-01", "2024-12-31", recipient="NORTHROP GRUMMAN CORP", session=session)
+    fetch_awards(
+        "2024-01-01", "2024-12-31", recipient="NORTHROP GRUMMAN CORP", client=_client(session)
+    )
     filters = session.post.call_args[1]["json"]["filters"]
     assert filters["recipient_search_text"] == ["NORTHROP GRUMMAN CORP"]
 
 
 def test_fetch_without_a_recipient_searches_every_recipient(awards_payload):
     session = _http(awards_payload)
-    fetch_awards("2024-01-01", "2024-12-31", session=session)
+    fetch_awards("2024-01-01", "2024-12-31", client=_client(session))
     assert "recipient_search_text" not in session.post.call_args[1]["json"]["filters"]
 
 
 def test_fetch_stops_when_the_page_is_the_last(awards_payload):
     session = _http(awards_payload)
-    fetch_awards("2024-01-01", "2024-12-31", pages=5, session=session)
+    fetch_awards("2024-01-01", "2024-12-31", pages=5, client=_client(session))
     assert session.post.call_count == 1
 
 
 def test_fetch_asks_for_the_largest_awards_first(awards_payload):
     session = _http(awards_payload)
-    fetch_awards("2024-01-01", "2024-12-31", pages=1, session=session)
+    fetch_awards("2024-01-01", "2024-12-31", pages=1, client=_client(session))
     body = session.post.call_args[1]["json"]
     assert body["sort"] == "Transaction Amount"
     assert body["order"] == "desc"
@@ -354,7 +367,7 @@ class TestTheContractFeedRetriesWhatEverythingElseRetries:
 
     def test_a_502_is_retried_rather_than_raised(self, awards_payload):
         session = self._session(self._responses(502, 200, payload=awards_payload))
-        awards = fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+        awards = fetch_awards("2024-01-01", "2024-12-31", client=_client(session))
         assert session.post.call_count == 2
         assert awards == awards_payload["results"]
 
@@ -363,7 +376,7 @@ class TestTheContractFeedRetriesWhatEverythingElseRetries:
         ok = self._responses(200, payload=awards_payload)[0]
         session = MagicMock()
         session.post.side_effect = [requests.exceptions.ReadTimeout("slow"), ok]
-        awards = fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+        awards = fetch_awards("2024-01-01", "2024-12-31", client=_client(session))
         assert session.post.call_count == 2
         assert awards == awards_payload["results"]
 
@@ -371,7 +384,7 @@ class TestTheContractFeedRetriesWhatEverythingElseRetries:
         """A real answer from the server, and repeating it four times changes nothing."""
         session = self._session(self._responses(404, payload=awards_payload))
         with pytest.raises(requests.exceptions.HTTPError):
-            fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+            fetch_awards("2024-01-01", "2024-12-31", client=_client(session))
         assert session.post.call_count == 1
 
     def test_a_500_is_not_retried(self, awards_payload):
@@ -379,28 +392,41 @@ class TestTheContractFeedRetriesWhatEverythingElseRetries:
         four times is four times the load for the same answer."""
         session = self._session(self._responses(500, payload=awards_payload))
         with pytest.raises(requests.exceptions.HTTPError):
-            fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+            fetch_awards("2024-01-01", "2024-12-31", client=_client(session))
         assert session.post.call_count == 1
 
     def test_it_gives_up_after_the_shared_retry_limit(self, awards_payload):
+        """`RetryError`, the shared client's, not the `HTTPError` this feed used
+        to raise from its own loop. One exception type across all five feeds is
+        worth more than preserving the one that was different."""
         from src.ingestion.rate_limit import MAX_RETRIES
 
         session = self._session(self._responses(*([502] * MAX_RETRIES), payload=awards_payload))
-        with pytest.raises(requests.exceptions.HTTPError):
-            fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+        with pytest.raises(requests.exceptions.RetryError):
+            fetch_awards("2024-01-01", "2024-12-31", client=_client(session))
         assert session.post.call_count == MAX_RETRIES
 
-    def test_the_retry_policy_is_the_shared_one_not_a_copy(self):
-        """Which statuses are worth retrying took two goes to get right.
+    def test_there_is_no_second_retry_implementation_here(self):
+        """Stronger than the assertion it replaces.
 
-        If this module restated them, the next correction would land in one place
-        and not the other.
+        This used to check that the module imported the shared retryable-status
+        and retryable-exception lists rather than restating them -- true, but it
+        still had a loop of its own around them. The feed is now a
+        `ThrottledClient` like every other one, so there is nothing here to keep
+        in step: `_post_with_retries` is gone, and with it the second place a
+        correction would have had to land.
         """
         import src.ingestion.usaspending as module
-        from src.ingestion import rate_limit
+        from src.ingestion.rate_limit import ThrottledClient
 
-        assert module.RETRYABLE_STATUS is rate_limit.RETRYABLE_STATUS
-        assert module.RETRYABLE_EXCEPTIONS is rate_limit.RETRYABLE_EXCEPTIONS
+        assert issubclass(module.USASpendingClient, ThrottledClient)
+        assert not hasattr(module, "_post_with_retries")
+
+    def test_the_feed_finally_has_a_rate_limit_and_a_budget(self):
+        """Neither existed here before: it was the one ingester outside both."""
+        client = USASpendingClient(session=MagicMock(), max_requests=5)
+        assert client.max_requests == 5
+        assert client._limiter is not None
 
 
 # ---------------- one award is not one action ----------------
@@ -501,7 +527,7 @@ class TestTheKeyIsTheActionNotTheAward:
 
     def test_the_request_asks_for_the_modification_number(self, awards_payload):
         session = _http(awards_payload)
-        fetch_awards("2024-01-01", "2024-12-31", session=session)
+        fetch_awards("2024-01-01", "2024-12-31", client=_client(session))
         assert "Mod" in session.post.call_args[1]["json"]["fields"]
 
     def test_an_award_with_no_contract_number_is_not_given_a_key(self):
@@ -734,3 +760,104 @@ class TestADroppedDatabaseConnectionDoesNotEndTheRun:
                     ingest_government_contracts(
                         db_session, "2024-01-01", "2024-12-31", tickers=["GD"], resolver=resolver
                     )
+
+
+class TestTheRequestBudgetStopsTheSweep:
+    """The contract sweep was the other feed with no cap -- 61 minutes, unbounded.
+
+    It could not have one while it sat outside `ThrottledClient`: the budget is
+    implemented there, and this feed had its own loop because the shared client
+    only spoke GET. Now that it is a `ThrottledClient`, `--max-requests` means
+    something here for the first time.
+
+    Stopping must keep what is already done. The sweep commits per company, so a
+    capped run is a partial one the next run resumes.
+    """
+
+    def _awards(self, n: int):
+        return [
+            {
+                "Award ID": f"W912{i:04d}",
+                "Recipient Name": "GENERAL DYNAMICS CORP",
+                "Transaction Amount": 1_000_000 + i,
+                "Action Date": "2024-03-01",
+                "Awarding Agency": "Department of Defense",
+                "Transaction Description": "TEST",
+                "Mod": str(i),
+            }
+            for i in range(n)
+        ]
+
+    def _session(self, pages):
+        session = MagicMock()
+        out = []
+        for payload in pages:
+            r = MagicMock()
+            r.status_code = 200
+            r.raise_for_status.return_value = None
+            r.json.return_value = {"results": payload, "page_metadata": {"hasNext": False}}
+            out.append(r)
+        session.post.side_effect = out
+        return session
+
+    def test_the_cap_stops_the_sweep_rather_than_escaping(self, db_session, resolver):
+        session = self._session([self._awards(2), self._awards(2)])
+        client = USASpendingClient(session=session, sleeper=lambda _: None, max_requests=1)
+
+        result = ingest_government_contracts(
+            db_session,
+            "2024-01-01",
+            "2024-12-31",
+            tickers=["GD", "BA"],
+            resolver=resolver,
+            client=client,
+        )
+
+        assert result["stopped_early"] is True
+        assert session.post.call_count <= 1
+
+    def test_what_was_ingested_before_the_cap_is_kept(self, db_session, resolver):
+        # GD first: the universe is sorted, and these fixture awards are all
+        # General Dynamics, so any other ticker would correctly reject them all
+        # as the wrong company and store nothing regardless of the cap.
+        session = self._session([self._awards(3), self._awards(3)])
+        client = USASpendingClient(session=session, sleeper=lambda _: None, max_requests=1)
+
+        result = ingest_government_contracts(
+            db_session,
+            "2024-01-01",
+            "2024-12-31",
+            tickers=["GD", "LMT"],
+            resolver=resolver,
+            client=client,
+        )
+
+        stored = db_session.query(GovernmentContract).count()
+        assert stored == result["imported"] > 0, "the first company's awards should survive"
+
+    def test_an_uncapped_run_still_reports_not_stopped(self, db_session, resolver):
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=self._awards(2)):
+            result = ingest_government_contracts(
+                db_session, "2024-01-01", "2024-12-31", tickers=["GD"], resolver=resolver
+            )
+        assert result["stopped_early"] is False
+
+    def test_one_client_serves_the_whole_sweep(self, db_session, resolver):
+        """The budget and the rate limit have to span the sweep, not reset per
+        company. The old code built a fresh `requests.Session()` inside every
+        `fetch_awards` call -- so no shared budget, and no connection reuse
+        across nine hundred companies either."""
+        session = self._session([self._awards(1)] * 4)
+        client = USASpendingClient(session=session, sleeper=lambda _: None)
+
+        ingest_government_contracts(
+            db_session,
+            "2024-01-01",
+            "2024-12-31",
+            tickers=["GD", "BA"],
+            resolver=resolver,
+            client=client,
+        )
+
+        # Both companies counted against the one client's tally.
+        assert client.requests_made >= 2

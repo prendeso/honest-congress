@@ -22,6 +22,7 @@ from src.ingestion.senate import SenateIngester, SenatePTRIngester, SenateSearch
 from src.parsing.confidence import score_fd_parse, score_ptr_parse
 from src.parsing.pdf_parser import DisclosureParser
 from src.parsing.ptr_parser import PTRParser
+from src.parsing.senate_html_parser import SenateHtmlParser
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,7 @@ class IngestionOrchestrator:
         self.senate = SenateIngester()
         self.senate_ptr = SenatePTRIngester()
         self.member_client = CongressGovClient()
+        self.senate_html_parser = SenateHtmlParser()
 
         # Filings dropped for want of a matching member, across every sync this
         # orchestrator runs, excluding the ones expected to have no member.
@@ -765,8 +767,23 @@ class IngestionOrchestrator:
         document_id = disclosure.document_id
 
         try:
-            # Use appropriate parser based on disclosure type
-            if disclosure.is_ptr:
+            # Senate filings are HTML, House filings are PDF, and handing one to
+            # the other's parser is how 458 stored Senate filings came back as
+            # "no text layer in PDF - likely a scan" with zero transactions. They
+            # are not scans; eFD simply does not serve PDFs. The suffix is set by
+            # the download path, which already saves what the server actually
+            # returned rather than assuming.
+            if pdf_path.suffix.lower() in {".html", ".htm"}:
+                parsed = self.senate_html_parser.parse_senate_html(str(pdf_path))
+                self._clear_parsed_rows(db, disclosure, parsed.get("transactions") or [])
+                self._store_ptr_data(db, disclosure, parsed)
+                text_extracted = bool((parsed.get("quality") or {}).get("text_extracted"))
+                score = score_ptr_parse(
+                    parsed.get("quality") or {},
+                    parsed.get("transactions") or [],
+                    disclosure.filing_date,
+                )
+            elif disclosure.is_ptr:
                 parsed = self.ptr_parser.parse_ptr(str(pdf_path))
                 self._clear_parsed_rows(db, disclosure, parsed.get("transactions") or [])
                 self._store_ptr_data(db, disclosure, parsed)

@@ -41,6 +41,7 @@ from src.ingestion.sec_tickers import TickerResolver
 from src.ingestion.usaspending import (
     EARLIEST_SEARCH_DATE,
     SEARCH_URL,
+    award_action_key,
     fetch_awards,
     ingest_government_contracts,
 )
@@ -203,7 +204,7 @@ def test_every_stored_award_resolves_to_the_ticker_it_is_filed_under(
     # Every stored award sits under the ticker its OWN recipient name resolves
     # to, not under whichever company query happened to return it.
     by_action = {
-        str(a["internal_id"]): resolver.resolve(a["Recipient Name"])
+        award_action_key(a): resolver.resolve(a["Recipient Name"])
         for a in awards_payload["results"]
     }
     for row in rows:
@@ -269,6 +270,111 @@ def test_every_fetched_action_is_accounted_for(db_session, resolver, over_matchi
         result["imported"] + result["rejected_wrong_company"] + result["duplicates"]
         == result["fetched"]
     )
+
+
+# ---------------- one award is not one action ----------------
+
+
+class TestTheKeyIsTheActionNotTheAward:
+    """USASpending's `internal_id` identifies the CONTRACT, not the obligation.
+
+    Contract W31P4Q24C0022 came back from the live API as nine transaction rows
+    sharing one `internal_id`, with six distinct action dates spanning
+    2024-06-28 to 2026-03-06 and nine distinct amounts. Over 500 live rows the
+    id had 437 distinct values, so deduplicating on it threw away 63 real award
+    actions -- and what the discarded ones differ in is the ACTION DATE, the one
+    field `detect_contract_front_runs` reads. A purchase before the March 2026
+    obligation could not be flagged, because only September 2025 was stored.
+
+    `generated_internal_id` is the same value in a readable spelling and has
+    exactly the same problem.
+    """
+
+    # Trimmed from the live response for W31P4Q24C0022. Same recipient, same
+    # contract, same internal_id; different obligations.
+    NINE_OBLIGATIONS = [
+        {
+            "internal_id": 348950884,
+            "Award ID": "W31P4Q24C0022",
+            "Recipient Name": "LOCKHEED MARTIN CORPORATION",
+            "Action Date": date,
+            "Transaction Amount": amount,
+            "Awarding Agency": "Department of Defense",
+            "Transaction Description": "MISSILE PRODUCTION",
+        }
+        for date, amount in (
+            ("2025-09-29", 1876405331.29),
+            ("2026-03-06", 1479881421.64),
+            ("2024-06-28", 1361764787.87),
+            ("2025-08-29", 1030244056.17),
+            ("2024-06-28", 854653680.58),
+            ("2025-08-29", 847998635.12),
+            ("2025-09-29", 820035743.42),
+            ("2026-03-06", 703559640.0),
+            ("2024-09-25", 390252562.58),
+        )
+    ]
+
+    def test_the_award_id_alone_does_not_identify_an_obligation(self):
+        assert len({str(a["internal_id"]) for a in self.NINE_OBLIGATIONS}) == 1
+        assert len({award_action_key(a) for a in self.NINE_OBLIGATIONS}) == 9
+
+    def test_all_nine_obligations_are_stored(self, db_session, resolver):
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=self.NINE_OBLIGATIONS):
+            result = ingest_government_contracts(
+                db_session, "2024-01-01", "2026-12-31", tickers=["LMT"], resolver=resolver
+            )
+
+        assert result["imported"] == 9
+        assert result["duplicates"] == 0
+        rows = db_session.query(GovernmentContract).all()
+        # The dates are what the detector reads, and all six must survive.
+        assert {r.awarded_date.strftime("%Y-%m-%d") for r in rows} == {
+            "2024-06-28",
+            "2024-09-25",
+            "2025-08-29",
+            "2025-09-29",
+            "2026-03-06",
+        }
+
+    def test_two_actions_differing_only_by_modification_both_survive(self, db_session, resolver):
+        # The case the old comment was right to worry about and the old key did
+        # not actually cover: one contract, one day, one amount, two mods.
+        same_day = [
+            {
+                "internal_id": 1,
+                "Award ID": "W31P4Q24C0022",
+                "Mod": mod,
+                "Recipient Name": "LOCKHEED MARTIN CORPORATION",
+                "Action Date": "2024-06-28",
+                "Transaction Amount": 500000.0,
+                "Awarding Agency": "Department of Defense",
+                "Transaction Description": "MISSILE PRODUCTION",
+            }
+            for mod in ("P00001", "P00002")
+        ]
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=same_day):
+            result = ingest_government_contracts(
+                db_session, "2024-01-01", "2024-12-31", tickers=["LMT"], resolver=resolver
+            )
+        assert result["imported"] == 2
+
+    def test_the_identical_row_repeated_is_still_one_row(self, db_session, resolver):
+        repeat = [dict(self.NINE_OBLIGATIONS[0]) for _ in range(4)]
+        with patch("src.ingestion.usaspending.fetch_awards", return_value=repeat):
+            result = ingest_government_contracts(
+                db_session, "2024-01-01", "2026-12-31", tickers=["LMT"], resolver=resolver
+            )
+        assert result["imported"] == 1
+        assert result["duplicates"] == 3
+
+    def test_the_request_asks_for_the_modification_number(self, awards_payload):
+        session = _http(awards_payload)
+        fetch_awards("2024-01-01", "2024-12-31", session=session)
+        assert "Mod" in session.post.call_args[1]["json"]["fields"]
+
+    def test_an_award_with_no_contract_number_is_not_given_a_key(self):
+        assert award_action_key({"Action Date": "2024-01-01", "Transaction Amount": 1}) is None
 
 
 # ---------------- dates, reruns, bounds ----------------

@@ -38,6 +38,7 @@ EXTERNAL_TEXT = {
     ("disclosures", "filing_type"): "Annual Report for CY 2024 (Amendment 1)",
     ("lobbying_disclosures", "source"): "senate-lda",
     ("government_contracts", "source"): "usaspending",
+    ("government_contracts", "agency"): "Department of Health and Human Services",
     ("company_industries", "sector"): "Pharmaceutical Preparations",
 }
 
@@ -86,6 +87,54 @@ class TestTheFecVocabularyFits:
         """Guards against the migration being reverted while the tests above
         keep passing on a coincidentally shorter sample."""
         assert _column("campaign_donations", "transaction_type").type.length >= 255
+
+
+class TestTheContractActionKeyFits:
+    """`government_contracts.external_id` stopped being an opaque number.
+
+    It used to hold USASpending's `internal_id`, which is short and identifies
+    the contract rather than the obligation -- so nine separate award actions
+    collapsed into one row and the eight dropped carried the action dates the
+    front-run detector reads. The key is now composite:
+
+        <PIID>|<modification>|<action date>|<amount>
+
+    which is longer, and the column it goes in is VARCHAR(100). That number is
+    not comfortable by accident: the longest key over 1,200 live transaction
+    rows is 47 characters, and the worst case is bounded by the PIID, which the
+    FAR caps at 50.
+    """
+
+    # The longest real key measured against the live API.
+    LONGEST_SEEN = "70SBUR24F00000103|P00016|2026-08-06|63696545.58"
+
+    # PIID at its FAR maximum, a six-character modification, a date, and an
+    # amount wider than any federal contract has ever been.
+    WORST_CASE = "|".join(("P" * 50, "P00016", "2026-08-06", "999999999999999.99"))
+
+    @pytest.mark.parametrize("value", (LONGEST_SEEN, WORST_CASE))
+    def test_it_fits(self, value):
+        limit = _column("government_contracts", "external_id").type.length
+        assert len(value) <= limit, (
+            f"a contract action key of {len(value)} characters does not fit "
+            f"VARCHAR({limit}): {value!r}. PostgreSQL will refuse the insert and "
+            "take the whole contract ingest with it."
+        )
+
+    def test_the_key_the_ingester_builds_is_the_shape_assumed_here(self):
+        from src.ingestion.usaspending import award_action_key
+
+        assert (
+            award_action_key(
+                {
+                    "Award ID": "70SBUR24F00000103",
+                    "Mod": "P00016",
+                    "Action Date": "2026-08-06",
+                    "Transaction Amount": 63696545.58,
+                }
+            )
+            == self.LONGEST_SEEN
+        )
 
 
 class TestEveryExternallyFedTextColumnHasRoom:

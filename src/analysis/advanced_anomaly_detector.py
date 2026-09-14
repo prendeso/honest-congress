@@ -526,7 +526,7 @@ def run_advanced_anomaly_detection(db: Session, persist: bool = True) -> Dict:
     When `persist` is true, detected anomalies are written to the database
     via `persist_anomalies` (deduplicated by member_id+type+title).
     """
-    from src.analysis import persist_anomalies
+    from src.analysis import detector_is_disabled, persist_anomalies
 
     detector = AdvancedAnomalyDetector()
 
@@ -542,9 +542,18 @@ def run_advanced_anomaly_detection(db: Session, persist: bool = True) -> Dict:
     asset_anomalies = detector.detect_asset_appreciation_anomalies(db)
     logger.info(f"   Found {len(asset_anomalies)} anomalies\n")
 
-    logger.info("3. Detecting stock outperformance...")
-    stock_anomalies = detector.detect_stock_outperformance_anomalies(db)
-    logger.info(f"   Found {len(stock_anomalies)} anomalies\n")
+    # Not run when disabled, rather than run and discarded. `outperforming_trades`
+    # benchmarks against a hardcoded flat 10% and computes "return" as
+    # (sells - buys)/buys with no position matching, which is why it is
+    # disabled -- and it cost 17m15s of a production analysis step to produce
+    # 23 findings that `persist_anomalies` then dropped on the floor.
+    if detector_is_disabled("outperforming_trades"):
+        logger.info("3. Stock outperformance is disabled; not running it.\n")
+        stock_anomalies: List[Dict] = []
+    else:
+        logger.info("3. Detecting stock outperformance...")
+        stock_anomalies = detector.detect_stock_outperformance_anomalies(db)
+        logger.info(f"   Found {len(stock_anomalies)} anomalies\n")
 
     persisted = 0
     if persist:

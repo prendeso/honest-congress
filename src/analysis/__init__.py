@@ -90,6 +90,27 @@ def _build_title(a: Dict[str, Any]) -> str:
     return atype.replace("_", " ").title()
 
 
+def detector_is_disabled(anomaly_type: str) -> bool:
+    """Whether a detector's output would be thrown away if it ran.
+
+    `persist_anomalies` already refuses to store a disabled type, and
+    `detect_red_flag_combinations` already refuses to count one. What neither
+    does is stop the detector RUNNING, and three of them walk the full roster
+    with per-member queries.
+
+    Measured on one production rebuild: stock outperformance took 17m15s to
+    produce 23 findings that were then dropped, and loss avoidance 17m17s to
+    produce 18 more. Thirty-four minutes of a 168-minute analysis step, spent
+    computing rows the project has already judged unfit to publish.
+
+    Checking here rather than at each call site keeps the single source of truth
+    in `Settings.disabled_anomaly_types_set`.
+    """
+    from src.config import get_settings
+
+    return anomaly_type in get_settings().disabled_anomaly_types_set
+
+
 def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
     """Persist anomaly dicts to the database.
 

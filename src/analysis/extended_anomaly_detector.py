@@ -52,7 +52,10 @@ class ExtendedAnomalyDetector:
         - Trades within 14 days before company earnings
         - Clustered trading (multiple members same stock same period)
         """
+        from src.analysis import detector_is_disabled
+
         anomalies = []
+        skip_perfect_timing = detector_is_disabled("perfect_timing")
 
         try:
             members = db.query(Member).all()
@@ -104,8 +107,15 @@ class ExtendedAnomalyDetector:
                     if volume_spikes:
                         anomalies.extend(volume_spikes)
 
-                    # Pattern 3: Perfect buy-low-sell-high patterns
-                    perfect_timing = self._check_perfect_timing(trades)
+                    # Pattern 3: Perfect buy-low-sell-high patterns.
+                    #
+                    # This one cannot be skipped at the run_* level like the
+                    # other two, because the loop it sits in also produces
+                    # trade_clustering, volume_spikes and high_trading_frequency,
+                    # which are enabled. So the check itself is skipped instead.
+                    perfect_timing = (
+                        None if skip_perfect_timing else self._check_perfect_timing(trades)
+                    )
                     if perfect_timing:
                         anomalies.append(
                             {
@@ -448,7 +458,7 @@ def run_extended_anomaly_detection(
 
     When `persist` is true, detected anomalies are written to the database.
     """
-    from src.analysis import persist_anomalies
+    from src.analysis import detector_is_disabled, persist_anomalies
 
     detector = ExtendedAnomalyDetector()
 
@@ -466,9 +476,16 @@ def run_extended_anomaly_detection(
     # for callers reading combined_results.
     conflict_anomalies: List[Dict] = []
 
-    logger.info("3. Detecting loss avoidance patterns...")
-    loss_anomalies = detector.detect_loss_avoidance(db)
-    logger.info(f"   Found {len(loss_anomalies)} anomalies\n")
+    # Same reasoning as stock outperformance: `loss_avoidance` increments its
+    # numerator and denominator on the same branch, so its rate is always
+    # exactly 100%. It cost 17m17s to produce 18 findings that were discarded.
+    if detector_is_disabled("loss_avoidance"):
+        logger.info("3. Loss avoidance is disabled; not running it.\n")
+        loss_anomalies: List[Dict] = []
+    else:
+        logger.info("3. Detecting loss avoidance patterns...")
+        loss_anomalies = detector.detect_loss_avoidance(db)
+        logger.info(f"   Found {len(loss_anomalies)} anomalies\n")
 
     combined_results = previous_results or {
         "wealth_anomalies": [],

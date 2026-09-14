@@ -50,6 +50,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from src.db.models import LobbyingDisclosure
+from src.db.resilience import CONNECTION_LOSS_RETRIES, commit_or_recover
 from src.ingestion._helpers import traded_tickers
 from src.ingestion.rate_limit import (
     DEFAULT_BACKOFF_SECONDS,
@@ -221,10 +222,14 @@ def ingest_lobbying_disclosures(
             "duplicates": 0,
             "rejected_wrong_company": 0,
             "requests_made": client.requests_made,
+            "connection_losses": 0,
+            "companies_lost_to_the_database": [],
         }
 
     imported = 0
     duplicates = 0
+    connection_losses = 0
+    companies_lost_to_the_database: List[str] = []
     rejected = 0
     unnamed = 0
     queried = 0
@@ -238,26 +243,37 @@ def ingest_lobbying_disclosures(
     # The set doubles as the in-batch guard it sits beside: `SessionLocal` is
     # autoflush=False, so a row added earlier in this loop is invisible to a
     # query anyway.
-    seen: Set[str] = {
-        row[0]
-        for row in db.query(LobbyingDisclosure.external_id)
-        .filter(
-            LobbyingDisclosure.source == SOURCE,
-            LobbyingDisclosure.external_id.isnot(None),
+    seen: Set[str] = set()
+
+    def reload_seen() -> None:
+        """Refill `seen` from committed state, in place.
+
+        In place because `_store_one_companys_filings` closes over it. Called
+        once to prime it, and again after any rollback: at that point it holds
+        ids for rows that no longer exist and would skip re-importing them.
+        """
+        seen.clear()
+        seen.update(
+            row[0]
+            for row in db.query(LobbyingDisclosure.external_id)
+            .filter(
+                LobbyingDisclosure.source == SOURCE,
+                LobbyingDisclosure.external_id.isnot(None),
+            )
+            .all()
         )
-        .all()
-    }
 
-    for ticker in universe:
-        company = resolver.name_for(ticker)
-        if not company:
-            # Not in the SEC register at all -- a foreign listing, a fund, or a
-            # ticker the parser misread. Nothing to ask the LDA about.
-            unnamed += 1
-            continue
+    reload_seen()
 
-        queried += 1
-        for filing in client.filings(company, filing_year):
+    def _store_one_companys_filings(ticker: str, filings: List[Dict[str, Any]]) -> Dict[str, int]:
+        """Add one company's filings. Counts are returned, not accumulated.
+
+        Returned so a failed attempt contributes nothing, and replayable
+        because `filings` is already a list: a retry re-adds the same rows
+        without asking the LDA again.
+        """
+        counts = {"imported": 0, "duplicates": 0, "rejected": 0}
+        for filing in filings:
             client_name = (filing.get("client") or {}).get("name") or ""
 
             # `client_name` is a substring match. It hands back subsidiaries,
@@ -269,13 +285,13 @@ def ingest_lobbying_disclosures(
                 resolver.resolve(candidate) == ticker
                 for candidate in _candidate_client_names(client_name)
             ):
-                rejected += 1
+                counts["rejected"] += 1
                 continue
 
             external_id = str(filing.get("filing_uuid") or "") or None
             if external_id:
                 if external_id in seen:
-                    duplicates += 1
+                    counts["duplicates"] += 1
                     continue
                 seen.add(external_id)
             else:
@@ -290,7 +306,7 @@ def ingest_lobbying_disclosures(
                     )
                     .first()
                 ):
-                    duplicates += 1
+                    counts["duplicates"] += 1
                     continue
 
             db.add(
@@ -309,9 +325,37 @@ def ingest_lobbying_disclosures(
                     external_id=external_id,
                 )
             )
-            imported += 1
+            counts["imported"] += 1
+        return counts
 
-    db.commit()
+    for ticker in universe:
+        company = resolver.name_for(ticker)
+        if not company:
+            # Not in the SEC register at all -- a foreign listing, a fund, or a
+            # ticker the parser misread. Nothing to ask the LDA about.
+            unnamed += 1
+            continue
+
+        queried += 1
+        # Materialised rather than streamed, so a retry after a dropped
+        # connection replays from memory instead of paging the LDA again.
+        filings = list(client.filings(company, filing_year))
+
+        # Committed per company rather than once at the end: the old shape held
+        # one transaction open across the whole sweep, so a drop anywhere in it
+        # lost every company and left nothing to resume from.
+        for _attempt in range(1 + CONNECTION_LOSS_RETRIES):
+            counts = _store_one_companys_filings(ticker, filings)
+            if commit_or_recover(db, rebuild_caches=reload_seen, unit=ticker):
+                imported += counts["imported"]
+                duplicates += counts["duplicates"]
+                rejected += counts["rejected"]
+                break
+            connection_losses += 1
+        else:
+            # Counted and named: a company silently missing from a run is
+            # indistinguishable from one that nobody lobbied for.
+            companies_lost_to_the_database.append(ticker)
 
     logger.info(
         "Lobbying disclosures: %d imported, %d duplicates, %d rejected as a "
@@ -322,6 +366,14 @@ def ingest_lobbying_disclosures(
         queried,
         client.requests_made,
     )
+    if connection_losses:
+        logger.warning(
+            "The database connection dropped %d time(s); %d company/companies were lost to it (%s)",
+            connection_losses,
+            len(companies_lost_to_the_database),
+            ", ".join(companies_lost_to_the_database[:5]) or "none",
+        )
+
     return {
         "tickers_queried": queried,
         "tickers_without_a_registered_name": unnamed,
@@ -329,4 +381,6 @@ def ingest_lobbying_disclosures(
         "duplicates": duplicates,
         "rejected_wrong_company": rejected,
         "requests_made": client.requests_made,
+        "connection_losses": connection_losses,
+        "companies_lost_to_the_database": companies_lost_to_the_database,
     }

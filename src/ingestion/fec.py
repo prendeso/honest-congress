@@ -49,6 +49,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from src.db.models import CampaignDonation, Member
+from src.db.resilience import CONNECTION_LOSS_RETRIES, commit_or_recover
 from src.ingestion._helpers import traded_tickers
 from src.ingestion.committees import BASE_URL as LEGISLATORS_BASE_URL
 from src.ingestion.committees import _fetch_yaml
@@ -289,6 +290,8 @@ def ingest_campaign_donations(
             "skipped_unmapped_recipient": 0,
             "requests_made": client.requests_made,
             "stopped_early": False,
+            "connection_losses": 0,
+            "pacs_lost_to_the_database": [],
         }
 
     traded = traded_tickers(db) if restrict_to_traded else None
@@ -304,31 +307,39 @@ def ingest_campaign_donations(
     unmapped = 0
     pacs_queried = 0
     skipped_done = 0
+    connection_losses = 0
+    pacs_lost_to_the_database: List[str] = []
     stopped_early = False
     # Every FEC sub_id already stored, read once rather than asked per receipt.
     # The last run imported 32,515 donations; that was 32,515 round trips to a
     # hosted database to discover which were new, and on a rerun all of them are
     # already present. Also the in-batch guard, since autoflush=False hides a
     # row added earlier in this loop from a query.
-    seen_sub_ids: Set[str] = {
-        row[0]
-        for row in db.query(CampaignDonation.external_id)
-        .filter(
-            CampaignDonation.source == SOURCE,
-            CampaignDonation.external_id.isnot(None),
+    seen_sub_ids: Set[str] = set()
+    # Tickers already carrying donations for this cycle, so a resumed run does
+    # not re-spend requests on PACs already done.
+    already_done: Set[str] = set()
+
+    def reload_caches() -> None:
+        """Refill both caches from committed state, in place.
+
+        In place because `_store_one_pacs_receipts` closes over them. Two, not
+        one: a rollback undoes donations, so `seen_sub_ids` would skip
+        re-importing them AND `already_done` would claim the ticker was finished
+        when its rows are gone.
+        """
+        seen_sub_ids.clear()
+        seen_sub_ids.update(
+            row[0]
+            for row in db.query(CampaignDonation.external_id)
+            .filter(
+                CampaignDonation.source == SOURCE,
+                CampaignDonation.external_id.isnot(None),
+            )
+            .all()
         )
-        .all()
-    }
-
-    try:
-        committees = principal_committees(client, sorted(members_by_fec_id))
-        pacs = corporate_pacs(client, resolver, cycle, restrict_to=traded)
-
-        # A capped or throttled run stops partway through, so resuming must not
-        # re-spend requests on PACs already done. Committees are processed in a
-        # stable order and any ticker already carrying donations for this cycle
-        # is skipped -- one query to make the next run cheap.
-        already_done = {
+        already_done.clear()
+        already_done.update(
             row[0]
             for row in db.query(CampaignDonation.ticker)
             .filter(
@@ -337,27 +348,29 @@ def ingest_campaign_donations(
             )
             .distinct()
             .all()
-        }
+        )
 
-        for committee_id, (ticker, pac_name) in sorted(pacs.items()):
-            if resume and ticker in already_done:
-                skipped_done += 1
-                continue
-            pacs_queried += 1
-            for receipt in client.paginate_keyset(
-                "/schedules/schedule_a/",
-                {
-                    "contributor_id": committee_id,
-                    "two_year_transaction_period": cycle,
-                    # Narrowed server-side rather than after the fact. Only
-                    # principal campaign committees resolve to a member here,
-                    # and dropping the rest saves whole pages: Boeing's PAC
-                    # goes from 1,443 receipts to 1,231, and every page is a
-                    # request against a 1,000/hour budget.
-                    "recipient_committee_designation": "P",
-                    "recipient_committee_type": ["H", "S"],
-                },
-            ):
+    reload_caches()
+
+    try:
+        committees = principal_committees(client, sorted(members_by_fec_id))
+        pacs = corporate_pacs(client, resolver, cycle, restrict_to=traded)
+
+        # `already_done` was primed with the caches above: a capped or throttled
+        # run stops partway through, and resuming must not re-spend requests on
+        # PACs already done.
+
+        def _store_one_pacs_receipts(
+            ticker: str, pac_name: str, receipts: List[Dict[str, Any]]
+        ) -> Dict[str, int]:
+            """Add one PAC's receipts. Counts are returned, not accumulated.
+
+            Returned so a failed attempt contributes nothing, and replayable
+            because `receipts` is already a list: a retry re-adds the same rows
+            without spending another request against the 1,000/hour budget.
+            """
+            counts = {"imported": 0, "duplicates": 0, "unmapped": 0}
+            for receipt in receipts:
                 # Memo entries restate a transaction reported elsewhere. Counting
                 # them would double the donation totals for every PAC that uses
                 # them.
@@ -373,7 +386,7 @@ def ingest_campaign_donations(
                 if member_id is None:
                     # Party, leadership and joint-fundraising committees, and
                     # candidates who are not sitting members.
-                    unmapped += 1
+                    counts["unmapped"] += 1
                     continue
 
                 # FEC's own transaction id. The natural key is not unique in
@@ -383,7 +396,7 @@ def ingest_campaign_donations(
                 sub_id = str(receipt.get("sub_id") or "") or None
                 if sub_id:
                     if sub_id in seen_sub_ids:
-                        duplicates += 1
+                        counts["duplicates"] += 1
                         continue
                     seen_sub_ids.add(sub_id)
                 elif (
@@ -397,7 +410,7 @@ def ingest_campaign_donations(
                     )
                     .first()
                 ):
-                    duplicates += 1
+                    counts["duplicates"] += 1
                     continue
 
                 donated = _parse_date(receipt.get("contribution_receipt_date"))
@@ -415,15 +428,61 @@ def ingest_campaign_donations(
                         external_id=sub_id,
                     )
                 )
-                imported += 1
+                counts["imported"] += 1
+            return counts
+
+        for committee_id, (ticker, pac_name) in sorted(pacs.items()):
+            if resume and ticker in already_done:
+                skipped_done += 1
+                continue
+            pacs_queried += 1
+            # Materialised rather than streamed, so a retry after a dropped
+            # connection replays from memory instead of re-paging the FEC.
+            receipts = list(
+                client.paginate_keyset(
+                    "/schedules/schedule_a/",
+                    {
+                        "contributor_id": committee_id,
+                        "two_year_transaction_period": cycle,
+                        # Narrowed server-side rather than after the fact. Only
+                        # principal campaign committees resolve to a member here,
+                        # and dropping the rest saves whole pages: Boeing's PAC
+                        # goes from 1,443 receipts to 1,231, and every page is a
+                        # request against a 1,000/hour budget.
+                        "recipient_committee_designation": "P",
+                        "recipient_committee_type": ["H", "S"],
+                    },
+                )
+            )
+
+            # Committed per PAC rather than once at the end, so a dropped
+            # connection costs one PAC instead of every donation gathered so far.
+            for _attempt in range(1 + CONNECTION_LOSS_RETRIES):
+                counts = _store_one_pacs_receipts(ticker, pac_name, receipts)
+                if commit_or_recover(db, rebuild_caches=reload_caches, unit=ticker):
+                    imported += counts["imported"]
+                    duplicates += counts["duplicates"]
+                    unmapped += counts["unmapped"]
+                    break
+                connection_losses += 1
+            else:
+                # Counted and named: a PAC silently missing from a run is
+                # indistinguishable from one that gave nothing.
+                pacs_lost_to_the_database.append(ticker)
 
     except RequestBudgetExhausted as exc:
-        # Not a failure. Everything ingested so far is committed below and the
+        # Not a failure. Every PAC handled so far is already committed and the
         # next run picks up where this one stopped.
         logger.warning("FEC ingest stopped early: %s", exc)
         stopped_early = True
 
-    db.commit()
+    if connection_losses:
+        logger.warning(
+            "The database connection dropped %d time(s); %d PAC(s) were lost to it (%s)",
+            connection_losses,
+            len(pacs_lost_to_the_database),
+            ", ".join(pacs_lost_to_the_database[:5]) or "none",
+        )
 
     logger.info(
         "Campaign donations: %d imported, %d duplicates, %d receipts to "
@@ -442,4 +501,6 @@ def ingest_campaign_donations(
         "skipped_unmapped_recipient": unmapped,
         "requests_made": client.requests_made,
         "stopped_early": stopped_early,
+        "connection_losses": connection_losses,
+        "pacs_lost_to_the_database": pacs_lost_to_the_database,
     }

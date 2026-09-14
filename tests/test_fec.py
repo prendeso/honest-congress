@@ -36,6 +36,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import requests
 import yaml
+from sqlalchemy.exc import OperationalError
 
 from src.db.models import CampaignDonation, Chamber, Disclosure, Member, Party, Transaction
 from src.db.models import TransactionType as TT
@@ -524,3 +525,69 @@ class TestCostDoesNotTrackTheNumberOfReceipts:
         assert first["imported"] == 12
         assert second["imported"] == 0
         assert db_session.query(CampaignDonation).count() == 12
+
+
+class TestADroppedDatabaseConnectionDoesNotEndTheRun:
+    """Two caches here, not one, and both go stale on a rollback.
+
+    `seen_sub_ids` holds the FEC transaction ids already stored. `already_done`
+    holds the tickers that already carry donations for this cycle, and exists so
+    a resumed run does not re-spend requests on PACs it has finished. A rollback
+    undoes donations, so afterwards the first would skip re-importing them and
+    the second would claim the PAC was done when its rows are gone.
+    """
+
+    def _dropped(self) -> OperationalError:
+        exc = OperationalError("COMMIT", {}, Exception("SSL error: unexpected eof"))
+        exc.connection_invalidated = True
+        return exc
+
+    def _flaky_commit(self, db_session, fail_on):
+        real = db_session.commit
+        calls = {"n": 0}
+
+        def commit():
+            calls["n"] += 1
+            if calls["n"] in fail_on:
+                raise self._dropped()
+            return real()
+
+        return commit
+
+    def test_the_donations_survive_a_dropped_connection(self, db_session, resolver, receipts):
+        _seed_for_ingest(db_session)
+        with patch.object(db_session, "commit", side_effect=self._flaky_commit(db_session, {1})):
+            result = _ingest(db_session, resolver, receipts)
+
+        assert result["connection_losses"] >= 1
+        assert result["pacs_lost_to_the_database"] == []
+        assert db_session.query(CampaignDonation).count() == result["imported"] > 0
+
+    def test_the_rows_lost_to_the_rollback_are_re_imported(self, db_session, resolver, receipts):
+        """Fails if `seen_sub_ids` is not rebuilt: the retry skips every row."""
+        _seed_for_ingest(db_session)
+        with patch.object(db_session, "commit", side_effect=self._flaky_commit(db_session, {1})):
+            result = _ingest(db_session, resolver, receipts)
+
+        assert db_session.query(CampaignDonation).count() > 0
+        assert result["duplicates"] == 0
+
+    def test_a_pac_lost_to_repeated_drops_is_named(self, db_session, resolver, receipts):
+        _seed_for_ingest(db_session)
+        with patch.object(
+            db_session, "commit", side_effect=self._flaky_commit(db_session, {1, 2, 3, 4})
+        ):
+            result = _ingest(db_session, resolver, receipts)
+
+        assert result["pacs_lost_to_the_database"], "a lost PAC must be named, not silent"
+        assert db_session.query(CampaignDonation).count() == 0
+
+    def test_a_real_database_error_still_raises(self, db_session, resolver, receipts):
+        _seed_for_ingest(db_session)
+
+        def broken():
+            raise OperationalError("COMMIT", {}, Exception("syntax error"))
+
+        with patch.object(db_session, "commit", side_effect=broken):
+            with pytest.raises(OperationalError):
+                _ingest(db_session, resolver, receipts)

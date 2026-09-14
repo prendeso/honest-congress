@@ -76,6 +76,7 @@ import requests
 from sqlalchemy.orm import Session
 
 from src.db.models import GovernmentContract
+from src.db.resilience import CONNECTION_LOSS_RETRIES, commit_or_recover
 from src.ingestion._helpers import traded_tickers
 from src.ingestion.rate_limit import (
     DEFAULT_BACKOFF_SECONDS,
@@ -320,10 +321,14 @@ def ingest_government_contracts(
             "money_taken_back": 0,
             "rejected_wrong_company": 0,
             "rejected_names": {},
+            "connection_losses": 0,
+            "companies_lost_to_the_database": [],
         }
 
     imported = 0
     duplicates = 0
+    connection_losses = 0
+    companies_lost_to_the_database: List[str] = []
     # Award actions that removed money from a contract or moved none at all.
     # Stored, because they happened and the table is the record of the feed, but
     # counted here because `detect_contract_front_runs` will not call any of them
@@ -346,15 +351,90 @@ def ingest_government_contracts(
     # added here on import is found here on the next iteration, which matters
     # because SessionLocal is autoflush=False and a pending row is invisible to
     # a query anyway.
-    seen: set[str] = {
-        row[0]
-        for row in db.query(GovernmentContract.external_id)
-        .filter(
-            GovernmentContract.source == SOURCE,
-            GovernmentContract.external_id.isnot(None),
+    seen: set[str] = set()
+
+    def reload_seen() -> None:
+        """Refill `seen` from what is actually committed, in place.
+
+        In place rather than rebound because `_store_one_companys_awards` closes
+        over it. Called once to prime it, and again after any rollback -- at
+        which point it is holding ids for rows that no longer exist, and would
+        skip re-importing every one of them.
+        """
+        seen.clear()
+        seen.update(
+            row[0]
+            for row in db.query(GovernmentContract.external_id)
+            .filter(
+                GovernmentContract.source == SOURCE,
+                GovernmentContract.external_id.isnot(None),
+            )
+            .all()
         )
-        .all()
-    }
+
+    reload_seen()
+
+    def _store_one_companys_awards(ticker: str, awards: List[Dict[str, Any]]) -> Dict[str, int]:
+        """Add one company's award actions. Counts are returned, not accumulated.
+
+        Returned so a failed attempt contributes nothing: the caller folds them
+        in only once the commit has actually happened. Called again on a retry,
+        against a `seen` rebuilt from the committed state, so the rows the
+        rollback removed are re-created rather than skipped.
+        """
+        counts = {"imported": 0, "duplicates": 0, "rejected": 0, "money_taken_back": 0}
+        for award in awards:
+            recipient_name = award.get("Recipient Name") or ""
+
+            # The round trip. USASpending matched this award to the company we
+            # asked about, possibly through its own recipient hierarchy, which
+            # this project cannot verify. Keeping only names that resolve back
+            # to the same ticker means every stored award is attributable from
+            # the SEC register alone.
+            if resolver.resolve(recipient_name) != ticker:
+                counts["rejected"] += 1
+                rejected_names[recipient_name] = rejected_names.get(recipient_name, 0) + 1
+                continue
+
+            # The date the award action actually happened -- the only one a
+            # front-running window can be measured against.
+            awarded = _parse_date(award.get("Action Date"))
+            description = award.get("Transaction Description") or award.get("Award ID") or ""
+
+            # What makes reruns idempotent, and what stops one contract's nine
+            # separate obligations collapsing into one row. See
+            # `award_action_key` for why USASpending's own `internal_id` cannot
+            # do this job.
+            external_id = award_action_key(award)
+            if external_id is None:
+                # No contract number, so nothing identifies this action and a
+                # rerun could not recognise it. Counting it as a duplicate is
+                # the honest arithmetic: it is not imported and it was not
+                # rejected as the wrong company.
+                counts["duplicates"] += 1
+                continue
+            if external_id in seen:
+                counts["duplicates"] += 1
+                continue
+            seen.add(external_id)
+
+            amount = _parse_amount(award.get("Transaction Amount"))
+            if amount is not None and amount <= 0:
+                counts["money_taken_back"] += 1
+
+            db.add(
+                GovernmentContract(
+                    ticker=ticker,
+                    agency=award.get("Awarding Agency"),
+                    description=description,
+                    amount=amount,
+                    awarded_date=awarded,
+                    source=SOURCE,
+                    external_id=external_id,
+                )
+            )
+            counts["imported"] += 1
+        return counts
 
     for ticker in universe:
         company = resolver.name_for(ticker)
@@ -368,62 +448,26 @@ def ingest_government_contracts(
         awards = fetch_awards(start_date, end_date, recipient=company, pages=pages)
         fetched += len(awards)
 
-        for award in awards:
-            recipient_name = award.get("Recipient Name") or ""
-
-            # The round trip. USASpending matched this award to the company we
-            # asked about, possibly through its own recipient hierarchy, which
-            # this project cannot verify. Keeping only names that resolve back
-            # to the same ticker means every stored award is attributable from
-            # the SEC register alone.
-            if resolver.resolve(recipient_name) != ticker:
-                rejected += 1
-                rejected_names[recipient_name] = rejected_names.get(recipient_name, 0) + 1
-                continue
-
-            # The date the award action actually happened -- the only one a
-            # front-running window can be measured against.
-            awarded = _parse_date(award.get("Action Date"))
-            description = award.get("Transaction Description") or award.get("Award ID") or ""
-
-            # What makes reruns idempotent, and what stops one contract's nine
-            # separate obligations collapsing into one row. See
-            # `award_action_key` for why USASpending's own `internal_id` cannot
-            # do this job. (The key cannot collide across two company queries --
-            # the round trip above resolves each recipient to exactly one
-            # ticker -- so `seen` is guarding repeats inside one company's
-            # pages, which is where the nine appeared.)
-            external_id = award_action_key(award)
-            if external_id is None:
-                # No contract number, so nothing identifies this action and a
-                # rerun could not recognise it. Counting it as a duplicate is
-                # the honest arithmetic: it is not imported and it was not
-                # rejected as the wrong company.
-                duplicates += 1
-                continue
-            if external_id in seen:
-                duplicates += 1
-                continue
-            seen.add(external_id)
-
-            amount = _parse_amount(award.get("Transaction Amount"))
-            if amount is not None and amount <= 0:
-                money_taken_back += 1
-
-            db.add(
-                GovernmentContract(
-                    ticker=ticker,
-                    agency=award.get("Awarding Agency"),
-                    description=description,
-                    amount=amount,
-                    awarded_date=awarded,
-                    source=SOURCE,
-                    external_id=external_id,
-                )
-            )
-            imported += 1
-
-    db.commit()
+        # Committed per company rather than once at the end. The old shape held
+        # one transaction open across the whole sweep -- 61 minutes in the run
+        # that failed -- so a connection dropped at any point took every company
+        # with it, and there was nothing to resume from. Now a drop costs one.
+        #
+        # The retry is free of the network: `awards` is already in memory, so
+        # replaying it re-adds the same rows without asking USASpending again.
+        for _attempt in range(1 + CONNECTION_LOSS_RETRIES):
+            counts = _store_one_companys_awards(ticker, awards)
+            if commit_or_recover(db, rebuild_caches=reload_seen, unit=ticker):
+                imported += counts["imported"]
+                duplicates += counts["duplicates"]
+                rejected += counts["rejected"]
+                money_taken_back += counts["money_taken_back"]
+                break
+            connection_losses += 1
+        else:
+            # Counted and named. A company silently missing from a run is
+            # indistinguishable from one that holds no federal contracts.
+            companies_lost_to_the_database.append(ticker)
 
     logger.info(
         "Government contracts: %d imported (%d of them deobligations or "
@@ -437,6 +481,14 @@ def ingest_government_contracts(
         queried,
         unnamed,
     )
+    if connection_losses:
+        logger.warning(
+            "The database connection dropped %d time(s); %d company/companies were lost to it (%s)",
+            connection_losses,
+            len(companies_lost_to_the_database),
+            ", ".join(companies_lost_to_the_database[:5]) or "none",
+        )
+
     if rejected_names:
         # Named, not just counted. A recipient rejected a hundred times is a
         # listed contractor whose federal arm is registered under a divisional
@@ -458,4 +510,6 @@ def ingest_government_contracts(
         "money_taken_back": money_taken_back,
         "rejected_wrong_company": rejected,
         "rejected_names": rejected_names,
+        "connection_losses": connection_losses,
+        "companies_lost_to_the_database": companies_lost_to_the_database,
     }

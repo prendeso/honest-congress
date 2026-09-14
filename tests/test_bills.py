@@ -352,3 +352,107 @@ def test_a_looked_up_bill_is_not_looked_up_again(db_session, committees_hr4644):
     result = fetch_bill_committees(db_session, API_KEY, bills=[bill], client=second)
     assert result["bills_looked_up"] == 0
     assert second.session.get.call_count == 0
+
+
+class TestOneUnknownMemberDoesNotAbortTheIngest:
+    """Congress.gov 404s a bioguide id it does not carry, and this roster holds
+    every member in history. One such id ended the sponsorship ingest for all
+    12,770:
+
+        404 Client Error: Not Found for url:
+        https://api.congress.gov/v3/member/M000633/sponsored-legislation
+
+    Two detectors -- sponsorship_conflict and bill_jurisdiction_conflict -- had
+    no data at all as a result, and the step is continue-on-error so the run
+    reported success.
+    """
+
+    def _roster(self, db, bioguide_ids):
+        from src.db.models import Chamber, Member, Party
+
+        for i, bioguide in enumerate(bioguide_ids):
+            db.add(
+                Member(
+                    bioguide_id=bioguide,
+                    first_name=f"First{i}",
+                    last_name=f"Last{i}",
+                    chamber=Chamber.HOUSE,
+                    party=Party.DEMOCRAT,
+                    state="CA",
+                )
+            )
+        db.commit()
+
+    class _Client:
+        """Paginates normally, except for the ids that 404."""
+
+        def __init__(self, missing):
+            self.missing = set(missing)
+            self.requests_made = 0
+            self.asked = []
+
+        def paginate(self, path, key):
+            import requests
+
+            self.requests_made += 1
+            bioguide = path.split("/")[2]
+            self.asked.append(bioguide)
+            if bioguide in self.missing:
+                response = requests.Response()
+                response.status_code = 404
+                raise requests.HTTPError("404 Client Error: Not Found", response=response)
+            return iter(())
+
+    def test_the_members_after_it_are_still_queried(self, db_session):
+        from src.ingestion.bills import ingest_member_bills
+
+        self._roster(db_session, ["A000001", "M000633", "C000003"])
+        client = self._Client(missing={"M000633"})
+
+        result = ingest_member_bills(db_session, "key", client=client, include_cosponsored=False)
+
+        assert result["members_queried"] == 3
+        assert "C000003" in client.asked, (
+            "the member after the unknown one was never queried — one 404 still ends the ingest"
+        )
+
+    def test_a_non_404_still_propagates(self, db_session):
+        """A 403 on a bad key, or a 429, must not be quietly read as 'this
+        member has no bills'."""
+        import requests
+
+        from src.ingestion.bills import ingest_member_bills
+
+        self._roster(db_session, ["A000001"])
+
+        class Forbidden(self._Client):
+            def paginate(self, path, key):
+                response = requests.Response()
+                response.status_code = 403
+                raise requests.HTTPError("403 Forbidden", response=response)
+
+        with pytest.raises(requests.HTTPError):
+            ingest_member_bills(
+                db_session, "key", client=Forbidden(missing=set()), include_cosponsored=False
+            )
+
+    def test_the_skipped_members_are_reported(self, db_session, caplog):
+        """Silence here would make a roster drifting away from Congress.gov's
+        ids look exactly like Congress passing no legislation."""
+        import logging
+
+        from src.ingestion.bills import ingest_member_bills
+
+        self._roster(db_session, ["A000001", "M000633"])
+
+        with caplog.at_level(logging.WARNING, logger="src.ingestion.bills"):
+            ingest_member_bills(
+                db_session,
+                "key",
+                client=self._Client(missing={"M000633"}),
+                include_cosponsored=False,
+            )
+
+        assert any("no record for" in r.getMessage() for r in caplog.records), (
+            "members Congress.gov could not resolve were skipped without saying so"
+        )

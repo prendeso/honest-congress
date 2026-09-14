@@ -471,7 +471,12 @@ class CampaignDonation(Base):
     donor_name: Mapped[str] = mapped_column(String(255))
     amount: Mapped[Decimal | None] = mapped_column(Numeric(15, 2), nullable=True)
     cycle: Mapped[str | None] = mapped_column(String(10), nullable=True)
-    transaction_type: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # FEC's transaction-type vocabulary is prose, not a code:
+    # "CONTRIBUTION RECEIVED FROM REGISTERED FILER (CANDIDATES)" is 55
+    # characters. At String(50) the whole donation ingest -- seventeen minutes
+    # of API calls -- aborted on its final commit and stored nothing, which is
+    # why donor_conflict had no data to fire on.
+    transaction_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     donation_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     source: Mapped[str] = mapped_column(String(50), default="unknown")

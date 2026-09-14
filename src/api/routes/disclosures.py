@@ -55,10 +55,44 @@ def _count_by_disclosure(db: Session, model: Any, disclosure_ids: List[int]) -> 
     return {disclosure_id: count for disclosure_id, count in rows}
 
 
+# A Senate filing lives at efdsearch.senate.gov under a UUID and a path segment
+# that varies by format -- /view/ptr/, /view/annual/, /view/paper/ -- none of
+# which is derivable from what is stored. `cli fix-urls` says exactly this and
+# scopes itself to the House for it; the identical logic here did not, and the
+# consequence was visible on every page of the site.
+SENATE_EFD_HOST = "efdsearch.senate.gov"
+HOUSE_CLERK_HOST = "disclosures-clerk.house.gov"
+
+
 def _normalized_document_url(disclosure: Disclosure) -> str | None:
+    """Repair a House Clerk document URL. HOUSE ONLY, and that is load-bearing.
+
+    Every branch below reconstructs a House Clerk path from the document id,
+    because for the House the id IS the filename. For a Senate filing none of
+    the branches match and the function fell through to the final `return`,
+    fabricating
+
+        https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2026/S257795ae-....pdf
+
+    for a document that actually lives at
+
+        https://efdsearch.senate.gov/search/view/ptr/257795ae-.../
+
+    The stored URL was correct the whole time -- this was invented at response
+    time, so every Senate filing on the site linked to a 404. Sampled against
+    production, 100 of 100 disclosures came back pointing at the House Clerk and
+    not one carried an eFD URL, including 20 with Senate document ids.
+
+    Anything that is not already a House Clerk URL is returned untouched.
+    """
     url = disclosure.document_url
 
     if not disclosure.document_id:
+        return url
+
+    # Not ours to rewrite. A Senate URL is already the only correct one, and a
+    # host this function does not know about is not improved by guessing.
+    if url and HOUSE_CLERK_HOST not in url:
         return url
 
     base = "https://disclosures-clerk.house.gov/public_disc"

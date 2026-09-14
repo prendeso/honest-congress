@@ -67,15 +67,22 @@ differ in is the action date -- the only field the front-run detector reads. See
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 import requests
 from sqlalchemy.orm import Session
 
 from src.db.models import GovernmentContract
 from src.ingestion._helpers import traded_tickers
+from src.ingestion.rate_limit import (
+    DEFAULT_BACKOFF_SECONDS,
+    MAX_RETRIES,
+    RETRYABLE_EXCEPTIONS,
+    RETRYABLE_STATUS,
+)
 from src.ingestion.sec_tickers import TickerResolver
 
 logger = logging.getLogger(__name__)
@@ -160,6 +167,63 @@ def _parse_amount(value: Any) -> Decimal | None:
         return None
 
 
+def _post_with_retries(
+    http: requests.Session,
+    payload: Dict[str, Any],
+    *,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> requests.Response:
+    """POST to USASpending, retrying the failures that mean "try again".
+
+    This feed never had any retry at all. Every other ingester routes through
+    `ThrottledClient._request`, which grew a retry for transient statuses and
+    then for transient exceptions; USASpending does not, because it needs POST
+    and that client only speaks GET. So the whole of that work passed it by, and
+    it kept failing on the first transient error like everything else used to:
+
+        requests.exceptions.HTTPError: 502 Server Error: Bad Gateway for url:
+        https://api.usaspending.gov/api/v2/search/spending_by_transaction/
+
+    That is rebuild run 13 on 2026-09-14, and 502 is a status the shared list
+    has retried since the Congress.gov 522 was fixed. Sixty-one minutes of
+    contract ingestion ended on a code the project already knew to retry,
+    because the code that knew it was somewhere this feed does not go.
+
+    The policy is imported rather than restated. Which statuses and which
+    exceptions are worth retrying is a judgement that took two goes to get right
+    and must not now exist in two places.
+    """
+    last_failure = "no attempt was made"
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = http.post(SEARCH_URL, json=payload, timeout=REQUEST_TIMEOUT)
+        except RETRYABLE_EXCEPTIONS as exc:
+            last_failure = type(exc).__name__
+        else:
+            if response.status_code not in RETRYABLE_STATUS:
+                # Anything else is a real answer, including a 4xx or a 500, and
+                # `raise_for_status` is the right way to report it.
+                response.raise_for_status()
+                return response
+            last_failure = f"HTTP {response.status_code}"
+
+        if attempt == MAX_RETRIES - 1:
+            break
+        delay = DEFAULT_BACKOFF_SECONDS[min(attempt, len(DEFAULT_BACKOFF_SECONDS) - 1)]
+        logger.warning(
+            "USASpending: %s; retrying in %ss (attempt %d of %d)",
+            last_failure,
+            delay,
+            attempt + 1,
+            MAX_RETRIES,
+        )
+        sleeper(delay)
+
+    raise requests.exceptions.HTTPError(
+        f"USASpending did not answer after {MAX_RETRIES} attempts ({last_failure})"
+    )
+
+
 def fetch_awards(
     start_date: str,
     end_date: str,
@@ -167,6 +231,7 @@ def fetch_awards(
     recipient: str | None = None,
     pages: int = 1,
     session: requests.Session | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> List[Dict[str, Any]]:
     """Fetch contract award actions in a date range, largest first.
 
@@ -208,9 +273,7 @@ def fetch_awards(
             "limit": PAGE_LIMIT,
             "page": page,
         }
-        response = http.post(SEARCH_URL, json=payload, timeout=REQUEST_TIMEOUT)
-        response.raise_for_status()
-        body = response.json()
+        body = _post_with_retries(http, payload, sleeper=sleeper).json()
 
         results = body.get("results", [])
         awards.extend(results)

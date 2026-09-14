@@ -35,6 +35,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from src.db.models import GovernmentContract
 from src.ingestion.sec_tickers import TickerResolver
@@ -317,6 +318,89 @@ class TestDeobligationsAreStoredButCounted:
     def test_a_feed_of_real_awards_reports_none(self, db_session, resolver):
         result = self._ingest(db_session, resolver, [5_000_000, 12_000])
         assert result["money_taken_back"] == 0
+
+
+class TestTheContractFeedRetriesWhatEverythingElseRetries:
+    """This feed had no retry at all, and nobody noticed because it is separate.
+
+    Every other ingester goes through `ThrottledClient._request`, which learned
+    to retry transient statuses and then transient exceptions. USASpending needs
+    POST and that client only speaks GET, so it went its own way and all of that
+    work passed it by. Rebuild run 13, 2026-09-14:
+
+        requests.exceptions.HTTPError: 502 Server Error: Bad Gateway for url:
+        https://api.usaspending.gov/api/v2/search/spending_by_transaction/
+
+    Sixty-one minutes of contract ingestion ended on 502 -- a status the shared
+    list has retried ever since a Congress.gov 522 killed a sponsorship ingest.
+    """
+
+    def _responses(self, *statuses, payload):
+        out = []
+        for status in statuses:
+            r = MagicMock()
+            r.status_code = status
+            r.json.return_value = payload
+            r.raise_for_status.side_effect = (
+                None if status < 400 else requests.exceptions.HTTPError(f"{status}")
+            )
+            out.append(r)
+        return out
+
+    def _session(self, responses):
+        session = MagicMock()
+        session.post.side_effect = responses
+        return session
+
+    def test_a_502_is_retried_rather_than_raised(self, awards_payload):
+        session = self._session(self._responses(502, 200, payload=awards_payload))
+        awards = fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+        assert session.post.call_count == 2
+        assert awards == awards_payload["results"]
+
+    def test_a_read_timeout_is_retried_too(self, awards_payload):
+        """A status only exists once a response arrives; these happen before one does."""
+        ok = self._responses(200, payload=awards_payload)[0]
+        session = MagicMock()
+        session.post.side_effect = [requests.exceptions.ReadTimeout("slow"), ok]
+        awards = fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+        assert session.post.call_count == 2
+        assert awards == awards_payload["results"]
+
+    def test_a_404_is_not_retried(self, awards_payload):
+        """A real answer from the server, and repeating it four times changes nothing."""
+        session = self._session(self._responses(404, payload=awards_payload))
+        with pytest.raises(requests.exceptions.HTTPError):
+            fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+        assert session.post.call_count == 1
+
+    def test_a_500_is_not_retried(self, awards_payload):
+        """Deliberately absent from the shared list: a genuine server bug repeated
+        four times is four times the load for the same answer."""
+        session = self._session(self._responses(500, payload=awards_payload))
+        with pytest.raises(requests.exceptions.HTTPError):
+            fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+        assert session.post.call_count == 1
+
+    def test_it_gives_up_after_the_shared_retry_limit(self, awards_payload):
+        from src.ingestion.rate_limit import MAX_RETRIES
+
+        session = self._session(self._responses(*([502] * MAX_RETRIES), payload=awards_payload))
+        with pytest.raises(requests.exceptions.HTTPError):
+            fetch_awards("2024-01-01", "2024-12-31", session=session, sleeper=lambda _: None)
+        assert session.post.call_count == MAX_RETRIES
+
+    def test_the_retry_policy_is_the_shared_one_not_a_copy(self):
+        """Which statuses are worth retrying took two goes to get right.
+
+        If this module restated them, the next correction would land in one place
+        and not the other.
+        """
+        import src.ingestion.usaspending as module
+        from src.ingestion import rate_limit
+
+        assert module.RETRYABLE_STATUS is rate_limit.RETRYABLE_STATUS
+        assert module.RETRYABLE_EXCEPTIONS is rate_limit.RETRYABLE_EXCEPTIONS
 
 
 # ---------------- one award is not one action ----------------

@@ -908,6 +908,18 @@ _SUPERSEDED_WORDING = (
     ("multi_factor_risk", "description", "combined score:"),
     ("cross_member_cluster", "title", " saled "),
     ("cross_member_cluster", "title", " purchased "),
+    # `wealth_vs_salary` published four dollar figures nobody disclosed --
+    # "Net worth grew from $1,507,500 to $9,007,500" -- from band midpoints,
+    # and tested its "far exceeds salary" claim on those midpoints too. The
+    # corrected detector reports the interval and holds the claim to its floor.
+    #
+    # This one needs the purge even though the detector had no published
+    # findings when it was fixed: its title is unchanged by the correction, and
+    # `anomaly_key` identifies a member-level finding BY TITLE, so a row written
+    # by the old code in the window before the fix deploys keeps its identity
+    # and its description is never rewritten. That window is real -- a pipeline
+    # run already in flight analyses with the code it checked out at dispatch.
+    ("wealth_vs_salary", "description", "Net worth grew from"),
 )
 
 
@@ -1118,6 +1130,168 @@ def cmd_purge_non_awards(args):
         db.commit()
         recalculate_member_counts(db)
         print(f"\nDeleted {len(unsupported)} findings that no award supports.")
+
+
+def cmd_repair_house_attribution(args):
+    """Move House filings stored against the wrong member onto the right one.
+
+    The matcher that put them there (fixed in the change that added
+    `_match_representative`) ended in `.first()` on a query with no ORDER BY.
+    Where two House members share a surname and a state it picked arbitrarily,
+    and in production it picked wrong: eight filings, including a 2026 PTR for
+    $100,001-$250,000, are published under **B000315 Nicholas Begich, D-AK, who
+    disappeared in a plane crash in October 1972 and was declared dead**, while
+    the sitting Nicholas Begich III (B001323, R-AK) shows none.
+
+    Correcting the matcher does not correct those rows, and re-running `ingest`
+    never will: `_already_queued` short-circuits on `document_id`, which is
+    unique, so a filing that is already stored is skipped before the matcher is
+    consulted at all. The attribution is decided once, at first sight, for ever.
+
+    So the repair is a separate, deliberate pass. It re-reads the Clerk's index
+    for each ingested year -- the same source the attribution came from -- runs
+    today's matcher over it, and compares the answer with what is stored.
+
+    It only ever moves a filing the matcher resolves to exactly ONE member.
+    Ambiguous and unmatched rows are reported and left alone: silently
+    rewriting `member_id` on published rows is its own integrity problem, so
+    everything it does it prints first, and it does nothing at all without
+    `--apply`.
+
+    Transactions, assets and liabilities hang off `disclosure_id` and carry no
+    `member_id` of their own, so they follow the filing without being touched.
+    Anomalies do not: they are member-level and derived, so the next `analyze`
+    re-derives them from the corrected attribution.
+    """
+    from src.db.models import Asset, Disclosure, Liability, Member, Transaction
+    from src.ingestion.house import HouseIngester
+    from src.ingestion.orchestrator import IngestionOrchestrator
+
+    ingester = HouseIngester()
+    orchestrator = IngestionOrchestrator()
+
+    index: dict[str, dict] = {}
+    for year in args.years:
+        rows = ingester.fetch_annual_xml_index(year) + ingester.fetch_ptr_xml_index(year)
+        for row in rows:
+            if row.get("document_id"):
+                index[row["document_id"]] = row
+        print(f"{year} Clerk index: {len(rows)} member filings")
+
+    if not index:
+        print("The Clerk's index came back empty; refusing to conclude anything from that.")
+        return
+
+    print(f"\nIndex covers {len(index)} filings across {', '.join(map(str, args.years))}.\n")
+
+    def describe(member: Member | None) -> str:
+        if member is None:
+            return "(no member)"
+        seat = "sitting" if member.in_office else "former"
+        district = f"-{member.district}" if member.district else ""
+        return (
+            f"{member.bioguide_id} {member.first_name} {member.last_name} "
+            f"({member.state}{district}, {seat})"
+        )
+
+    with get_db() as db:
+        # Rebuild the matcher's member index against this session.
+        orchestrator._house_current = None
+        orchestrator._house_all = None
+
+        stored = db.query(Disclosure).filter(Disclosure.filing_year.in_(list(args.years))).all()
+        print(f"Stored filings in those years: {len(stored)}\n")
+
+        moves: list[tuple[Disclosure, Member, Member, dict]] = []
+        agreed = 0
+        unresolved: list[tuple[Disclosure, dict, int]] = []
+        absent: dict[str, int] = {}
+
+        for disclosure in stored:
+            entry = index.get(disclosure.document_id or "")
+            if entry is None:
+                key = disclosure.filing_type or "?"
+                absent[key] = absent.get(key, 0) + 1
+                continue
+
+            candidates = orchestrator._match_representative(
+                db,
+                entry.get("first_name", ""),
+                entry.get("last_name", ""),
+                entry.get("state", ""),
+                entry.get("district", ""),
+            )
+
+            if len(candidates) != 1:
+                unresolved.append((disclosure, entry, len(candidates)))
+                continue
+
+            correct = candidates[0]
+            if correct.id == disclosure.member_id:
+                agreed += 1
+                continue
+
+            current = db.query(Member).filter(Member.id == disclosure.member_id).first()
+            moves.append((disclosure, current, correct, entry))
+
+        print(f"Attribution the matcher confirms: {agreed}")
+        print(f"Attribution it would change:      {len(moves)}")
+        print(f"It cannot decide:                 {len(unresolved)}")
+        if absent:
+            listed = ", ".join(f"{k}={v}" for k, v in sorted(absent.items()))
+            print(f"Stored but not in the index:      {sum(absent.values())} ({listed})")
+
+        if unresolved:
+            print("\nLeft alone because the matcher returned no single answer:")
+            for disclosure, entry, count in unresolved[:20]:
+                name = f"{entry.get('first_name')} {entry.get('last_name')}".strip()
+                print(
+                    f"  {disclosure.document_id} {disclosure.filing_year} "
+                    f"{disclosure.filing_type}: {name} ({entry.get('state')}) "
+                    f"-> {count} candidates"
+                )
+            if len(unresolved) > 20:
+                print(f"  ... and {len(unresolved) - 20} more")
+
+        if not moves:
+            print("\nNothing to move.")
+            return
+
+        print("\nEvery filing this would move, and what rides along with it:\n")
+        for disclosure, current, correct, entry in moves:
+            transactions = (
+                db.query(Transaction).filter(Transaction.disclosure_id == disclosure.id).count()
+            )
+            assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).count()
+            liabilities = (
+                db.query(Liability).filter(Liability.disclosure_id == disclosure.id).count()
+            )
+            filed = entry.get("first_name", "")
+            suffix = entry.get("suffix") or ""
+            filer = " ".join(p for p in (filed, entry.get("last_name", ""), suffix) if p)
+            print(
+                f"  doc {disclosure.document_id}  {disclosure.filing_year} "
+                f"{disclosure.filing_type}  filed by {filer} "
+                f"({entry.get('state')}{entry.get('district') or ''})"
+            )
+            print(f"      from {describe(current)}")
+            print(f"      to   {describe(correct)}")
+            print(
+                f"      carries {transactions} transaction(s), {assets} asset(s), "
+                f"{liabilities} liabilit(y/ies)"
+            )
+
+        if not args.apply:
+            print(f"\n{len(moves)} filing(s) would move. Nothing written; pass --apply.")
+            return
+
+        for disclosure, _current, correct, _entry in moves:
+            disclosure.member_id = correct.id
+        db.commit()
+        print(
+            f"\nMoved {len(moves)} filing(s). Anomalies are member-level and derived, "
+            "so run `analyze` to re-derive them against the corrected attribution."
+        )
 
 
 def cmd_serve(args):
@@ -1479,6 +1653,25 @@ def main():
         "--dry-run", action="store_true", help="Preview deletions without applying them"
     )
     stale_wording_parser.set_defaults(func=cmd_purge_stale_wording)
+
+    # Filings stored against the wrong member by the old `.first()` matcher
+    attribution_parser = subparsers.add_parser(
+        "repair-house-attribution",
+        help="Move House filings stored against the wrong member onto the right one",
+    )
+    attribution_parser.add_argument(
+        "--years",
+        nargs="+",
+        type=int,
+        default=[2024, 2025, 2026],
+        help="Filing years to audit (default: 2024 2025 2026)",
+    )
+    attribution_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write the moves. Without it the command only reports them.",
+    )
+    attribution_parser.set_defaults(func=cmd_repair_house_attribution)
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start API server")

@@ -279,6 +279,27 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
 
         assert db_session.query(Anomaly).count() == 0
 
+    def test_a_midpoint_net_worth_sentence_is_deleted(self, db_session):
+        """`wealth_vs_salary` keeps its title when corrected, so nothing else
+        would ever rewrite the description -- the same trap as multi_factor_risk.
+        The figures below are band midpoints and appear on no filing."""
+        from src.db.models import Anomaly
+
+        self._anomaly(
+            db_session,
+            anomaly_type="wealth_vs_salary",
+            title="Wealth growth far exceeds salary (2020-2024)",
+            description=(
+                "Net worth grew from $1,507,500 to $9,007,500 (7,500,000 total). "
+                "Cumulative salary over 5 years: $934,500. Growth is 8.0x total "
+                "possible salary accumulation."
+            ),
+        )
+
+        self._purge(db_session)
+
+        assert db_session.query(Anomaly).count() == 0
+
     def test_a_corrected_finding_is_left_alone(self, db_session):
         from src.db.models import Anomaly
 
@@ -294,10 +315,20 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
             title="4 members sold NVDA within 1 day",
             description="4 members disclosed a sale of NVDA.",
         )
+        self._anomaly(
+            db_session,
+            anomaly_type="wealth_vs_salary",
+            title="Wealth growth far exceeds salary (2020-2024)",
+            description=(
+                "Reported net worth went from a range of $100,000-$250,000 in 2020 "
+                "to $5,000,001-$25,000,000 in 2024. On the least favourable reading "
+                "of those bands the increase is still at least $4,750,001."
+            ),
+        )
 
         self._purge(db_session)
 
-        assert db_session.query(Anomaly).count() == 2
+        assert db_session.query(Anomaly).count() == 3
 
     def test_dry_run_deletes_nothing(self, db_session):
         from src.db.models import Anomaly

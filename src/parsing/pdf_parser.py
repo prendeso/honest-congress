@@ -29,6 +29,15 @@ VALUE_RANGES = {
 
 # Common ticker patterns
 TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
+# The House Clerk's asset-class code, which trails a description in square
+# brackets -- "[BA]" bank account, "[MF]" mutual fund, "[ST]" stock. Never a
+# ticker, and several of the codes are real symbols. See `_extract_ticker`.
+#
+# Exactly two letters, which is what every code on the form is and what all 122
+# fabricated tickers in the sample were. Deliberately not `{1,5}`: that would
+# also swallow a bracketed "[MSFT]", and nothing observed says the form never
+# does that -- only that what it demonstrably does is the two-letter code.
+CLASS_CODE = re.compile(r"\[[A-Z]{2}\]")
 STOCK_KEYWORDS = ["common stock", "stock", "shares", "equity"]
 
 
@@ -340,11 +349,56 @@ class DisclosureParser:
         return assets
 
     def _extract_ticker(self, text: str) -> str | None:
-        """Extract stock ticker from text."""
-        # Look for explicit ticker notation like (AAPL) or [MSFT]
-        explicit = re.search(r"[\(\[]([A-Z]{1,5})[\)\]]", text)
+        """Extract a stock ticker from an asset description.
+
+        On the House Clerk's annual form the two bracket styles mean different
+        things, and this treated them as one:
+
+            Lazard International Strategic Equity Ptf Insti Shs (LISIX) [MF]
+                                                                 ^^^^^   ^^
+                                                                 ticker  class
+
+        Parentheses hold the security's symbol. **Square brackets hold the
+        form's own asset-class code** -- BA bank account, MF mutual fund, ST
+        stock, RP real property, and so on -- which is never a ticker. The
+        parser already reads that code's meaning separately, in
+        `_determine_asset_type`.
+
+        Accepting `[..]` manufactured a symbol for every asset that had no
+        symbol to give, and the codes collide with real, heavily traded ones:
+        BA is Boeing, GS is Goldman Sachs, WU is Western Union, CS and PE and
+        RP are all listed somewhere. So "Fifth-Third Bank [BA]" was stored as a
+        Boeing holding.
+
+        Measured over 40 randomly sampled type-O House annual filings, by which
+        bracket the symbol came from:
+
+            (parentheses)   514   XLY, IEFA, VDC, VGT, FCTDX, ITOT, SWVXX ...
+            [square]        122   BA 50, CS 29, OT 21, MF 9, WU 4, GS 2 ...
+
+        Every one of the 122 was a class code. Not one was a security. That is
+        19% of all extracted asset tickers, and `BA` alone was the single most
+        common "ticker" in the sample.
+
+        This is the same mistake D3 records against the old committee detector,
+        which substring-matched and so read "ba" as Alibaba. That fixed the
+        matching; this is the extraction still inventing the symbol.
+        """
+        explicit = re.search(r"\(([A-Z]{1,5})\)", text)
         if explicit:
             return explicit.group(1)
+
+        # A bracketed symbol that is NOT a two-letter class code is still read,
+        # so "Microsoft [MSFT] stock" keeps working.
+        bracketed = re.search(r"\[([A-Z]{1,5})\]", CLASS_CODE.sub(" ", text))
+        if bracketed:
+            return bracketed.group(1)
+
+        # The keyword scan below reads bare capitals out of the description, so
+        # the class code has to go first or it is simply harvested there
+        # instead: "i shares tr gbl msci [CS]" matches on "shares" and yields
+        # CS, and "International Equity [OT]" on "equity" and yields OT.
+        text = CLASS_CODE.sub(" ", text)
 
         # Look for common patterns like "Apple Inc (AAPL)"
         # or just standalone ticker with stock keywords

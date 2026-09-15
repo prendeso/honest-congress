@@ -50,6 +50,21 @@ class Detector:
     means: str
     limits: str
     source: str
+    # What `computed_value` and `threshold_value` are counted in. Declared
+    # here, beside the detector, because the page cannot work it out: it used
+    # to guess from the type NAME, and `excessive_wealth_growth` stores a
+    # dollar amount while its name contains "growth", so the site published
+    # a $2,625,000 rise in net worth as "2625000.0%" under a named member --
+    # all seven of that detector's findings, every one of them.
+    #
+    # Both fields always share a unit: each detector's threshold is the same
+    # quantity its computed value is measured against (days against a window
+    # in days, dollars against a salary in dollars), which is why one
+    # declaration covers the pair.
+    #
+    # It has no default on purpose. A new detector cannot be added without
+    # saying what its numbers mean.
+    value_unit: str
 
 
 # Ordered as the page shows them: the ones a null model can be built for
@@ -65,6 +80,7 @@ DETECTORS: List[Detector] = [
         "else says otherwise. Nothing here shows the member knew of the donation "
         "when they traded.",
         f"{PTR} joined to FEC campaign finance filings",
+        value_unit="days",
     ),
     Detector(
         "lobbying_overlap",
@@ -80,6 +96,7 @@ DETECTORS: List[Detector] = [
         "windows cover most of the year, so almost any trade in its stock "
         "falls inside one. Read the q-value, not the count.",
         f"{PTR} joined to Senate LDA lobbying filings",
+        value_unit="days",
     ),
     Detector(
         "contract_front_run",
@@ -98,6 +115,7 @@ DETECTORS: List[Detector] = [
         "move no money at all, are excluded: they are in the federal feed but "
         "they are not an award being made.",
         f"{PTR} joined to USASpending federal award actions",
+        value_unit="days",
     ),
     Detector(
         "sponsorship_conflict",
@@ -106,6 +124,7 @@ DETECTORS: List[Detector] = [
         "The match is bill policy area to sector, which is coarse: a bill can "
         "touch an industry without affecting any particular company in it.",
         f"{PTR} joined to Congress.gov sponsored bills",
+        value_unit="days",
     ),
     Detector(
         "bill_jurisdiction_conflict",
@@ -115,6 +134,7 @@ DETECTORS: List[Detector] = [
         "A committee sees a great many bills, and a seat on it is not knowledge "
         "of any one of them.",
         f"{PTR} joined to Congress.gov bill referrals and committee rosters",
+        value_unit="days",
     ),
     Detector(
         "cross_member_cluster",
@@ -123,6 +143,7 @@ DETECTORS: List[Detector] = [
         "Members read the same news. A cluster is a coincidence in timing, not "
         "evidence of coordination, and widely held stocks cluster by nature.",
         PTR,
+        value_unit="count",
     ),
     Detector(
         "committee_jurisdiction_conflict",
@@ -131,6 +152,7 @@ DETECTORS: List[Detector] = [
         "This is a standing state of affairs, not an event: it says nothing "
         "about the timing of any trade, which is why it carries no q-value.",
         f"{PTR} joined to committee assignments",
+        value_unit="percent",
     ),
     Detector(
         "large_trade",
@@ -138,6 +160,7 @@ DETECTORS: List[Detector] = [
         "A single disclosed trade large in absolute terms.",
         BAND_LIMIT,
         PTR,
+        value_unit="dollars",
     ),
     Detector(
         "volume_spikes",
@@ -145,6 +168,7 @@ DETECTORS: List[Detector] = [
         "A trade much larger than this member usually files.",
         f"{BAND_LIMIT} A member who files rarely has little to be unusual against.",
         PTR,
+        value_unit="dollars",
     ),
     Detector(
         "high_trading_frequency",
@@ -153,6 +177,7 @@ DETECTORS: List[Detector] = [
         "Trading often is not trading improperly, and a managed account can "
         "produce this without the member choosing any of it.",
         PTR,
+        value_unit="count",
     ),
     Detector(
         "trade_clustering",
@@ -161,6 +186,7 @@ DETECTORS: List[Detector] = [
         "Filings are batched by deadline, so trades cluster in the paperwork "
         "whether or not they clustered in fact.",
         PTR,
+        value_unit="count",
     ),
     Detector(
         "sector_concentration",
@@ -169,6 +195,7 @@ DETECTORS: List[Detector] = [
         "Sector comes from matching the description text, and committee "
         "assignments are not consulted here at all.",
         PTR,
+        value_unit="percent",
     ),
     Detector(
         "late_filing",
@@ -178,6 +205,7 @@ DETECTORS: List[Detector] = [
         "date is the Clerk's, and an amended filing can make a timely report "
         "look late.",
         PTR,
+        value_unit="days",
     ),
     Detector(
         "wealth_vs_salary",
@@ -187,6 +215,7 @@ DETECTORS: List[Detector] = [
         "built on estimates. Spouse income, inheritance and investment returns "
         "are all outside it.",
         FD,
+        value_unit="dollars",
     ),
     Detector(
         "excessive_wealth_growth",
@@ -194,6 +223,7 @@ DETECTORS: List[Detector] = [
         "Reported net worth grew unusually fast year over year.",
         "Same band arithmetic as above, and a market that rose is not a member who did anything.",
         FD,
+        value_unit="dollars",
     ),
     Detector(
         "rapid_asset_appreciation",
@@ -202,6 +232,7 @@ DETECTORS: List[Detector] = [
         "A band boundary crossed by a dollar reports the same jump as a real "
         "one, and an asset can be re-categorised between filings.",
         FD,
+        value_unit="percent",
     ),
     Detector(
         "multi_factor_risk",
@@ -211,6 +242,7 @@ DETECTORS: List[Detector] = [
         "one: the categories are not independent, and a single busy trader "
         "triggers several of them at once.",
         "Combination of the above",
+        value_unit="score",
     ),
 ]
 
@@ -253,6 +285,7 @@ def as_dicts() -> List[Dict[str, object]]:
             "means": d.means,
             "limits": d.limits,
             "source": d.source,
+            "value_unit": d.value_unit,
             # Whether a q-value exists for this type at all. Null q on a type
             # that has a null model means the finding did not survive; null q
             # on one that does not means no test was ever run. Conflating those

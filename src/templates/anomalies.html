@@ -343,13 +343,19 @@
                                             <span class="text-gray-500">📅 Detected:</span>
                                             <span class="font-medium" x-text="new Date(anomaly.detected_at).toLocaleDateString()"></span>
                                         </div>
-                                        <template x-if="anomaly.computed_value">
+                                        <!-- `x-if="anomaly.computed_value"` hid zero, which is
+                                             not "no value" but the strongest instance of several
+                                             of these findings: a donor conflict 0 days apart is a
+                                             trade on the SAME DAY as the donation, and it was the
+                                             one case that showed no number at all. Test against
+                                             null explicitly. -->
+                                        <template x-if="anomaly.computed_value !== null && anomaly.computed_value !== undefined">
                                             <div class="flex items-center gap-1">
                                                 <span class="text-gray-500">📊 Value:</span>
                                                 <span class="font-medium" x-text="formatValue(anomaly.computed_value, anomaly.anomaly_type)"></span>
                                             </div>
                                         </template>
-                                        <template x-if="anomaly.threshold_value">
+                                        <template x-if="anomaly.threshold_value !== null && anomaly.threshold_value !== undefined">
                                             <div class="flex items-center gap-1">
                                                 <span class="text-gray-500">⚠️ Threshold:</span>
                                                 <span class="font-medium" x-text="formatValue(anomaly.threshold_value, anomaly.anomaly_type)"></span>
@@ -517,7 +523,10 @@
                         name: type,
                         means: 'This category is no longer produced. It is shown because a finding of it is still stored.',
                         limits: 'Unknown -- the detector that wrote this is not in the current catalogue.',
-                        source: 'Unknown'
+                        source: 'Unknown',
+                        // No unit, so formatValue prints the bare number rather
+                        // than guessing one for a detector that no longer exists.
+                        value_unit: null
                     };
                 },
 
@@ -533,18 +542,45 @@
                     return value.toPrecision(2);
                 },
 
+                // The unit comes from the catalogue, beside the detector that
+                // wrote the number. It used to be guessed from the type NAME:
+                // `type.includes('growth')` matched `excessive_wealth_growth`,
+                // whose computed_value is a DOLLAR amount, so a $2,625,000 rise
+                // in net worth was published as "2625000.0%" beside a named
+                // member -- all seven of that detector's findings. The rest fell
+                // through to a dollar sign applied to everything, so a 45-day
+                // filing delay read "45.00" and a count of 1,200 trades read
+                // "$1K".
                 formatValue(value, type) {
-                    if (!value) return '-';
-                    if (type.includes('growth') || type.includes('appreciation')) {
-                        return value.toFixed(1) + '%';
+                    if (value === null || value === undefined || value === '') return '-';
+                    const n = Number(value);
+                    if (!Number.isFinite(n)) return '-';
+
+                    switch (this.detectorFor(type).value_unit) {
+                        case 'dollars':
+                            return this.formatDollars(n);
+                        case 'percent':
+                            return n.toFixed(1) + '%';
+                        case 'days':
+                            return Math.round(n) + (Math.round(n) === 1 ? ' day' : ' days');
+                        case 'count':
+                            return Math.round(n).toLocaleString();
+                        case 'score':
+                            return String(Math.round(n));
+                        // A type the catalogue does not carry: a stored finding
+                        // from a detector since removed. Show the bare number
+                        // rather than assert a unit for it.
+                        default:
+                            return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
                     }
-                    if (value > 1000000) {
-                        return '$' + (value / 1000000).toFixed(1) + 'M';
-                    }
-                    if (value > 1000) {
-                        return '$' + (value / 1000).toFixed(0) + 'K';
-                    }
-                    return value.toFixed(2);
+                },
+
+                formatDollars(n) {
+                    const sign = n < 0 ? '-' : '';
+                    const a = Math.abs(n);
+                    if (a >= 1000000) return sign + '$' + (a / 1000000).toFixed(1) + 'M';
+                    if (a >= 1000) return sign + '$' + Math.round(a / 1000) + 'K';
+                    return sign + '$' + a.toLocaleString(undefined, { maximumFractionDigits: 0 });
                 }
             }
         }

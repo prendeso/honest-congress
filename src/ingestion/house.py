@@ -21,6 +21,18 @@ HOUSE_PTR_DOWNLOAD_URL = f"{HOUSE_CLERK_BASE_URL}/public_disc/ptr-pdfs"
 # FilingType code for a Periodic Transaction Report in the House Clerk index.
 PTR_FILING_TYPE = "P"
 
+# Types `_parse_xml_index` must not return. "P" because PTRs are handled by
+# fetch_ptr_xml_index, which flags them is_ptr and builds the ptr-pdfs URL their
+# documents actually live at.
+#
+# "C" is a CANDIDATE report, filed by somebody who is not a member. It was
+# passed through, and the broken filer match suppressed it by accident -- 24 of
+# 1,694 matched. Correcting that match makes 80 match, so 56 candidate filings
+# would newly attach to member records (Cori Bush, Alan Grayson and others
+# running again). The exclusion has to land with the fix, or the fix is a
+# regression.
+_NOT_A_MEMBER_FILING = {PTR_FILING_TYPE, "C"}
+
 
 class HouseIngester(BaseIngester):
     """Ingester for House of Representatives financial disclosures."""
@@ -198,6 +210,19 @@ class HouseIngester(BaseIngester):
                         "document_url": pdf_url,
                         "chamber": "house",
                         "is_ptr": True,
+                        # Read into `full_name` above and then thrown away.
+                        # It is the only thing that tells Nicholas Begich III
+                        # (R-AK, sitting) from his grandfather Nicholas Begich
+                        # (D-AK, declared dead in 1972) BY NAME: same first,
+                        # middle and last name, same state, same at-large
+                        # district. 2025 carries 135 suffixed rows, 2026 72.
+                        #
+                        # The matcher does not use it -- `Member` has no suffix
+                        # column, and tier 1 separates that pair on `in_office`
+                        # anyway. It is returned for the repair pass, which has
+                        # to identify the eight filings already stored against
+                        # the wrong man and cannot use `in_office` to do it.
+                        "suffix": suffix,
                     }
                 )
 
@@ -227,7 +252,7 @@ class HouseIngester(BaseIngester):
                 # skip both paths claim the same document_id, and whichever
                 # inserts first wins -- storing PTRs as annual filings pointing
                 # at a financial-pdfs URL that 404s.
-                if filing_type.upper() == PTR_FILING_TYPE:
+                if filing_type.upper() in _NOT_A_MEMBER_FILING:
                     continue
                 state_dst = member.findtext("StateDst", "").strip()
                 filing_date = member.findtext("FilingDate", "").strip()
@@ -263,6 +288,7 @@ class HouseIngester(BaseIngester):
                         "document_id": doc_id,
                         "document_url": pdf_url,
                         "chamber": "house",
+                        "suffix": suffix,
                     }
                 )
 

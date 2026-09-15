@@ -1,6 +1,7 @@
 """Unified ingestion orchestrator."""
 
 import logging
+import re
 import time
 import unicodedata
 from collections import Counter
@@ -47,6 +48,76 @@ def fold_name(value: str) -> str:
     return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold().strip()
 
 
+# Titles and honorifics the Clerk leaves inside the First field: "Mark Dr",
+# "Derrick F Mr", "Richard Dean Dr". 26 PTR rows across 2025-26 carry one.
+_CLERK_TITLES = {"dr", "mr", "mrs", "ms", "md", "facs", "phd", "jr", "sr", "ii", "iii", "iv"}
+
+
+def clerk_first_name(value: str) -> str:
+    """The Clerk's First field with its junk removed.
+
+    Real values from the live index: `Mark Dr`, `Derrick F Mr`, `Richard Dean Dr`,
+    `Charles J. "Chuck"`, `Scott Scott`. The quoted nickname and the trailing
+    title are both noise for matching, and a title left in place becomes the
+    "leading token" for a filer whose title sorts first.
+    """
+    cleaned = re.sub(r'"[^"]*"', " ", value or "")
+    tokens = [
+        tok
+        for tok in cleaned.replace(",", " ").split()
+        if tok.lower().strip(".") not in _CLERK_TITLES
+    ]
+    return " ".join(tokens).strip()
+
+
+def first_names_are_compatible(index_first: str, roster_first: str) -> bool:
+    """Whether two spellings of a first name can be the same person.
+
+    The Clerk carries the legal name and the roster the common one, and NEITHER
+    is reliably the longer: "Rohit" -> "Ro" and "Donald Sternoff" -> "Donald"
+    shorten, while "C." -> "C. Scott Franklin" does not. So the prefix test runs
+    BOTH ways, which `_match_senator` does not do -- it only asks whether the
+    roster name starts with the index name, which is the direction the House
+    index almost never satisfies.
+
+    A shared initial is the last resort, and it is deliberately weak: this
+    function only ever guards the historical tier, where a wrong answer is a
+    trade published under a dead man's name.
+    """
+    index_lead = fold_name(clerk_first_name(index_first)).split()
+    roster = fold_name(roster_first or "")
+    if not index_lead or not roster:
+        return False
+    lead = index_lead[0].strip(".")
+    roster_lead = roster.split()[0].strip(".")
+    if not lead or not roster_lead:
+        return False
+    if lead.startswith(roster_lead) or roster_lead.startswith(lead):
+        return True
+    return lead[0] == roster_lead[0]
+
+
+def surname_keys(last_name: str) -> List[str]:
+    """Every surname a member can be filed under, folded.
+
+    The Clerk splits a compound surname inconsistently: `Debbie`/`Wasserman
+    Schultz` keeps it whole, while `April McClain`/`Delaney` pushes the leading
+    token into First. So a member whose roster surname is "McClain Delaney" has
+    to be reachable as "delaney" too.
+
+    Without this, April McClain Delaney's 19 PTRs miss the sitting index, fall
+    through to the historical one, and land on John Delaney -- former MD-06,
+    same state, and the district agrees, so nothing downstream would question
+    it. Measured: the alias adds zero collisions among sitting House members.
+    """
+    folded = fold_name(normalize_surname(last_name or ""))
+    keys = [folded] if folded else []
+    tokens = folded.split()
+    if len(tokens) > 1 and tokens[-1] not in keys:
+        keys.append(tokens[-1])
+    return keys
+
+
 def normalize_surname(last_name: str) -> str:
     """The surname without the suffix eFD appends to it.
 
@@ -85,9 +156,22 @@ class UnmatchedFilers:
     ought to match is a separate question, and it needs these numbers first.
     """
 
-    # FilingType codes in the House Clerk index that belong to people who are
-    # not members. A miss on these is the system working.
-    NON_MEMBER_TYPES = {"C"}
+    # FilingType codes whose filers are not members, so a miss on them is the
+    # system working. Measured over the live 2024-25 index:
+    #
+    #   C  candidate report   907 / 664   zero sitting members
+    #   D                     132 /  70   zero sitting members in three years
+    #   W  withdrawal          47 /  66   zero sitting members
+    #
+    # "C" alone was both too narrow and, once `_parse_xml_index` stopped
+    # returning candidate reports at all, partly moot -- D and W were being
+    # counted as unexpected misses and inflating the number this class exists
+    # to make trustworthy.
+    #
+    # Deliberately NOT including "X" (extension), which is mixed: 305 of 714 in
+    # 2025 and 226 of 454 in 2024 are sitting members. Calling those expected
+    # would hide a real gap.
+    NON_MEMBER_TYPES = {"C", "D", "W"}
 
     def __init__(self, source: str):
         self.source = source
@@ -186,6 +270,9 @@ class IngestionOrchestrator:
         # Senator lookup tables, built on first use in sync_senate_disclosures.
         self._senate_current: Dict[str, List[Member]] | None = None
         self._senate_all: Dict[str, List[Member]] | None = None
+        # Same shape for the House, keyed (surname, state) rather than surname.
+        self._house_current: Dict[tuple, List[Member]] | None = None
+        self._house_all: Dict[tuple, List[Member]] | None = None
 
         # PDF Parsers
         self.disclosure_parser = DisclosureParser()
@@ -356,25 +443,32 @@ class IngestionOrchestrator:
         disclosures = self.house.fetch_annual_xml_index(year)
         synced = 0
 
+        # Rebuilt per sync, as in sync_house_ptrs and sync_senate_disclosures.
+        self._house_current = None
+        self._house_all = None
+
         unmatched = UnmatchedFilers(f"House annual filings {year}")
         seen: set[str] = set()
         for d in disclosures:
             try:
                 # Find matching member
-                member = (
-                    db.query(Member)
-                    .filter(
-                        Member.last_name.ilike(d["last_name"]),
-                        Member.first_name.ilike(f"{d['first_name']}%"),
-                        Member.chamber == Chamber.HOUSE,
-                        Member.state == d["state"],
-                    )
-                    .first()
+                matches = self._match_representative(
+                    db,
+                    d.get("first_name", ""),
+                    d.get("last_name", ""),
+                    d.get("state", ""),
+                    d.get("district", ""),
                 )
 
-                if not member:
+                if len(matches) != 1:
+                    # Nothing, or more than one and no tiebreak settled it.
+                    # Refusing is the correct outcome for both: a missing filing
+                    # is a gap, a filing on the wrong member is a false
+                    # statement about a named person.
                     unmatched.record(d)
                     continue
+
+                member = matches[0]
 
                 if self._already_queued(db, d["document_id"], seen):
                     continue
@@ -427,6 +521,11 @@ class IngestionOrchestrator:
         logger.info(f"Syncing House PTRs for {year}...")
 
         ptrs = self.house.fetch_ptr_xml_index(year)
+
+        # Rebuilt per sync so a roster updated earlier in the same run is seen,
+        # matching what sync_senate_disclosures does.
+        self._house_current = None
+        self._house_all = None
         synced = 0
 
         # Every entry here is FilingType "P", so there is no non-member class to
@@ -437,20 +536,23 @@ class IngestionOrchestrator:
         for d in ptrs:
             try:
                 # Find matching member
-                member = (
-                    db.query(Member)
-                    .filter(
-                        Member.last_name.ilike(d["last_name"]),
-                        Member.first_name.ilike(f"{d['first_name']}%"),
-                        Member.chamber == Chamber.HOUSE,
-                        Member.state == d["state"],
-                    )
-                    .first()
+                matches = self._match_representative(
+                    db,
+                    d.get("first_name", ""),
+                    d.get("last_name", ""),
+                    d.get("state", ""),
+                    d.get("district", ""),
                 )
 
-                if not member:
+                if len(matches) != 1:
+                    # Nothing, or more than one and no tiebreak settled it.
+                    # Refusing is the correct outcome for both: a missing filing
+                    # is a gap, a filing on the wrong member is a false
+                    # statement about a named person.
                     unmatched.record(d)
                     continue
+
+                member = matches[0]
 
                 if self._already_queued(db, d["document_id"], seen):
                     continue
@@ -630,6 +732,135 @@ class IngestionOrchestrator:
                 member
             )
         return index
+
+    def _house_index(self, db: Session, in_office: bool) -> Dict[tuple, List[Member]]:
+        """House members keyed by (folded surname, state).
+
+        That key is DECISIVE here in a way the Senate's is not: measured over
+        the 439 sitting House members it has zero collisions, while surname
+        alone collides for 22 of them (Carter x3, Johnson x4, Moore x5 ...).
+        State resolves every one. So the House can lead with geography and keep
+        the first name in reserve, which is the opposite of `_match_senator` --
+        that has no state to lean on and must narrow on the first name.
+        """
+        query = db.query(Member).filter(Member.chamber == Chamber.HOUSE)
+        if in_office:
+            query = query.filter(Member.in_office.is_(True))
+
+        index: Dict[tuple, List[Member]] = {}
+        for member in query.all():
+            state = (member.state or "").strip().upper()
+            for key in surname_keys(member.last_name or ""):
+                index.setdefault((key, state), []).append(member)
+        return index
+
+    @staticmethod
+    def _same_district(member: Member, district: str) -> bool:
+        """Whether a member sits in the district the Clerk names.
+
+        A TIEBREAK, never a filter. Rich McCormick's 7 PTRs carry StateDst
+        "GA06" while his current term says GA-7 -- he moved districts and the
+        Clerk's value is stale, so a district predicate would drop them. And
+        at-large is "00" in the index against None in the roster
+        (congress_gov.py stores None for district 0), so both sides fold to int.
+        """
+
+        def as_int(value) -> int | None:
+            text = str(value if value is not None else "").strip()
+            if not text:
+                return 0
+            try:
+                return int(text)
+            except ValueError:
+                return None
+
+        return as_int(member.district) == as_int(district)
+
+    def _narrow_house(self, candidates: List[Member], district: str) -> List[Member]:
+        """District, and only to choose between survivors.
+
+        The Clerk also publishes a Suffix, and it is the one thing that tells
+        Nicholas Begich III from his grandfather by name. It is NOT used here:
+        `Member` carries no suffix column, so there is nothing to compare it
+        against, and a tiebreak reading a field that does not exist would be
+        dead code dressed as a safeguard. The Begich pair is separated by tier 1
+        instead -- only one of them is in office -- and the index's suffix is
+        returned by `house.py` for the repair pass that has to fix the eight
+        filings already stored against the wrong man.
+        """
+        by_district = [m for m in candidates if self._same_district(m, district)]
+        if len(by_district) == 1:
+            return by_district
+
+        return list(candidates)
+
+    def _match_representative(
+        self,
+        db: Session,
+        first_name: str,
+        last_name: str,
+        state: str,
+        district: str = "",
+    ) -> List[Member]:
+        """The representative who filed this, or every candidate if undecidable.
+
+        Deliberately NOT `_match_senator` applied to the House. Run verbatim
+        over the real 2025-26 index that algorithm returns CONFIDENT WRONG
+        ANSWERS rather than ambiguity, because its `len(candidates) <= 1` and
+        `len(narrowed) == 1` branches both hand the caller a single row:
+
+          * "Michael A." Collins (GA-10, 12 PTRs) narrows on "michael" to
+            C000640 Michael Allen Collins -- the sitting member's FATHER, same
+            first and middle name, same state, same party;
+          * "April McClain" Delaney's 19 PTRs land on John Delaney, former
+            MD-06, with the district agreeing.
+
+        Two tiers, because the thing that separates those pairs is not the name:
+
+        TIER 1, sitting members, on (surname, state) alone. No first-name test,
+        and that omission is load-bearing: it is what matches Lizzie Fletcher
+        ("Elizabeth" in the index), C. Scott Franklin ("Scott Scott") and
+        W. Gregory Steube ("Greg") -- 16 PTRs whose roster first name is
+        unrelated to the legal one. The key is unique across the sitting House,
+        so there is nothing for a first name to disambiguate.
+
+        TIER 2, everyone ever, only when tier 1 is empty. Here first-name
+        compatibility is REQUIRED EVEN FOR A SINGLE CANDIDATE -- that is the
+        line that refuses Delaney and Collins. It still passes Greene, Green,
+        Connolly, Manning, Sherrill and Waltz, who were all sitting when they
+        filed and have since left.
+
+        Returns a list so the caller refuses rather than guesses, as the Senate
+        caller already does.
+        """
+        if self._house_current is None:
+            self._house_current = self._house_index(db, in_office=True)
+            self._house_all = self._house_index(db, in_office=False)
+
+        state_key = (state or "").strip().upper()
+        keys = surname_keys(last_name)
+
+        for key in keys:
+            sitting = (self._house_current or {}).get((key, state_key))
+            if sitting:
+                if len(sitting) == 1:
+                    return list(sitting)
+                return self._narrow_house(sitting, district)
+
+        for key in keys:
+            everyone = (self._house_all or {}).get((key, state_key))
+            if not everyone:
+                continue
+            compatible = [
+                m for m in everyone if first_names_are_compatible(first_name, m.first_name or "")
+            ]
+            if not compatible:
+                continue
+            if len(compatible) == 1:
+                return compatible
+            return self._narrow_house(compatible, district)
+
+        return []
 
     def _match_senator(self, db: Session, first_name: str, last_name: str) -> List[Member]:
         """The senator who filed this, or every candidate if it is not decidable.

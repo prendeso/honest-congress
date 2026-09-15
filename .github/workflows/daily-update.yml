@@ -108,6 +108,25 @@ jobs:
       - name: Ingest federal contract awards
         id: contracts
         continue-on-error: true
+      # A ceiling in MINUTES, which is the thing that actually varies.
+      #
+      # Run 225 measured this feed at 234 minutes against 61 the run before --
+      # 3.8x, on the same work. The sweep did not make more requests; each
+      # request took longer, because USASpending was slow. `--max-requests`
+      # exists on this command and would not have helped: `ThrottledClient`
+      # counts REQUESTS (rate_limit.py), and a cap sized from a healthy night
+      # bounds nothing on a degraded one.
+      #
+      # 234 of the job's 350 minutes went here -- more than the whole rest of
+      # the pipeline combined, and nine times what bills now costs. Nothing but
+      # luck kept run 225 inside the wall.
+      #
+      # A timeout is safe because the sweep commits per company: the step keeps
+      # what it finished and the next run resumes. And `continue-on-error`
+      # above turns the kill into `outcome: failure`, so the run continues and
+      # the "Feeds that FAILED despite the green tick" block names it -- which
+      # is exactly what that block is for.
+        timeout-minutes: 75
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
@@ -129,6 +148,8 @@ jobs:
       - name: Ingest lobbying disclosures
         id: lobbying
         continue-on-error: true
+        # 19.5m in run 225, 22m before that. Doubled.
+        timeout-minutes: 40
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
@@ -142,6 +163,8 @@ jobs:
       - name: Sync SEC industry codes
         id: industries
         continue-on-error: true
+        # 17.4m in run 225. Doubled.
+        timeout-minutes: 40
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
@@ -155,6 +178,10 @@ jobs:
       - name: Ingest bill sponsorship and committee referrals
         id: bills
         continue-on-error: true
+        # 24.0m in run 225, down from 234m in run 224 once both its N+1s were
+        # removed (#38, #43). 2.5x that, so a regression of the kind this step
+        # has already had once is caught rather than absorbed.
+        timeout-minutes: 60
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}

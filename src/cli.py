@@ -895,6 +895,92 @@ def cmd_purge_disabled(args):
         print(f"\nDeleted {deleted} anomalies of disabled types.")
 
 
+# The strings the three corrected detectors used to emit, and cannot emit now.
+# Each is distinctive enough that a finding carrying it was written by the old
+# code -- a band label with " trades" after it, a score over an invented
+# maximum, a coined verb.
+_SUPERSEDED_WORDING = (
+    ("high_trading_frequency", "title", "High trading activity: 10-15 trades"),
+    ("high_trading_frequency", "title", "High trading activity: 15-25 trades"),
+    ("high_trading_frequency", "title", "High trading activity: 25-50 trades"),
+    ("high_trading_frequency", "title", "High trading activity: 50-100 trades"),
+    ("high_trading_frequency", "title", "High trading activity: more than 100 trades"),
+    ("multi_factor_risk", "description", "combined score:"),
+    ("cross_member_cluster", "title", " saled "),
+    ("cross_member_cluster", "title", " purchased "),
+)
+
+
+def cmd_purge_stale_wording(args):
+    """Delete findings whose published sentence the detector can no longer write.
+
+    Three detectors were publishing text that was wrong about its own numbers:
+    "Between more than 100 stock trades were made in March 2026", a description
+    counting findings under a title counting distinct types and dividing by a
+    maximum that does not exist, and "4 members saled NVDA within 1 days".
+
+    Correcting the code does not correct the site. `persist_anomalies` only ever
+    inserts (`if key in stored: continue`), and `anomaly_key` identifies a
+    member-level finding by its TITLE. So the two outcomes are both wrong and
+    neither self-heals:
+
+      * a corrected title is a new identity, so the next analysis INSERTS the
+        fixed finding and leaves the broken one beside it -- the same member and
+        month published twice, once as "more than 100 trades" and once as "701";
+      * a corrected description keeps its identity, so the row is skipped and the
+        old sentence is served for ever. That is `multi_factor_risk`: its title
+        was already right, which is exactly why nothing would ever rewrite it.
+
+    Deleting them lets the next `analyze` re-derive each one from the same data
+    with the corrected wording.
+
+    This matches on the old strings, which `purge-non-awards` warns against --
+    "reading this codebase's own formatting back to itself ... would break the
+    day that string changes". The warning is right for a standing rule and does
+    not apply here: the formatting IS the defect, the strings below are the
+    literal output of code that no longer exists, and this is a one-time
+    migration rather than a condition re-evaluated every night. A finding it
+    misses is served with a sentence that reads badly; a finding it wrongly
+    deletes is re-derived by the next analysis. Both failure modes are
+    recoverable, which is why matching text is acceptable here and was not there.
+    """
+    from sqlalchemy import or_
+
+    from src.db.models import Anomaly
+
+    with get_db() as db:
+        clauses = [
+            (Anomaly.anomaly_type == kind) & (getattr(Anomaly, field).ilike(f"%{needle}%"))
+            for kind, field, needle in _SUPERSEDED_WORDING
+        ]
+        query = db.query(Anomaly).filter(or_(*clauses))
+        doomed = query.all()
+
+        if not doomed:
+            print("No findings carry superseded wording; nothing to delete.")
+            return
+
+        by_type: dict[str, int] = {}
+        for finding in doomed:
+            by_type[finding.anomaly_type] = by_type.get(finding.anomaly_type, 0) + 1
+
+        print(f"Findings written by the old wording: {len(doomed)}")
+        for kind, count in sorted(by_type.items()):
+            print(f"  {kind}: {count}")
+        print("\nExamples:")
+        for finding in doomed[:5]:
+            print(f"  [{finding.anomaly_type}] {finding.title}")
+
+        if args.dry_run:
+            print("\n--dry-run: nothing deleted.")
+            return
+
+        for finding in doomed:
+            db.delete(finding)
+        db.commit()
+        print(f"\nDeleted {len(doomed)}. The next `analyze` re-derives them.")
+
+
 def cmd_purge_non_awards(args):
     """Delete contract front-run findings no award in the table supports.
 
@@ -1383,6 +1469,16 @@ def main():
         "--dry-run", action="store_true", help="Preview deletions without applying them"
     )
     non_awards_parser.set_defaults(func=cmd_purge_non_awards)
+
+    # Findings carrying a sentence the detector can no longer write
+    stale_wording_parser = subparsers.add_parser(
+        "purge-stale-wording",
+        help="Delete findings whose published text the corrected detectors cannot produce",
+    )
+    stale_wording_parser.add_argument(
+        "--dry-run", action="store_true", help="Preview deletions without applying them"
+    )
+    stale_wording_parser.set_defaults(func=cmd_purge_stale_wording)
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start API server")

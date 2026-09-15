@@ -115,6 +115,36 @@ def score_ptr_parse(
     return ParseConfidence(round(min(max(confidence, 0.0), 1.0), 4), warnings)
 
 
+# House Clerk filing types that carry no financial schedule at all, so an empty
+# parse of one is the CORRECT outcome and not a failure. Verified by reading the
+# documents themselves rather than inferred from the letter:
+#
+#   X  "FDER", a Financial Disclosure EXTENSION REQUEST -- one page, ~1,000
+#      characters, a form letter to the Clerk asking for more time. 203 of them
+#      were recorded as "no assets or liabilities found in an annual filing",
+#      which made them the single largest category of apparent parser failure in
+#      the corpus. They are not annual filings and have nothing to find.
+#   D, W  one-page letters to the Clerk under the same "CNRFDR" heading.
+#
+# Deliberately NOT here: O, A, H and T. Those are real multi-page FDRs -- Rosa
+# DeLauro's is 4 pages and 4,651 characters -- and the 28 of them that yielded
+# nothing are genuine parser gaps that must keep reporting themselves as such.
+NO_FINANCIAL_SCHEDULE = frozenset({"X", "D", "W"})
+
+
+def score_filing_with_no_schedule(filing_type: str) -> ParseConfidence:
+    """A filing that was never going to contain assets or transactions.
+
+    Scored 1.0 because the parse is complete: everything the document has to
+    give has been taken from it. Recording 0.0 instead did real damage -- it
+    put 211 letters into the "needs attention" queue, set `parse_error` on
+    them, and made the project's own measure of parser quality read far worse
+    than the parser deserved. A number that counts extension requests as
+    failures cannot be used to decide whether parsing is improving.
+    """
+    return ParseConfidence(1.0, [])
+
+
 def score_fd_parse(
     text_extracted: bool, assets: int, liabilities: int, errors: Sequence[str] = ()
 ) -> ParseConfidence:

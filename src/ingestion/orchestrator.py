@@ -20,7 +20,12 @@ from src.ingestion.congress_gov import CongressGovClient
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
 from src.ingestion.house import HouseIngester
 from src.ingestion.senate import SenateIngester, SenatePTRIngester, SenateSearchError
-from src.parsing.confidence import score_fd_parse, score_ptr_parse
+from src.parsing.confidence import (
+    NO_FINANCIAL_SCHEDULE,
+    score_fd_parse,
+    score_filing_with_no_schedule,
+    score_ptr_parse,
+)
 from src.parsing.pdf_parser import DisclosureParser
 from src.parsing.ptr_parser import PTRParser
 from src.parsing.senate_html_parser import SenateHtmlParser
@@ -1061,12 +1066,20 @@ class IngestionOrchestrator:
                 )
                 self._store_fd_data(db, disclosure, parsed)
                 text_extracted = _fd_text_extracted(parsed)
-                score = score_fd_parse(
-                    text_extracted,
-                    len(parsed.get("assets") or []),
-                    len(parsed.get("liabilities") or []),
-                    parsed.get("parse_errors") or [],
-                )
+                if (disclosure.filing_type or "").strip().upper() in NO_FINANCIAL_SCHEDULE:
+                    # An extension request is not an annual filing that failed
+                    # to parse. Scoring it with the annual rubric asked a
+                    # one-page letter for assets and recorded their absence as
+                    # the parser's fault -- 203 of the 422 apparent failures in
+                    # the corpus, more than any real one.
+                    score = score_filing_with_no_schedule(disclosure.filing_type or "")
+                else:
+                    score = score_fd_parse(
+                        text_extracted,
+                        len(parsed.get("assets") or []),
+                        len(parsed.get("liabilities") or []),
+                        parsed.get("parse_errors") or [],
+                    )
 
             # `parsed` means the parser ran, which is all it has ever meant. The
             # score is what says whether it worked.

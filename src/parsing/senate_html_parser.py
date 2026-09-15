@@ -65,6 +65,11 @@ _COLUMN_ALIASES = (
 # electronic, 5 paper -- the separation was exact, 0 media images against 4 to 9.
 _SCAN_MEDIA_HOST = "efd-media-public.senate.gov"
 
+# What a table must yield before it is a transaction table. `amount` and
+# `transaction_date` alone also describe Part 1 Honoraria Payments; `description`
+# is the column that separates a disclosed trade from a speaking fee.
+_REQUIRED_COLUMNS = frozenset({"amount", "transaction_date", "description"})
+
 
 def _clean(text: str) -> str:
     return " ".join((text or "").split()).strip()
@@ -105,8 +110,8 @@ class SenateHtmlParser(PTRParser):
             text = soup.get_text(" ", strip=True)
             quality.text_extracted = bool(text)
 
-            table = self._transaction_table(soup)
-            if table is None:
+            tables = self._transaction_tables(soup)
+            if not tables:
                 # Two different things end up here and they were reported as
                 # one. A scan is not a parse failure -- there is nothing in it
                 # to read -- and an unknown layout is, loudly.
@@ -134,11 +139,29 @@ class SenateHtmlParser(PTRParser):
                 return result
 
             quality.tables_found = True
-            transactions = self._rows_to_transactions(table, quality)
+
+            # Every matching table, not the first. A Senate ANNUAL filing
+            # carries Part 4a "Periodic Transaction Report Summary" and Part 4b
+            # "Transactions" as two separate tables with different column
+            # orders, and taking the first dropped the other silently -- with a
+            # clean score, because a table nobody read contributes to neither
+            # side of `rows_parsed / rows_detected`.
+            #
+            # Measured over 81 live annual filings: 1,087 of 2,615 transactions
+            # were missing, 41.6% of the corrected total. 23 filings change; 19
+            # of them were stored partial at confidence 1.0 with no warning.
+            transactions: List[Dict[str, Any]] = []
+            for table, indices in tables:
+                transactions.extend(self._rows_to_transactions(table, quality, indices))
+
             result["transactions"] = transactions
             result["quality"] = quality.as_dict()
 
-            logger.info("Parsed %d transactions from Senate filing", len(transactions))
+            logger.info(
+                "Parsed %d transactions from %d table(s) in a Senate filing",
+                len(transactions),
+                len(tables),
+            )
 
         except Exception as e:  # pragma: no cover - defensive, mirrors parse_ptr
             logger.error("Error parsing Senate filing %s: %s", path, e)
@@ -147,14 +170,37 @@ class SenateHtmlParser(PTRParser):
 
         return result
 
-    def _transaction_table(self, soup: BeautifulSoup):
-        """The table whose headers look like a transaction report."""
+    def _transaction_tables(self, soup: BeautifulSoup):
+        """Every transaction table in the filing, as (table, column index).
+
+        Selection asks the same question the parse does -- does mapping this
+        table's headers yield the columns a transaction needs? -- so the two
+        cannot disagree about what a transaction table is. They did.
+
+        The old predicate was a substring test over the joined header text,
+        `"amount" and ("transaction" or "date")`. It admitted Part 1 Honoraria
+        Payments (`# | Date | Activity | Amount | Who Paid? | ... | Comments`),
+        which has an amount and a date and no asset. Part 1 precedes Part 4 in
+        document order, so on a filing that had one it was the table the
+        first-match rule selected -- and then every row failed the
+        `if not description: continue` guard below, so the filing parsed to
+        zero transactions and reported "no transactions found in a periodic
+        transaction report". Measured over 81 live annual filings: 8 carried
+        honoraria, and the 4 of those that also held real transaction tables
+        stored nothing at all, losing 67 disclosed trades.
+
+        Requiring `description` is what excludes it, and it excludes the other
+        near-misses in the same survey by the same rule rather than by a list of
+        exceptions: Part 3 Assets has "Value" rather than "Amount" and no date,
+        Part 7 Liabilities an amount but no date, Part 5 Gifts a date but a
+        "Value".
+        """
+        found = []
         for table in soup.find_all("table"):
-            headers = [_clean(th.get_text()).lower() for th in table.find_all("th")]
-            joined = " ".join(headers)
-            if "amount" in joined and ("transaction" in joined or "date" in joined):
-                return table
-        return None
+            indices = self._column_index(table)
+            if _REQUIRED_COLUMNS <= indices.keys():
+                found.append((table, indices))
+        return found
 
     def _column_index(self, table) -> Dict[str, int]:
         """Map our field names onto this table's actual column positions."""
@@ -182,10 +228,15 @@ class SenateHtmlParser(PTRParser):
 
         return column
 
-    def _rows_to_transactions(self, table, quality: ParseQuality) -> List[Dict[str, Any]]:
-        indices = self._column_index(table)
-        if "amount" not in indices or "transaction_date" not in indices:
-            quality.rows_detected = 0
+    def _rows_to_transactions(
+        self, table, quality: ParseQuality, indices: Dict[str, int] | None = None
+    ) -> List[Dict[str, Any]]:
+        # The caller has already mapped the columns to decide this IS a
+        # transaction table; re-deriving them would be a second chance to
+        # disagree with that decision.
+        if indices is None:
+            indices = self._column_index(table)
+        if not _REQUIRED_COLUMNS <= indices.keys():
             return []
 
         # Reading columns by header name is the whole design of this parser --
@@ -252,5 +303,12 @@ class SenateHtmlParser(PTRParser):
                 }
             )
 
-        quality.rows_parsed = len(transactions)
+        # `+=`, not `=`. Both counters are totals across every table in the
+        # filing; assigning made the last table win, which on the Rick Scott
+        # filing turned a complete 138-row read into rows_detected=138 /
+        # rows_parsed=48 -> confidence 0.35 and the false warning "90 row(s)
+        # looked like transactions but could not be read". The House PDF path
+        # has always accumulated (`ptr_parser.py`); this one did not need to
+        # while it only ever read one table.
+        quality.rows_parsed += len(transactions)
         return transactions

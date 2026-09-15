@@ -313,6 +313,15 @@ async def list_disclosures(
             Disclosure.filing_date.desc() if is_desc else Disclosure.filing_date.asc()
         )
 
+    # A unique final tiebreak. Without it the sort keys above have ties --
+    # thousands of rows share a severity, a filing year, a disclosure count --
+    # and LIMIT/OFFSET over a non-deterministic order is free to return a row
+    # on two pages and another on none. Measured on the live anomaly list, a
+    # STATIC table: 4,888 rows paginated to 4,881 distinct, 7 duplicated and
+    # 7 never returned at all. Anything walking these pages -- the site, an
+    # export, an audit -- silently loses rows.
+    query = query.order_by(Disclosure.id.asc())
+
     # Apply pagination
     disclosures = query.offset((page - 1) * page_size).limit(page_size).all()
     counts = _extracted_counts(db, [d.id for d in disclosures])

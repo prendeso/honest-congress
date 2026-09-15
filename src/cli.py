@@ -908,6 +908,18 @@ _SUPERSEDED_WORDING = (
     ("multi_factor_risk", "description", "combined score:"),
     ("cross_member_cluster", "title", " saled "),
     ("cross_member_cluster", "title", " purchased "),
+    # `wealth_vs_salary` published four dollar figures nobody disclosed --
+    # "Net worth grew from $1,507,500 to $9,007,500" -- from band midpoints,
+    # and tested its "far exceeds salary" claim on those midpoints too. The
+    # corrected detector reports the interval and holds the claim to its floor.
+    #
+    # This one needs the purge even though the detector had no published
+    # findings when it was fixed: its title is unchanged by the correction, and
+    # `anomaly_key` identifies a member-level finding BY TITLE, so a row written
+    # by the old code in the window before the fix deploys keeps its identity
+    # and its description is never rewritten. That window is real -- a pipeline
+    # run already in flight analyses with the code it checked out at dispatch.
+    ("wealth_vs_salary", "description", "Net worth grew from"),
 )
 
 

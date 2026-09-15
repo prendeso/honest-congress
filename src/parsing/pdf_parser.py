@@ -64,6 +64,14 @@ _SCHEDULE_HEADERS: tuple[tuple[str, tuple[str, ...]], ...] = (
 # managed account." Real entries never take this shape.
 _CONTINUATION_LINE = re.compile(r"^[A-Z]:\s")
 
+# The owner codes the House form prints in Schedule D's first column: self,
+# spouse, joint, dependent child. Anything else in that position is a creditor.
+_OWNER_CODE = re.compile(r"(?i)(SELF|SP|JT|DC)")
+
+# Schedule D's "Date Incurred" column, which sits between the creditor and the
+# type of debt.
+_DATE_INCURRED = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}|\d{4}")
+
 
 def _schedule_of_header(header: str) -> str | None:
     """The schedule this header opens. Order matters: A before B."""
@@ -341,21 +349,29 @@ class DisclosureParser:
     def _parse_liabilities_section(
         self, text: str, tables: List[List[List[str]]]
     ) -> List[Dict[str, Any]]:
-        """Parse the liabilities section."""
+        """Parse the liabilities/Schedule D section.
+
+        Fragmented exactly as Schedule A is, and missed for the same reason:
+        the header table carries no data rows, and each debt arrives as its own
+        table with a DATA ROW where the header should be. The old test looked
+        for "creditor" in that header and so matched only the empty one.
+
+        This direction is the one that flatters. `_calculate_wealth_progression`
+        SUBTRACTS liabilities, so a debt the parser cannot see raises the
+        member's apparent net worth -- and net worth is what
+        `excessive_wealth_growth` publishes. Rosa DeLauro's filing discloses a
+        $250,001-$500,000 mortgage and a $16,508 card balance; the database had
+        neither.
+        """
         liabilities = []
 
-        for table in tables:
-            if not table:
+        for table, schedule in self._tables_by_schedule(tables):
+            if schedule != "D":
                 continue
-
-            headers = table[0] if table else []
-            header_text = " ".join(str(h).lower() for h in headers if h)
-
-            if "liabilit" in header_text or "creditor" in header_text:
-                for row in table[1:]:
-                    liability = self._parse_liability_row(row)
-                    if liability:
-                        liabilities.append(liability)
+            for row in table:
+                liability = self._parse_liability_row(row)
+                if liability and not _is_a_continuation_line(liability.get("creditor")):
+                    liabilities.append(liability)
 
         return liabilities
 
@@ -366,14 +382,23 @@ class DisclosureParser:
 
         row = [str(cell).strip() if cell else "" for cell in row]
 
-        creditor = row[0] if row else ""
+        # Schedule D is `Owner | Creditor | Date Incurred | Type | Amount`, so
+        # the first column is an owner CODE and not a creditor. Reading row[0]
+        # stored every debt in the database against a creditor named "JT" or
+        # "SP", with the real lender demoted to the description.
+        start = 1 if len(row) >= 4 and _OWNER_CODE.fullmatch(row[0]) else 0
+        creditor = row[start] if len(row) > start else ""
         amount_text = ""
         description = ""
 
-        for cell in row[1:]:
+        for cell in row[start + 1 :]:
             if self._looks_like_value_range(cell):
                 amount_text = cell
-            elif cell and not description:
+            elif cell and not description and not _DATE_INCURRED.fullmatch(cell):
+                # "Date Incurred" sits between the creditor and the type, so
+                # taking the first non-amount cell described every mortgage as
+                # "7/29/1999". The type ("Mortgage on Personal Residence") is
+                # the next one along and is what a reader needs.
                 description = cell
 
         if not creditor:

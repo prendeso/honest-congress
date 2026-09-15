@@ -240,3 +240,71 @@ class TestAnExactAmountIsNotARange:
         from decimal import Decimal
 
         assert parser._parse_value_range(text) == (Decimal(low), Decimal(high))
+
+
+class TestLiabilitiesAreReadTheSameWay:
+    """Schedule D fragments exactly as Schedule A does, and was missed the same
+    way: the header table carries no data rows, and each debt arrives as its own
+    table with a data row where the header should be.
+
+    This direction is the one that flatters. `_calculate_wealth_progression`
+    SUBTRACTS liabilities, so a debt the parser cannot see RAISES the member's
+    apparent net worth -- and net worth is what `excessive_wealth_growth`
+    publishes. Rosa DeLauro discloses a $250,001-$500,000 mortgage and a
+    $16,508 card balance; the database had neither.
+    """
+
+    def a_debt(self, creditor="Bank of America Wilmington, DE", amount="$250,001 -\n$500,000"):
+        return ["JT", creditor, "7/29/1999", "Mortgage on Personal Residence", amount]
+
+    def test_a_fragmented_debt_is_recovered(self, parser):
+        tables = [[SCHEDULE_D], [self.a_debt()], [self.a_debt(creditor="American Express")]]
+
+        liabilities = parser._parse_liabilities_section("", tables)
+
+        assert [x["creditor"] for x in liabilities] == [
+            "Bank of America Wilmington, DE",
+            "American Express",
+        ]
+
+    def test_the_owner_code_is_not_stored_as_the_creditor(self, parser):
+        """Schedule D is `Owner | Creditor | Date | Type | Amount`, so reading
+        row[0] filed every debt against a creditor named "JT" or "SP"."""
+        liabilities = parser._parse_liabilities_section("", [[SCHEDULE_D, self.a_debt()]])
+
+        assert liabilities[0]["creditor"] == "Bank of America Wilmington, DE"
+        assert liabilities[0]["creditor"] not in {"JT", "SP", "DC", "SELF"}
+
+    def test_the_date_is_not_stored_as_the_description(self, parser):
+        """ "Date Incurred" sits between the creditor and the type, so the first
+        non-amount cell described every mortgage as "7/29/1999"."""
+        liabilities = parser._parse_liabilities_section("", [[SCHEDULE_D, self.a_debt()]])
+
+        assert liabilities[0]["description"] == "Mortgage on Personal Residence"
+
+    def test_the_amount_survives(self, parser):
+        liabilities = parser._parse_liabilities_section("", [[SCHEDULE_D, self.a_debt()]])
+
+        assert liabilities[0]["amount_min"] == 250001
+        assert liabilities[0]["amount_max"] == 500000
+
+    def test_an_exact_balance_is_not_a_range_from_its_cents(self, parser):
+        tables = [[SCHEDULE_D, self.a_debt(creditor="American Express", amount="$16,508.00")]]
+
+        liabilities = parser._parse_liabilities_section("", tables)
+
+        assert liabilities[0]["amount_min"] == liabilities[0]["amount_max"] == 16508
+
+    def test_a_row_without_an_owner_code_still_reads_its_creditor(self, parser):
+        """Not every filing prints the owner column; the creditor is then first."""
+        tables = [[SCHEDULE_D, ["Some Bank", "1/1/2020", "Mortgage", "$50,001 - $100,000"]]]
+
+        liabilities = parser._parse_liabilities_section("", tables)
+
+        assert liabilities[0]["creditor"] == "Some Bank"
+
+    def test_holdings_are_not_collected_as_debts(self, parser):
+        assert parser._parse_liabilities_section("", [[SCHEDULE_A, a_holding()]]) == []
+
+    def test_trades_are_not_collected_as_debts(self, parser):
+        assert parser._parse_liabilities_section("", [[SCHEDULE_B, a_trade()]]) == []

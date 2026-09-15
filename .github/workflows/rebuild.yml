@@ -219,6 +219,13 @@ jobs:
       - name: Ingest federal contract awards
         id: contracts
         continue-on-error: true
+        # The ceilings daily-update.yml carries, for the same reason: run 225
+        # measured this feed at 234 minutes against 61 the run before, on the
+        # same work, because USASpending was slow. `--max-requests` cannot bound
+        # that -- `ThrottledClient` counts requests, not time. A kill is safe:
+        # the sweep commits per company and `continue-on-error` routes the
+        # failure into the coverage block below.
+        timeout-minutes: 75
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
@@ -236,6 +243,7 @@ jobs:
       - name: Ingest lobbying disclosures
         id: lobbying
         continue-on-error: true
+        timeout-minutes: 40
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
@@ -248,6 +256,7 @@ jobs:
       - name: Sync SEC industry codes
         id: industries
         continue-on-error: true
+        timeout-minutes: 40
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
@@ -256,6 +265,7 @@ jobs:
       - name: Ingest bill sponsorship and committee referrals
         id: bills
         continue-on-error: true
+        timeout-minutes: 60
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}

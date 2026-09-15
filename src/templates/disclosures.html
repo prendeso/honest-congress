@@ -45,17 +45,17 @@
                         <option value="2012">2012</option>
                     </select>
 
+                    <!-- Served from /api/disclosures/filing-types, not kept here.
+                         The hand-written list offered `FD`, which matches nothing
+                         in the database, and omitted `D`, `W`, `B`, `E` and all
+                         nineteen free-text values the Senate stores -- so a third
+                         of the corpus could not be reached through this filter
+                         while a dead option sat in the menu. -->
                     <select x-model="typeFilter" @change="loadDisclosures()" class="border rounded-lg px-4 py-2">
                         <option value="">All Types</option>
-                        <option value="A">A - Annual Report</option>
-                        <option value="C">C - Candidate Report</option>
-                        <option value="FD">FD - Financial Disclosure</option>
-                        <option value="G">G - Gingles Report</option>
-                        <option value="H">H - House Member Report</option>
-                        <option value="O">O - Original Report</option>
-                        <option value="P">P - Periodic Report</option>
-                        <option value="T">T - Termination Report</option>
-                        <option value="X">X - Amended/Corrected</option>
+                        <template x-for="t in filingTypes" :key="t.filing_type">
+                            <option :value="t.filing_type" x-text="`${t.filing_type} (${t.count})`"></option>
+                        </template>
                     </select>
 
                     <select x-model="parsedFilter" @change="loadDisclosures()" class="border rounded-lg px-4 py-2">
@@ -233,6 +233,7 @@
                 memberSearch: '',
                 yearFilter: '',
                 typeFilter: '',
+                filingTypes: [],
                 parsedFilter: '',
                 loading: false,
                 sortField: 'filing_date',
@@ -242,7 +243,15 @@
 
                 async init() {
                     console.log('[Disclosures] Initializing...');
+                    await this.loadFilingTypes();
                     await this.loadDisclosures();
+                },
+
+                async loadFilingTypes() {
+                    try {
+                        const body = await fetch('/api/disclosures/filing-types').then(r => r.json());
+                        this.filingTypes = body.filing_types || [];
+                    } catch (e) { console.error('Filing types error:', e); }
                 },
 
                 async loadDisclosures() {

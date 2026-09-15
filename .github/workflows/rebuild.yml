@@ -169,8 +169,13 @@ jobs:
       # Findings written by a detector that is now disabled survive in the
       # database and keep being served. Merging stops them being WRITTEN; this
       # is what removes the ones already there.
+      #
+      # Ungated. It was `if: inputs.mode == 'reparse'`, which quietly meant the
+      # `fresh` mode -- and, once it was added, the `all` mode -- ran a whole
+      # pipeline without ever dropping rows from a detector the project has
+      # judged unfit to publish. The command is idempotent and says so when
+      # there is nothing to drop, so there is nothing for a gate to save.
       - name: Delete findings from disabled detectors
-        if: ${{ inputs.mode == 'reparse' }}
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli purge-disabled
@@ -294,6 +299,27 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli purge-non-awards
+
+      # Wired into BOTH pipelines, beside purge-non-awards, because a purge
+      # command that no workflow runs is a fix that never ships. This one was
+      # written, tested and merged -- and then never executed, so 425 findings
+      # went on being served with text the corrected detectors cannot produce:
+      # 397 band titles ("High trading activity: 10-15 trades"), 27 naming
+      # `perfect_timing`, a DISABLED detector, over an invented "/10" maximum,
+      # and one "saled".
+      #
+      # Worse than stale. `anomaly_key` identifies a member-level finding by
+      # its TITLE, so the corrected detector INSERTS beside the old row rather
+      # than replacing it: 376 member-month pairs are published twice, once as
+      # "more than 100 trades in March 2026" and once as "701 trades in March
+      # 2026", under the same person's name.
+      #
+      # Runs BEFORE the analysis, so the deleted rows are re-derived in the
+      # same pass with the corrected wording.
+      - name: Drop findings whose wording the detectors can no longer write
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli purge-stale-wording
 
       - name: Run detectors, FDR correction and percentile ranks
         env:

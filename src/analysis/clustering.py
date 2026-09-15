@@ -45,6 +45,14 @@ CLUSTER_WINDOW_DAYS = 14
 MIN_CLUSTER_CONCENTRATION = 0.5
 
 
+# "purchase" and "sale" are the stored directions; neither takes a "d".
+_PAST_TENSE = {"purchase": "bought", "sale": "sold"}
+
+
+def _days(n: int) -> str:
+    return f"{n} day" if n == 1 else f"{n} days"
+
+
 def _cluster_key(txn: Transaction) -> Tuple[str, str] | None:
     if not txn.ticker or not txn.transaction_date:
         return None
@@ -133,9 +141,15 @@ def detect_cross_member_clusters(db: Session) -> List[Dict[str, Any]]:
                 "member_name": names[0],
                 "anomaly_type": ANOMALY_TYPE,
                 "severity": "HIGH" if best["member_count"] >= 6 else "MEDIUM",
+                # `f"{direction}d"` coined a verb: direction is "purchase" or
+                # "sale", so every sale cluster was titled "4 members saled NVDA
+                # within 1 days" -- in a HIGH-severity title that names the
+                # members. The description one line below has always read
+                # correctly ("disclosed a sale of"), which is what makes the
+                # title a slip rather than a choice.
                 "title": (
-                    f"{best['member_count']} members {direction}d {ticker} "
-                    f"within {max(span_days, 1)} days"
+                    f"{best['member_count']} members {_PAST_TENSE[direction]} {ticker} "
+                    f"within {_days(max(span_days, 1))}"
                 ),
                 "ticker": ticker,
                 "direction": direction,

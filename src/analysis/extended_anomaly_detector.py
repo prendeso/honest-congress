@@ -439,9 +439,24 @@ class ExtendedAnomalyDetector:
                         "anomaly_types": [a.get("anomaly_type") for a in anomalies_list],
                         "computed_value": Decimal(str(total_score)),
                         "threshold_value": Decimal("3"),
+                        # `distinct_types`, matching the title. This counted
+                        # FINDINGS, so a member with four findings of three
+                        # types was titled "3 different anomaly types" and then
+                        # described as matching "4 different detectors" -- the
+                        # description contradicting its own title, and the list
+                        # of three names in its own next sentence. The title was
+                        # corrected and the description was not, because
+                        # `test_published_numbers.py` asserts only on the title.
+                        #
+                        # "/10" was a fabricated denominator. `total_score` sums
+                        # 0-3 per finding over every finding, so it has no
+                        # maximum: four HIGH findings already print 8 and six
+                        # print 12, which was published as "12/10".
                         "description": (
-                            f"Member matched {len(anomalies_list)} different detectors "
-                            f"(combined score: {total_score}/10). "
+                            f"Member matched {len(distinct_types)} different detectors "
+                            f"across {len(anomalies_list)} findings "
+                            f"(combined severity score {total_score}; each finding adds 0-3, "
+                            f"so there is no fixed maximum). "
                             f"Detectors: {', '.join(sorted(set(a.get('anomaly_type', 'unknown') for a in anomalies_list)))}. "
                             f"This counts how many patterns matched; it does not weight them by "
                             f"confidence and applies no correction for running many detectors "

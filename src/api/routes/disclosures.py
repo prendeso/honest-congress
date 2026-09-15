@@ -169,7 +169,17 @@ class DisclosureResponse(BaseModel):
     document_id: str
     document_url: str | None
     parsed: bool
-    is_ptr: bool = False
+    # No default, deliberately. This carried `= False` and the detail handler
+    # never passed it, so every /api/disclosures/{id} response asserted
+    # is_ptr=false regardless of the row while the list handler reported the
+    # truth -- two endpoints contradicting each other about the same filing.
+    #
+    # It could not be caught by reading either handler: the omission looks like
+    # a field that does not exist. Requiring it makes the omission a construction
+    # error at the one place it can happen. Safe to require: the column is
+    # nullable=False in the baseline migration and `Mapped[bool]` on the model,
+    # so there is no row that cannot supply it.
+    is_ptr: bool
     # How much of the document the parser read, 0-1. `parsed` only ever meant
     # the parser ran without raising; this is what says whether it worked.
     # Null means never scored, not scored and fine.
@@ -371,6 +381,7 @@ async def get_disclosure(
         document_id=disclosure.document_id,
         document_url=_normalized_document_url(disclosure),
         parsed=disclosure.parsed,
+        is_ptr=disclosure.is_ptr,
         parse_confidence=disclosure.parse_confidence,
         parse_warnings=disclosure.parse_warnings,
         has_text_layer=disclosure.has_text_layer,

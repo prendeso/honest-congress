@@ -411,30 +411,56 @@ class TradeAnalyzer:
                     except ValueError:
                         formatted_month = month
 
-                    # Use vague ranges instead of exact counts
-                    if count <= 15:
-                        trade_range = "10-15"
-                    elif count <= 25:
-                        trade_range = "15-25"
-                    elif count <= 50:
-                        trade_range = "25-50"
-                    elif count <= 100:
-                        trade_range = "50-100"
-                    else:
-                        trade_range = "more than 100"
-
+                    # The count, exactly, and the band it used to be published
+                    # as is gone. Three reasons, in order of how badly the band
+                    # failed:
+                    #
+                    # The sentence assumed every band was closed. "more than
+                    # 100" in a slot reading `f"Between {trade_range} stock
+                    # trades"` published "Between more than 100 stock trades
+                    # were made in March 2026" beside a named senator, 24 times.
+                    #
+                    # Its lowest band could not occur. This fires on
+                    # `count > threshold`, so the smallest count it can produce
+                    # is 11, while the band claimed a floor of 10 in the same
+                    # sentence that named 10 as the threshold it exceeded.
+                    #
+                    # And the band was hiding a number already on the card:
+                    # `computed_value` is the exact count, rendered as the
+                    # "Value" chip two lines from the title. "more than 100"
+                    # and "701" were published side by side.
+                    #
+                    # The banding cited D5, which does not reach this. D5 is
+                    # about figures DERIVED from disclosed ranges -- "any point
+                    # estimate derived from them is fabricated precision". A
+                    # count of transactions in a month is disclosed exactly, the
+                    # same class of fact `clustering.py` publishes exactly and
+                    # calls "dates, tickers and directions ... disclosed
+                    # exactly". Rounding an exact fact is not honesty about
+                    # uncertainty; it is discarding precision the filing gave.
                     anomalies.append(
                         {
                             "member_id": member_id,
                             "disclosure_id": disclosure_id,
                             "anomaly_type": "high_trading_frequency",
                             "severity": min(10, 4 + (count - self.frequency_threshold_per_month)),
-                            "title": f"High trading activity: {trade_range} trades in {formatted_month}",
+                            "title": (
+                                f"High trading activity: {count} trades in {formatted_month}"
+                            ),
+                            # The closing sentence used to read "High trading
+                            # frequency may indicate active trading based on
+                            # non-public information." The anomalies page renders
+                            # the catalogue's `limits` directly beneath it --
+                            # "Trading often is not trading improperly, and a
+                            # managed account can produce this without the member
+                            # choosing any of it" -- so the detector was asserting
+                            # on one line what the page denied on the next. D3,
+                            # D10 and D14 were all spent removing exactly this
+                            # kind of claim; it survived here.
                             "description": (
-                                f"Between {trade_range} stock trades were made in {formatted_month}, "
-                                f"which exceeds the threshold of {self.frequency_threshold_per_month} "
-                                f"trades per month. High trading frequency may indicate "
-                                f"active trading based on non-public information."
+                                f"{count} stock trades were disclosed in {formatted_month}, "
+                                f"which exceeds the threshold of "
+                                f"{self.frequency_threshold_per_month} trades per month."
                             ),
                             "computed_value": Decimal(str(count)),
                             "threshold_value": Decimal(str(self.frequency_threshold_per_month)),

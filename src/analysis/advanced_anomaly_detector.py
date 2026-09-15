@@ -184,10 +184,44 @@ class AdvancedAnomalyDetector:
                         cumulative_salary / wealth_growth if wealth_growth > 0 else 0
                     )
 
-                    # Flag if wealth growth is 2x+ the total possible salary accumulation
-                    if wealth_growth > cumulative_salary and salary_contribution_ratio < 0.5:
+                    # The claim this publishes -- growth "far exceeds" salary --
+                    # was tested against the MIDPOINT of each band and then
+                    # stated as fact. `_calculate_wealth_progression` carries the
+                    # bounds precisely so a caller need not do that; its own
+                    # comment says so ("the bounds are carried alongside so
+                    # callers can report them rather than imply precision") and
+                    # this caller ignored them.
+                    #
+                    # The interval is the widest defensible one, so the smallest
+                    # increase the filings permit is the later low minus the
+                    # earlier high.
+                    first_low = float(wealth_progression[0]["net_worth_low"])
+                    first_high = float(wealth_progression[0]["net_worth_high"])
+                    last_low = float(wealth_progression[-1]["net_worth_low"])
+                    last_high = float(wealth_progression[-1]["net_worth_high"])
+
+                    growth_low = last_low - first_high
+                    growth_high = last_high - first_low
+
+                    # The old condition -- midpoint growth above salary, and
+                    # salary explaining under half of it -- is algebraically
+                    # "more than twice cumulative salary, at the midpoint". Held
+                    # to the midpoint it is a statement the bands may not
+                    # support at all: a member whose interval runs from $200k to
+                    # $9M has a midpoint above any threshold you like and
+                    # filings entirely consistent with a salary explaining
+                    # everything. Requiring the FLOOR of the interval to clear
+                    # the same bar makes the published sentence true at every
+                    # point the disclosures permit, not just the middle one.
+                    #
+                    # It is strictly stronger, so it cannot add a finding, and
+                    # it will remove those that rested on the width of a band
+                    # rather than on the growth. That is the intended effect
+                    # (D5): where the bands are too wide to tell, the honest
+                    # output is nothing.
+                    if growth_low > 2 * cumulative_salary:
                         severity = self._calculate_wealth_severity(
-                            wealth_growth, cumulative_salary, years_in_office
+                            growth_low, cumulative_salary, years_in_office
                         )
 
                         anomalies.append(
@@ -209,13 +243,27 @@ class AdvancedAnomalyDetector:
                                 "growth_multiple_of_salary": wealth_growth / cumulative_salary
                                 if cumulative_salary > 0
                                 else 0,
-                                "computed_value": Decimal(str(round(wealth_growth, 2))),
+                                "net_worth_low_first": first_low,
+                                "net_worth_high_first": first_high,
+                                "net_worth_low_last": last_low,
+                                "net_worth_high_last": last_high,
+                                "growth_low": growth_low,
+                                "growth_high": growth_high,
+                                # A floor, not an estimate. Every figure here is
+                                # one end of an interval the filings support; a
+                                # midpoint would be a number nobody disclosed.
+                                "computed_value": Decimal(str(round(growth_low, 2))),
                                 "threshold_value": Decimal(str(round(cumulative_salary, 2))),
                                 "description": (
-                                    f"Net worth grew from ${first_wealth:,.0f} to ${last_wealth:,.0f} "
-                                    f"({wealth_growth:,.0f} total). Cumulative salary over {years_in_office} years: "
-                                    f"${cumulative_salary:,.0f}. Growth is {(wealth_growth / cumulative_salary):.1f}x "
-                                    f"total possible salary accumulation."
+                                    f"Reported net worth went from a range of "
+                                    f"${first_low:,.0f}-${first_high:,.0f} in {first_year} to "
+                                    f"${last_low:,.0f}-${last_high:,.0f} in {last_year}. "
+                                    f"On the least favourable reading of those bands the increase "
+                                    f"is still at least ${growth_low:,.0f}, more than "
+                                    f"{growth_low / cumulative_salary:.1f}x the ${cumulative_salary:,.0f} "
+                                    f"of congressional salary over {years_in_office} years. "
+                                    f"Disclosures report bands and never exact figures, so no point "
+                                    f"figure for any of these exists."
                                 ),
                             }
                         )

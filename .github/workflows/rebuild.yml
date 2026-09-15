@@ -25,12 +25,23 @@ on:
         description: 'REBUILD to run. DROP-EVERYTHING to ALSO wipe the schema first (first pass only).'
         required: true
         default: ''
+      # `reparse` does NOT re-read every filing, and its old description said it
+      # did. It runs `--min-confidence 1.0`, which filters `parse_confidence <
+      # 1.0` -- so a filing the parser scored 1.0 is excluded from BOTH modes:
+      # `fresh` skips it for being parsed already, and `reparse` skips it for
+      # having parsed well. Nothing could re-read it.
+      #
+      # That is the exact shape of a parser fix that corrects CONFIDENT output.
+      # The Schedule A/B fix changed 40 filings that every one scored 1.0 --
+      # 95.5% of their stored "assets" were transactions -- and no mode this
+      # workflow offered could have applied it.
       mode:
-        description: 'reparse = re-read filings already read, for a parser fix. fresh = only filings never read.'
+        description: 'all = re-read EVERY filing (a parser fix that changes confident output). reparse = re-read only filings scored below 1.0. fresh = only filings never read.'
         required: true
         default: reparse
         type: choice
         options:
+          - all
           - reparse
           - fresh
       years:
@@ -188,7 +199,9 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: |
-          if [ "${{ inputs.mode }}" = "reparse" ]; then
+          if [ "${{ inputs.mode }}" = "all" ]; then
+            python -m src.cli parse --reparse --limit ${{ inputs.limit }}
+          elif [ "${{ inputs.mode }}" = "reparse" ]; then
             python -m src.cli parse --min-confidence 1.0 --limit ${{ inputs.limit }}
           else
             python -m src.cli parse --limit ${{ inputs.limit }}

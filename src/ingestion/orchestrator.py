@@ -1295,7 +1295,7 @@ class IngestionOrchestrator:
             )
             db.add(liability)
 
-    def parse_disclosures(
+    def _disclosures_to_parse(
         self,
         db: Session,
         limit: int | None = None,
@@ -1305,24 +1305,15 @@ class IngestionOrchestrator:
         reparse: bool = False,
         failed_only: bool = False,
         min_confidence: float | None = None,
-        delay: float = 1.0,
-    ) -> Dict[str, int]:
-        """
-        Parse multiple unparsed disclosures.
+    ) -> List[Disclosure]:
+        """Which filings a parse run will read, and nothing else.
 
-        Args:
-            db: Database session
-            limit: Maximum number to parse
-            member_id: Filter to specific member
-            year: Filter to specific year
-            ptr_only: Only parse PTR disclosures
-            reparse: Re-parse already parsed disclosures
-            failed_only: Only retry disclosures that failed to download
-            min_confidence: Re-parse filings the parser read worse than this
-            delay: Delay between downloads (seconds)
-
-        Returns:
-            Dict with counts of parsed/failed
+        Extracted so the selection can be tested directly. It is the thing that
+        decides whether a parser fix ever reaches the corpus, and it was doing
+        so invisibly: a filing scored 1.0 is `parsed`, so the default filter
+        skips it, and it is not below 1.0, so `--min-confidence 1.0` skips it
+        too. Only `--reparse`, which applies no filter, reaches it -- and until
+        `rebuild.yml` grew an `all` mode there was no way to ask for that.
         """
         query = db.query(Disclosure)
 
@@ -1398,7 +1389,47 @@ class IngestionOrchestrator:
         if limit:
             query = query.limit(limit)
 
-        disclosures = query.all()
+        return query.all()
+
+    def parse_disclosures(
+        self,
+        db: Session,
+        limit: int | None = None,
+        member_id: int | None = None,
+        year: int | None = None,
+        ptr_only: bool = False,
+        reparse: bool = False,
+        failed_only: bool = False,
+        min_confidence: float | None = None,
+        delay: float = 1.0,
+    ) -> Dict[str, int]:
+        """
+        Parse multiple unparsed disclosures.
+
+        Args:
+            db: Database session
+            limit: Maximum number to parse
+            member_id: Filter to specific member
+            year: Filter to specific year
+            ptr_only: Only parse PTR disclosures
+            reparse: Re-parse already parsed disclosures
+            failed_only: Only retry disclosures that failed to download
+            min_confidence: Re-parse filings the parser read worse than this
+            delay: Delay between downloads (seconds)
+
+        Returns:
+            Dict with counts of parsed/failed
+        """
+        disclosures = self._disclosures_to_parse(
+            db,
+            limit=limit,
+            member_id=member_id,
+            year=year,
+            ptr_only=ptr_only,
+            reparse=reparse,
+            failed_only=failed_only,
+            min_confidence=min_confidence,
+        )
         logger.info(f"Found {len(disclosures)} disclosures to parse")
 
         results = {"parsed": 0, "failed": 0, "skipped": 0}

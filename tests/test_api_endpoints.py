@@ -684,6 +684,19 @@ class TestTheParsedDocumentsPageHasSomethingToShow:
         assert doc["liability_count"] == 0
 
     def test_the_detail_view_agrees_with_the_list(self, client, seeded_db):
+        """Every field the two endpoints share, compared field by field.
+
+        This test is named for this check and did not perform it. It fetched the
+        list row, used it only for `listed["id"]`, and then asserted detail's
+        counts against detail's OWN lists -- internal self-consistency, which
+        holds however wrong both halves are.
+
+        What it therefore missed: `is_ptr` carried a model default and the
+        detail handler never passed it, so the same filing was published as
+        is_ptr=true by the list and is_ptr=false by the detail view. Comparing
+        one named field would not have caught the next one; comparing the whole
+        shared set does.
+        """
         listed = next(
             d
             for d in client.get("/api/disclosures").json()["disclosures"]
@@ -691,9 +704,29 @@ class TestTheParsedDocumentsPageHasSomethingToShow:
         )
         detail = client.get(f"/api/disclosures/{listed['id']}").json()
 
-        assert detail["transaction_count"] == len(detail["transactions"])
-        assert detail["asset_count"] == len(detail["assets"])
-        assert detail["liability_count"] == len(detail["liabilities"])
+        shared = set(listed) & set(detail)
+        assert "is_ptr" in shared, "the field that broke is no longer compared"
+
+        disagreements = {k: (listed[k], detail[k]) for k in shared if listed[k] != detail[k]}
+        assert not disagreements, (
+            f"list and detail publish different values for the same filing: {disagreements}"
+        )
+
+    def test_a_ptr_is_reported_as_a_ptr_by_the_detail_view(self, client, seeded_db):
+        """The specific row that was wrong, asserted against the database.
+
+        The field-by-field test above compares the two endpoints to each other,
+        which would still pass if BOTH were wrong. This one pins the answer.
+        """
+        from src.db.models import Disclosure
+
+        row = seeded_db.query(Disclosure).filter(Disclosure.document_id == "DOC1").one()
+        row.is_ptr = True
+        seeded_db.commit()
+
+        detail = client.get(f"/api/disclosures/{row.id}").json()
+
+        assert detail["is_ptr"] is True
 
     def test_counting_does_not_cost_a_query_per_row(self, client, seeded_db):
         """Three grouped queries, not three per filing.

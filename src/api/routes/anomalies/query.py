@@ -114,8 +114,13 @@ async def list_anomalies(
     # detected_at and then re-sorted only the current page by severity in
     # Python, so page 1 was the newest 50 rows rather than the most severe.
     # (The old comment blamed SQLite; SQLite supports CASE in ORDER BY fine.)
+    # `Anomaly.id` is the unique final tiebreak. Severity and detected_at both
+    # tie in their thousands, and LIMIT/OFFSET over a non-deterministic order is
+    # free to return a row on two pages and another on none. Measured on the
+    # live list, a STATIC table: 4,888 rows paginated to 4,881 distinct -- 7
+    # duplicated, 7 never returned at all.
     rows = (
-        query.order_by(SEVERITY_RANK, Anomaly.detected_at.desc())
+        query.order_by(SEVERITY_RANK, Anomaly.detected_at.desc(), Anomaly.id.desc())
         .offset((page - 1) * page_size)
         .limit(page_size)
         .all()

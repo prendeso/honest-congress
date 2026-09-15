@@ -48,7 +48,7 @@ class DisclosureParser:
         Returns:
             Parsed disclosure data including assets, transactions, and liabilities
         """
-        result = {
+        result: Dict[str, Any] = {
             "assets": [],
             "transactions": [],
             "liabilities": [],
@@ -56,6 +56,22 @@ class DisclosureParser:
             "positions": [],
             "agreements": [],
             "parse_errors": [],
+            # Whether the PDF had a text layer, which is a property of the
+            # DOCUMENT and not of this parse. `orchestrator.parse_disclosure`
+            # has always read `raw_text` here to decide it -- and this dict
+            # never carried the key, so the expression fell through to
+            # `bool(assets or liabilities)` and the answer became "did the
+            # parser find anything".
+            #
+            # The cost was a category error in the direction that hides work.
+            # `score_fd_parse` has two branches, "no text layer in PDF - likely
+            # a scan" and "no assets or liabilities found in an annual filing",
+            # and the second was unreachable from the orchestrator: a readable
+            # filing the parser failed on was stored as a scan, which is the
+            # verdict that says nobody is at fault. Measured over 40 randomly
+            # sampled type-O House annual filings, 3 were genuine scans and 3
+            # were this -- half of what the database called scans were not.
+            "raw_text": "",
         }
 
         try:
@@ -73,6 +89,10 @@ class DisclosureParser:
                     page_tables = page.extract_tables()
                     if page_tables:
                         tables.extend(clean_tables(page_tables))
+
+                # Recorded before any section parsing, so it cannot be
+                # confused with whether the sections yielded anything.
+                result["raw_text"] = text
 
                 # Identify document sections and parse accordingly
                 result["assets"] = self._parse_assets_section(text, tables)

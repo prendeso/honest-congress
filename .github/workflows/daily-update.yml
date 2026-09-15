@@ -95,6 +95,31 @@ jobs:
           CONGRESS_GOV_API_KEY: ${{ secrets.CONGRESS_GOV_API_KEY }}
         run: python -m src.cli ingest
 
+      # This workflow ingested filings every night and never parsed one.
+      # `ingest` stores a disclosure with `parsed=False`; `parse` is what turns
+      # its PDF into transactions, and only `rebuild.yml` -- a manual dispatch
+      # -- ever ran it. So a PTR filed on Monday sat in the database unread
+      # until somebody happened to dispatch a rebuild, and `analyze` ran each
+      # night over a trade table that the night's own ingest had not added to.
+      #
+      # It has its own ceiling because time is the thing that varies here, not
+      # request count (#60): each filing is a download, and the run is bounded
+      # by how slow the Clerk and eFD are that night rather than by how many
+      # filings there are. `--limit` bounds the work; a backlog simply drains
+      # over consecutive nights.
+      #
+      # continue-on-error so a slow night still reaches `analyze` with whatever
+      # parsed -- each filing commits as it goes, so a timeout keeps its work.
+      # The summary below reports the outcome, because that is precisely the
+      # combination that otherwise shows a green tick over a dead step.
+      - name: Parse filings into transactions
+        id: parse
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli parse --limit 400
+
       - name: Sync committee assignments
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -221,6 +246,7 @@ jobs:
           # Cloudflare 522 did exactly that to the sponsorship ingest.
           FAILED=""
           for step in \
+            "parse:${{ steps.parse.outcome }}" \
             "contracts:${{ steps.contracts.outcome }}" \
             "donations:${{ steps.donations.outcome }}" \
             "lobbying:${{ steps.lobbying.outcome }}" \

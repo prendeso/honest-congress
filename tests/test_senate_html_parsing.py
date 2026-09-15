@@ -113,21 +113,81 @@ class TestColumnsAreReadByNameNotPosition:
         assert transaction["transaction_date"] == datetime(2025, 3, 14)
 
 
+# What eFD actually serves for a paper filing: its own chrome, page navigation,
+# and one GIF per page from the media host. Reproduced from a live
+# `/search/view/paper/` response rather than invented.
+SCAN_MARKUP = """
+<html><body>
+  <a>Skip to main content</a>
+  <h1>Filing Document - Print View</h1>
+  <img src="/static/images/logo.svg">
+  <p>1 2 3 4 Page 1 of 4 Rotate</p>
+  <img src="https://efd-media-public.senate.gov/media/2026/2/000/000/000000513.gif">
+  <img src="https://efd-media-public.senate.gov/media/2026/2/000/000/000000514.gif">
+</body></html>
+"""
+
+
 class TestAGenuineScanIsDistinguishable:
-    """A paper filing really is a scan — eFD serves those as an image with no
+    """A paper filing really is a scan — eFD serves those as page images with no
     table. Saying that distinctly keeps "we cannot read this" separate from
     "this document is empty", which is the distinction the whole coverage card
-    rests on."""
+    rests on.
 
-    def test_a_filing_with_no_table_says_so(self, tmp_path):
+    The distinction was being lost at the last step. `parse_quality_summary`
+    separates scans from the parser's own failures on `has_text_layer`, which
+    comes from `quality["text_extracted"]` — and on an HTML page that was
+    `bool(soup.get_text())`, true of eFD's navigation chrome whatever the
+    filing contains. So every Senate scan was counted as a filing the parser
+    failed to read. Measured against the live service: 5 of 43 sampled PTRs are
+    paper, and every one of them landed in that bucket.
+    """
+
+    def test_a_scan_is_not_counted_as_a_text_layer(self, tmp_path):
         path = tmp_path / "scan.html"
-        path.write_text("<html><body><img src='/scan.png'><p>Paper filing</p></body></html>")
+        path.write_text(SCAN_MARKUP)
 
         result = SenateHtmlParser().parse_senate_html(str(path))
 
         assert result["transactions"] == []
-        assert result["parse_errors"], "a filing that could not be read reported no error"
-        assert "no transaction table" in result["parse_errors"][0]
+        assert result["quality"]["text_extracted"] is False, (
+            "a scan with a text layer is counted as the parser's own failure "
+            "rather than as a document with nothing to read"
+        )
+
+    def test_a_scan_and_an_unknown_layout_do_not_share_one_message(self, tmp_path):
+        """The old message named both — "a scanned paper filing, or a layout
+        this parser does not know" — so it committed to neither, and a reader
+        could not tell which had happened from the stored `parse_error`."""
+        scan = tmp_path / "scan.html"
+        scan.write_text(SCAN_MARKUP)
+        odd = tmp_path / "odd.html"
+        odd.write_text("<html><body><p>Filing</p></body></html>")
+
+        parser = SenateHtmlParser()
+        scan_error = parser.parse_senate_html(str(scan))["parse_errors"][0]
+        odd_error = parser.parse_senate_html(str(odd))["parse_errors"][0]
+
+        assert scan_error != odd_error
+        assert "scanned paper filing" in scan_error
+        assert "scanned paper filing" not in odd_error
+
+    def test_an_unknown_layout_is_still_the_parser_s_failure(self, tmp_path):
+        """No table and no page images. That is not a scan, and blaming one
+        would hide a layout change behind a category that excuses it."""
+        path = tmp_path / "odd.html"
+        path.write_text(
+            "<html><body><img src='/static/images/logo.svg'><p>Filing</p></body></html>"
+        )
+
+        result = SenateHtmlParser().parse_senate_html(str(path))
+
+        assert result["transactions"] == []
+        assert result["quality"]["text_extracted"] is True
+        assert "not a scan" in result["parse_errors"][0]
+
+    def test_a_readable_filing_is_never_mistaken_for_a_scan(self, parsed):
+        assert parsed["quality"]["text_extracted"] is True
 
     def test_a_missing_file_is_an_error_not_a_crash(self, tmp_path):
         result = SenateHtmlParser().parse_senate_html(str(tmp_path / "nope.html"))

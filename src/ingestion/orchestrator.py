@@ -131,6 +131,34 @@ class UnmatchedFilers:
         return unexpected
 
 
+def _fd_text_extracted(parsed: Dict[str, Any]) -> bool:
+    """Whether an annual filing's PDF had anything to read.
+
+    A property of the DOCUMENT, not of the parse, and the thing that decides
+    which of `score_fd_parse`'s two verdicts a filing gets: "likely a scan", or
+    "no assets or liabilities found in an annual filing". Those mean opposite
+    things -- nothing to read, against the parser failing on something readable.
+
+    This lived inline and read `parsed.get("raw_text")`, a key `parse_pdf` never
+    set, so it fell through to `bool(assets or liabilities)` -- false exactly
+    when both counts were zero, which is the condition the second verdict tests.
+    The first always won and the second was unreachable, so every readable
+    filing the parser failed on was filed under the verdict that says nobody is
+    at fault. Over 40 randomly sampled type-O House annual filings: 3 genuine
+    scans, and 3 of these.
+
+    `.strip()` is load-bearing in the other direction. `parse_pdf` accumulates
+    one newline per page, so an image-only PDF returns "\n\n\n" and a bare
+    `bool()` would call every scan readable.
+
+    It is a named function so the test drives the same expression the
+    orchestrator does, rather than a copy of it that can drift back.
+    """
+    return bool(
+        (parsed.get("raw_text") or "").strip() or parsed.get("assets") or parsed.get("liabilities")
+    )
+
+
 class IngestionOrchestrator:
     """
     Orchestrates data ingestion from multiple sources.
@@ -801,9 +829,7 @@ class IngestionOrchestrator:
                     (parsed.get("assets") or []) + (parsed.get("liabilities") or []),
                 )
                 self._store_fd_data(db, disclosure, parsed)
-                text_extracted = bool(
-                    parsed.get("raw_text") or parsed.get("assets") or parsed.get("liabilities")
-                )
+                text_extracted = _fd_text_extracted(parsed)
                 score = score_fd_parse(
                     text_extracted,
                     len(parsed.get("assets") or []),

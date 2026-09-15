@@ -41,6 +41,42 @@ CLASS_CODE = re.compile(r"\[[A-Z]{2}\]")
 STOCK_KEYWORDS = ["common stock", "stock", "shares", "equity"]
 
 
+# Which lettered schedule a table's header row opens, or None if it opens none.
+#
+# Matched on the column names the Clerk's form actually prints, taken from the
+# extracted tables rather than from the form's documentation, because what
+# matters is what pdfplumber hands over. Schedules A and B both start with an
+# "Asset" column, so A is identified by "value of asset" and B by its date and
+# transaction-type columns -- reading either by the bare word "asset" is the
+# defect this exists to prevent.
+_SCHEDULE_HEADERS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("A", ("asset", "value of asset")),
+    ("B", ("asset", "tx.", "amount")),
+    ("C", ("source", "type", "amount")),
+    ("D", ("creditor", "date incurred")),
+    ("E", ("position", "organization")),
+    ("G", ("source", "value")),
+)
+
+# Continuation lines the form prints beneath an entry: Location, Description,
+# Comments. They arrive as their own table rows and were being stored as
+# assets -- one filing held 112 copies of "D: Independent professionally
+# managed account." Real entries never take this shape.
+_CONTINUATION_LINE = re.compile(r"^[A-Z]:\s")
+
+
+def _schedule_of_header(header: str) -> str | None:
+    """The schedule this header opens. Order matters: A before B."""
+    for schedule, required in _SCHEDULE_HEADERS:
+        if all(word in header for word in required):
+            return schedule
+    return None
+
+
+def _is_a_continuation_line(description: str | None) -> bool:
+    return bool(description and _CONTINUATION_LINE.match(description.strip()))
+
+
 class DisclosureParser:
     """Parser for congressional financial disclosure PDFs."""
 
@@ -118,30 +154,87 @@ class DisclosureParser:
     def _parse_assets_section(
         self, text: str, tables: List[List[List[str]]]
     ) -> List[Dict[str, Any]]:
-        """Parse the assets/Schedule A section."""
-        assets = []
+        """Parse the assets/Schedule A section.
 
-        # Look for asset tables
+        Two things went wrong here and they compounded.
+
+        **Schedule B was read as Schedule A.** The test was
+        `"asset" in header_text or "value" in header_text`, and BOTH schedules
+        on the House annual form begin with an Asset column::
+
+            A  ['Asset','Owner','Value of Asset','Income Type(s)','Income', ...]
+            B  ['Asset','Owner','Date','Tx. Type','Amount','Cap. Gains > $200?']
+
+        So every TRANSACTION in an annual filing was stored as a holding, with
+        the trade's Amount as the holding's value. `wealth_analyzer` sums
+        `value_min`/`value_max` over `Asset` rows to build `net_worth_estimate`,
+        so a member who traded one $15,000 position fifty times gained $750,000
+        of "net worth". Measured over 40 House annual filings, every one scored
+        at confidence 1.0: of the $402,905,378 of net worth they contribute,
+        **$338,590,568 -- 84% -- came from Schedule B**.
+
+        **Schedule A's own rows were being dropped.** pdfplumber fragments these
+        tables: the schedule header comes back as a table with no data rows, and
+        each following fragment has a DATA ROW as its header, which the test
+        above then skips. Of 2,499 real Schedule A holdings across the same 40
+        filings, 219 were captured -- 8.8%. Rosa DeLauro's four-page filing lists
+        a Schedule A and yielded nothing at all.
+
+        Both are fixed by reading the document the way it is laid out: recognise
+        each schedule by its own header, remember which one is open, and treat an
+        unrecognised table as a continuation of it.
+        """
+        assets: List[Dict[str, Any]] = []
+
+        for table, schedule in self._tables_by_schedule(tables):
+            if schedule != "A":
+                continue
+            for row in table:
+                asset = self._parse_asset_row(row)
+                if asset and not _is_a_continuation_line(asset.get("description")):
+                    assets.append(asset)
+
+        # The text fallback runs only when the table path found nothing at all.
+        # It used to run unconditionally and add to whatever the tables gave,
+        # which is double counting by construction.
+        if not assets:
+            assets.extend(self._extract_assets_from_text(text))
+
+        return assets
+
+    @staticmethod
+    def _tables_by_schedule(
+        tables: List[List[List[str]]],
+    ) -> List[tuple[List[List[str]], str | None]]:
+        """Each table's data rows, paired with the schedule they belong to.
+
+        The House annual form is a sequence of lettered schedules, and
+        pdfplumber does not hand them over whole -- it fragments them, and a
+        fragment carries no header to identify itself. Reading each table in
+        isolation therefore cannot tell a holding from a trade from a mortgage.
+        Document order can: a header opens a schedule, and everything after it
+        belongs to that schedule until the next header.
+        """
+        out: List[tuple[List[List[str]], str | None]] = []
+        current: str | None = None
+
         for table in tables:
             if not table:
                 continue
+            header = " ".join(str(cell).lower() for cell in table[0] if cell)
+            opened = _schedule_of_header(header)
+            if opened is not None:
+                current = opened
+                rows = table[1:]
+            elif current is not None:
+                # A fragment: it has no header, so every row is data.
+                rows = table
+            else:
+                continue
+            if rows:
+                out.append((rows, current))
 
-            # Check if this looks like an asset table
-            headers = table[0] if table else []
-            header_text = " ".join(str(h).lower() for h in headers if h)
-
-            if "asset" in header_text or "value" in header_text:
-                # Parse each row as an asset
-                for row in table[1:]:
-                    asset = self._parse_asset_row(row)
-                    if asset:
-                        assets.append(asset)
-
-        # Also try to extract assets from text using patterns
-        text_assets = self._extract_assets_from_text(text)
-        assets.extend(text_assets)
-
-        return assets
+        return out
 
     def _parse_asset_row(self, row: List[Any]) -> Dict[str, Any] | None:
         """Parse a single asset row from a table."""
@@ -451,14 +544,25 @@ class DisclosureParser:
                     Decimal(max_val) if max_val else None,
                 )
 
-        # Try to parse custom range
-        amounts = re.findall(r"\$?([\d,]+)", text)
-        amounts = [int(a.replace(",", "")) for a in amounts if a]
+        # Try to parse custom range.
+        #
+        # The decimal part is matched deliberately. `([\d,]+)` stopped at the
+        # point, so an EXACT amount came back as two numbers and was read as a
+        # range between them: "$209,630.10" became $10 to $209,630, and
+        # "$16,508.00" became a liability of somewhere between ZERO and $16,508.
+        # Both figures are real -- filers report exact values for bank balances
+        # and credit-card debts -- and both feed the net-worth sums that
+        # `excessive_wealth_growth` publishes.
+        amounts = [
+            Decimal(match.replace(",", ""))
+            for match in re.findall(r"\$?\s*([\d,]+(?:\.\d{1,2})?)", text)
+            if match.strip(",.")
+        ]
 
         if len(amounts) >= 2:
-            return Decimal(min(amounts)), Decimal(max(amounts))
+            return min(amounts), max(amounts)
         elif len(amounts) == 1:
-            return Decimal(amounts[0]), Decimal(amounts[0])
+            return amounts[0], amounts[0]
 
         return None, None
 

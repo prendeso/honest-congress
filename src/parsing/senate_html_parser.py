@@ -58,8 +58,21 @@ _COLUMN_ALIASES = (
 )
 
 
+# eFD serves a scanned paper filing as an HTML page wrapping one GIF per page,
+# served from its media host, with page navigation and no table anywhere. The
+# host is the whole signal: an electronically filed report carries no image from
+# it, and a scan carries one per page. Measured over 43 live filings -- 38
+# electronic, 5 paper -- the separation was exact, 0 media images against 4 to 9.
+_SCAN_MEDIA_HOST = "efd-media-public.senate.gov"
+
+
 def _clean(text: str) -> str:
     return " ".join((text or "").split()).strip()
+
+
+def _is_a_page_image_scan(soup: BeautifulSoup) -> bool:
+    """Whether this filing is page images rather than a report we can read."""
+    return any(_SCAN_MEDIA_HOST in (img.get("src") or "") for img in soup.find_all("img"))
 
 
 def _is_empty(value: str) -> bool:
@@ -94,14 +107,29 @@ class SenateHtmlParser(PTRParser):
 
             table = self._transaction_table(soup)
             if table is None:
-                # A paper filing genuinely is a scan: eFD serves those as an
-                # embedded image with no table at all. Saying so distinctly
-                # keeps "we cannot read this document" separate from "this
-                # document has nothing in it".
-                result["parse_errors"].append(
-                    "no transaction table in the filing (a scanned paper filing, "
-                    "or a layout this parser does not know)"
-                )
+                # Two different things end up here and they were reported as
+                # one. A scan is not a parse failure -- there is nothing in it
+                # to read -- and an unknown layout is, loudly.
+                #
+                # `text_extracted` decides which. It is "a property of the
+                # document, not of the parse", and `parse_quality_summary`
+                # counts a filing with a text layer that yielded nothing as the
+                # parser's own failure. Every scan was landing in that bucket,
+                # because on an HTML page `bool(text)` is true of eFD's own
+                # chrome -- "Skip to main content", "Print View", "Page 1 of 9"
+                # -- which says nothing about the filing. So a scan is recorded
+                # as having no text layer, which is what it is.
+                if _is_a_page_image_scan(soup):
+                    quality.text_extracted = False
+                    result["parse_errors"].append(
+                        "a scanned paper filing: eFD serves it as page images, "
+                        "so there is no transaction table to read"
+                    )
+                else:
+                    result["parse_errors"].append(
+                        "no transaction table in the filing, and it is not a scan "
+                        "-- a layout this parser does not know"
+                    )
                 result["quality"] = quality.as_dict()
                 return result
 

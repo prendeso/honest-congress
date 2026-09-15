@@ -268,7 +268,13 @@ async def list_disclosures(
         query = query.filter(Disclosure.filing_year == filing_year)
 
     if filing_type:
-        query = query.filter(Disclosure.filing_type.ilike(f"%{filing_type}%"))
+        # Exact, not `ilike("%...%")`. House filing types are SINGLE LETTERS and
+        # the Senate stores a free-text title, so a substring match reads one as
+        # the other: `?filing_type=P` matched every Senate "Annual Report ..."
+        # row, because "Report" contains a "p". 1,724 PTRs and 361 annual
+        # reports came back under "P - Periodic Report", and `?filing_type=D`
+        # swept up anything with a "d" in it.
+        query = query.filter(func.lower(Disclosure.filing_type) == filing_type.strip().lower())
 
     if parsed is not None:
         query = query.filter(Disclosure.parsed == parsed)
@@ -352,6 +358,36 @@ async def list_disclosures(
             for d in disclosures
         ],
     )
+
+
+@router.get("/filing-types")
+async def list_filing_types(db: Session = Depends(get_db_session)):
+    """Every filing type actually stored, with how many carry it.
+
+    The page kept its own hand-written list of ten. It offered `FD`, which
+    matches nothing at all, and omitted `D`, `W`, `B`, `E` and all nineteen
+    free-text values the Senate stores -- so a third of the corpus was
+    unreachable through the filter while one dead option sat in the menu. That
+    is the same drift `src/analysis/catalog.py` was written to end, for the same
+    reason: a vocabulary maintained by hand beside the data it describes.
+
+    The values are not tidy, and this reports them untidy rather than mapping
+    them to something prettier that the database does not contain. The House
+    Clerk publishes single letters; the Senate publishes a title, one per
+    calendar year and amendment, which is why there are thirty-odd of them.
+    Normalising that belongs at ingest, where it can be done once and recorded,
+    not in a display layer inventing a code the filter would then fail to match.
+    """
+    rows = (
+        db.query(Disclosure.filing_type, func.count(Disclosure.id))
+        .group_by(Disclosure.filing_type)
+        .order_by(func.count(Disclosure.id).desc(), Disclosure.filing_type.asc())
+        .all()
+    )
+
+    return {
+        "filing_types": [{"filing_type": value, "count": count} for value, count in rows if value]
+    }
 
 
 @router.get("/{disclosure_id}", response_model=DisclosureDetailResponse)

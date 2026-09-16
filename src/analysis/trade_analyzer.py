@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from sqlalchemy.orm import Session
 
 from src.analysis.anomaly_key import identity_of, stored_by_identity
+from src.analysis.restatements import drop_restated_pairs, member_transactions
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
 from src.db.models import Anomaly, Disclosure, Member, Transaction
@@ -116,7 +117,11 @@ class TradeAnalyzer:
         if member_id:
             query = query.filter(Disclosure.member_id == member_id)
 
-        rows = query.all()
+        # Restated rows dropped. A large trade refiled by an amendment gets a
+        # second `transaction_id`, and `identity_of` keys trade findings on
+        # exactly that, so the duplicate finding is NOT collapsed downstream --
+        # the same $1m+ trade would be published twice under one name.
+        rows = drop_restated_pairs(query.all())
         if not rows:
             return
 
@@ -180,13 +185,7 @@ class TradeAnalyzer:
         anomalies = []
 
         # Get all transactions for this member
-        transactions = (
-            db.query(Transaction)
-            .join(Disclosure)
-            .filter(Disclosure.member_id == member_id)
-            .order_by(Transaction.transaction_date)
-            .all()
-        )
+        transactions = member_transactions(db, member_id)
 
         if not transactions:
             return []
@@ -240,6 +239,13 @@ class TradeAnalyzer:
             )
             .all()
         )
+
+        # Restated rows dropped, keeping the EARLIEST filing that reported each
+        # trade. That is the filing the STOCK Act's 45-day clock runs against,
+        # so a trade refiled later by an amendment is still scored against the
+        # report that first disclosed it rather than being re-accused of
+        # lateness. `catalog.py` warns of this in prose; this is the guard.
+        rows = drop_restated_pairs(rows)
 
         for txn, disclosure in rows:
             if not (txn.transaction_date and disclosure.filing_date):

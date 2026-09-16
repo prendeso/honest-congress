@@ -25,8 +25,9 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.analysis.restatements import member_transactions
 from src.analysis.sectors import SectorIndex, committee_sectors
-from src.db.models import CommitteeAssignment, Disclosure, Member, Transaction
+from src.db.models import CommitteeAssignment, Member, Transaction
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +64,7 @@ def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]
         if not sector_to_committees:
             continue
 
-        transactions = (
-            db.query(Transaction)
-            .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-            .filter(Disclosure.member_id == member.id)
-            .all()
-        )
+        transactions = member_transactions(db, member.id)
         if not transactions:
             continue
 

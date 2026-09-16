@@ -126,6 +126,41 @@ def test_planted_signal_is_recovered():
     assert p < 0.05
 
 
+def test_shift_null_is_blind_to_evenly_spaced_events():
+    """A limitation on the record, not a bug: the shift null cannot see a
+    signal whose calendar repeats.
+
+    Shifting the trades by one period puts every trade back on an event, so the
+    permutations reproduce the very alignment they are meant to destroy and the
+    p-value pins at 1.0. The same planted lag with irregular spacing is found
+    easily -- the contrast below is the whole point.
+
+    This is not fixable by tuning: it is what a circular shift *is*. It matters
+    because it runs one way only. The test under-accuses here, never over-
+    accuses, so a member trading on a regular schedule is invisible to it
+    rather than falsely flagged. Anyone reading a q-value on this site should
+    know that a missing finding is not a finding of nothing.
+    """
+    rng = np.random.default_rng(20260913)
+    events = [float(index * 36) for index in range(40)]
+    trades = [event + 2.0 for event in events]
+
+    p, observed = permutation_p_value({"T": (trades, events)}, 30, permutations=500, rng=rng)
+
+    # Every trade sits two days after an event, and the test still sees nothing.
+    assert observed == 40
+    assert p == 1.0
+
+    # The identical lag, with the events irregularly spaced, is caught.
+    rng = np.random.default_rng(20260913)
+    irregular = sorted(rng.uniform(0, 1440, size=40).tolist())
+    lagged = [event + 2.0 for event in irregular]
+
+    found, _ = permutation_p_value({"T": (lagged, irregular)}, 30, permutations=500, rng=rng)
+
+    assert found < 0.05
+
+
 def test_same_day_batches_do_not_manufacture_significance():
     """Twelve trades filed on one date are one event, not twelve.
 

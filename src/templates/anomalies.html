@@ -24,8 +24,13 @@
                     <div class="text-3xl font-bold text-purple-600" x-text="stats.totalPtrs">-</div>
                 </div>
                 <div class="bg-white rounded-lg shadow p-6">
-                    <div class="text-gray-500 text-sm font-medium">Anomalies</div>
+                    <div class="text-gray-500 text-sm font-medium">Findings detected</div>
                     <div class="text-3xl font-bold text-red-600" x-text="stats.totalAnomalies">-</div>
+                    <!-- This is the whole corpus, which is a larger number than
+                         the list below can reach. Said here, so the difference
+                         reads as a stated policy rather than as an arithmetic
+                         error the reader has to catch. -->
+                    <div class="text-gray-400 text-[11px] mt-1">every detection, including those that failed correction</div>
                 </div>
                 <div class="bg-white rounded-lg shadow p-6">
                     <div class="text-gray-500 text-sm font-medium">High Severity</div>
@@ -228,6 +233,48 @@
                         </div>
                     </div>
 
+                    <!-- What is NOT on screen. The page used to show the headline
+                         count from /summary (every finding) above a list that
+                         served the API default (only those that passed FDR or
+                         were never tested), with nothing to explain the gap and
+                         no way to reach the remainder. At the time of writing
+                         that gap is about two thirds of the corpus, and every
+                         single finding that was actually tested is on the wrong
+                         side of it. A site whose premise is honesty cannot drop
+                         those silently. -->
+                    <template x-if="anomalyTotal !== null && withheldByFdr > 0">
+                        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                            <!-- Two statements rather than one with clauses toggled
+                                 inside it: whether the withheld findings are on
+                                 screen changes what the sentence asserts, and a
+                                 half-swapped sentence would state the opposite of
+                                 the truth. -->
+                            <p class="text-amber-900" x-show="!showBelowFdr">
+                                Showing <span class="font-semibold" x-text="anomalyTotal.toLocaleString()"></span>
+                                findings. A further
+                                <span class="font-semibold" x-text="withheldByFdr.toLocaleString()"></span>
+                                were tested against a shifted-calendar null and did not survive
+                                false-discovery-rate correction, so they are not shown.
+                            </p>
+                            <p class="text-amber-900" x-show="showBelowFdr">
+                                Showing <span class="font-semibold" x-text="anomalyTotal.toLocaleString()"></span>
+                                findings, including the
+                                <span class="font-semibold" x-text="withheldByFdr.toLocaleString()"></span>
+                                that were tested against a shifted-calendar null and did not survive
+                                false-discovery-rate correction.
+                            </p>
+                            <p class="text-amber-800 text-xs mt-1">
+                                The rest come from a category that measures a magnitude and has no null
+                                model, so no statistical test has vouched for them either way. And a
+                                finding that failed correction is not a finding of nothing: the null is
+                                blind to a member whose trading follows a regular schedule.
+                            </p>
+                            <button @click="toggleBelowFdr()"
+                                    class="mt-2 text-amber-900 underline hover:text-amber-950"
+                                    x-text="showBelowFdr ? 'Hide the findings that failed correction' : 'Show them anyway'"></button>
+                        </div>
+                    </template>
+
                     <template x-if="memberIdFilter">
                         <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between text-sm">
                             <span class="text-blue-900">
@@ -389,7 +436,12 @@
                     </template>
 
                     <div x-show="anomalies.length > 0" class="mt-4 flex justify-between items-center">
-                        <span class="text-gray-500 text-sm">Showing <span x-text="anomalies.length"></span> of <span x-text="stats.totalAnomalies"></span> anomalies</span>
+                        <!-- `stats.totalAnomalies` is the whole corpus from
+                             /summary, which the list cannot reach: it excludes
+                             findings that failed FDR, and any filter set above.
+                             Paging to the end and reading "20 of 4,139" was a
+                             plain untruth. This counts what this list holds. -->
+                        <span class="text-gray-500 text-sm">Showing <span x-text="anomalies.length"></span> of <span x-text="(anomalyTotal ?? 0).toLocaleString()"></span> findings</span>
                         <div class="flex gap-2">
                             <button @click="anomalyPage--; loadAnomalies()" :disabled="anomalyPage <= 1" class="px-4 py-2 border rounded disabled:opacity-50">Previous</button>
                             <span class="px-4 py-2" x-text="'Page ' + anomalyPage"></span>
@@ -421,6 +473,14 @@
                 detectorTypes: [],
                 memberIdFilter: null,
                 memberFilterName: '',
+                // How many findings the current filter actually reaches, and how
+                // many the FDR default withholds. Both are needed to say the
+                // second number out loud; `null` means "not counted yet", which
+                // is not the same as zero and must not render as one.
+                anomalyTotal: null,
+                anomalyTotalWithBelowFdr: null,
+                anomalyTotalDefault: null,
+                showBelowFdr: false,
 
                 async init() {
                     const requested = new URLSearchParams(location.search).get('member_id');
@@ -489,19 +549,69 @@
                     } catch (e) { console.error('Trades error:', e); }
                 },
 
+                // The filters shared by the list and the count probe beside it.
+                // Built in one place so the two can never describe different
+                // populations -- a withheld count measured against a different
+                // filter than the list would be worse than no count at all.
+                anomalyFilterParams() {
+                    let params = '';
+                    if (this.anomalyTypeFilter) params += `&anomaly_type=${this.anomalyTypeFilter}`;
+                    if (this.severityFilter) params += `&severity=${this.severityFilter}`;
+                    // The members page links here as `/anomalies?member_id=N`.
+                    // This page ignored the query string entirely, so "view
+                    // this member's findings" showed everyone's, which a
+                    // reader would reasonably take for that member's own.
+                    if (this.memberIdFilter) params += `&member_id=${this.memberIdFilter}`;
+                    return params;
+                },
+
                 async loadAnomalies() {
                     try {
-                        let url = `/api/anomalies/?page=${this.anomalyPage}&page_size=20`;
-                        if (this.anomalyTypeFilter) url += `&anomaly_type=${this.anomalyTypeFilter}`;
-                        if (this.severityFilter) url += `&severity=${this.severityFilter}`;
-                        // The members page links here as `/anomalies?member_id=N`.
-                        // This page ignored the query string entirely, so "view
-                        // this member's findings" showed everyone's, which a
-                        // reader would reasonably take for that member's own.
-                        if (this.memberIdFilter) url += `&member_id=${this.memberIdFilter}`;
-                        const data = await fetch(url).then(r => r.json());
+                        const filters = this.anomalyFilterParams();
+                        const shown = this.showBelowFdr ? '&include_below_fdr=true' : '';
+                        // The opposite mode, counted but not fetched: one row is
+                        // enough to read `total` off, and it is the only way to
+                        // know how many findings the default is withholding.
+                        const other = this.showBelowFdr ? '' : '&include_below_fdr=true';
+
+                        const [data, probe] = await Promise.all([
+                            fetch(`/api/anomalies/?page=${this.anomalyPage}&page_size=20${filters}${shown}`)
+                                .then(r => r.json()),
+                            fetch(`/api/anomalies/?page=1&page_size=1${filters}${other}`)
+                                .then(r => r.json()),
+                        ]);
+
                         this.anomalies = data.anomalies || [];
-                    } catch (e) { console.error('Anomalies error:', e); }
+                        this.anomalyTotal = data.total ?? null;
+                        this.anomalyTotalWithBelowFdr = this.showBelowFdr
+                            ? (data.total ?? null)
+                            : (probe.total ?? null);
+                        this.anomalyTotalDefault = this.showBelowFdr
+                            ? (probe.total ?? null)
+                            : (data.total ?? null);
+                    } catch (e) {
+                        console.error('Anomalies error:', e);
+                        // Leave the counts unknown rather than stale: a withheld
+                        // count from the previous filter would be a false claim.
+                        this.anomalyTotal = this.anomalyTotalWithBelowFdr = null;
+                        this.anomalyTotalDefault = null;
+                    }
+                },
+
+                // Findings that were tested and did not survive correction.
+                // `null` anywhere means not counted, which renders as nothing
+                // rather than as zero.
+                get withheldByFdr() {
+                    if (this.anomalyTotalWithBelowFdr === null || this.anomalyTotalDefault === null) {
+                        return 0;
+                    }
+                    return Math.max(0, this.anomalyTotalWithBelowFdr - this.anomalyTotalDefault);
+                },
+
+                toggleBelowFdr() {
+                    this.showBelowFdr = !this.showBelowFdr;
+                    this.anomalyPage = 1;
+                    this.loadAnomalies();
                 },
 
                 clearMemberFilter() {

@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Sequence
 
 from sqlalchemy.orm import Session
 
+from src.analysis.restatements import drop_restated_pairs
 from src.db.models import Disclosure, Member, Transaction
 
 logger = logging.getLogger(__name__)
@@ -54,6 +55,10 @@ def member_compliance(db: Session, member: Member) -> Dict[str, Any] | None:
         )
         .all()
     )
+    # Restated rows dropped, earliest filing kept: a trade refiled by a later
+    # amendment must not be re-scored against the amendment's date, or a member
+    # who corrected a filing is reported as having filed late.
+    rows = drop_restated_pairs(rows)
     return _score(member, rows)
 
 
@@ -140,8 +145,8 @@ def late_filing_rate(db: Session) -> Dict[str, Any]:
     comparison here is the same one `_score` makes, so the headline and the
     leaderboard cannot disagree.
     """
-    rows = (
-        db.query(Transaction.transaction_date, Disclosure.filing_date)
+    rows = drop_restated_pairs(
+        db.query(Transaction, Disclosure)
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
         .filter(Disclosure.is_ptr.is_(True))
         .all()
@@ -149,7 +154,8 @@ def late_filing_rate(db: Session) -> Dict[str, Any]:
 
     checked = 0
     late = 0
-    for transaction_date, filing_date in rows:
+    for transaction, disclosure in rows:
+        transaction_date, filing_date = transaction.transaction_date, disclosure.filing_date
         if not transaction_date or not filing_date:
             continue
         checked += 1
@@ -183,7 +189,7 @@ def compliance_leaderboard(
     # Driving from the join also scopes the work correctly: only members who
     # actually filed a PTR transaction can score, and the join yields exactly
     # those. Members with nothing to check were being fetched and discarded.
-    rows = (
+    rows = drop_restated_pairs(
         db.query(Transaction, Disclosure)
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
         .filter(Disclosure.is_ptr.is_(True))

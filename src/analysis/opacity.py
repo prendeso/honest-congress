@@ -33,6 +33,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.analysis.restatements import without_restatements
 from src.db.models import Asset, Disclosure, Member, Transaction
 
 logger = logging.getLogger(__name__)
@@ -88,8 +89,9 @@ def member_opacity(db: Session, member: Member) -> Dict[str, Any] | None:
         if not d.parsed or d.has_text_layer is False or d.parse_confidence == 0.0
     )
 
-    transactions: List[Transaction] = (
-        db.query(Transaction).filter(Transaction.disclosure_id.in_(disclosure_ids)).all()
+    transactions: List[Transaction] = without_restatements(
+        db,
+        db.query(Transaction).filter(Transaction.disclosure_id.in_(disclosure_ids)).all(),
     )
     assets: List[Asset] = db.query(Asset).filter(Asset.disclosure_id.in_(disclosure_ids)).all()
 

@@ -33,6 +33,7 @@ from typing import Any, Collection, Dict, List
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from src.analysis.restatements import drop_restated_records
 from src.db.models import (
     CampaignDonation,
     Disclosure,
@@ -129,6 +130,17 @@ def _trades_by_ticker(
             Transaction.ticker.label("ticker"),
             Transaction.transaction_date.label("transaction_date"),
             Disclosure.member_id.label("member_id"),
+            # Carried so restated rows can be recognised. An amendment refiles
+            # its original in full, and these findings are keyed on
+            # `transaction_id`, so `identity_of` cannot collapse the duplicate
+            # downstream -- each real trade would publish two findings.
+            Transaction.disclosure_id.label("disclosure_id"),
+            Transaction.transaction_type.label("transaction_type"),
+            Transaction.description.label("description"),
+            Transaction.amount_min.label("amount_min"),
+            Transaction.amount_max.label("amount_max"),
+            Transaction.owner.label("owner"),
+            Disclosure.filing_date.label("filing_date"),
         )
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
         .filter(
@@ -142,7 +154,7 @@ def _trades_by_ticker(
     if purchases_only:
         query = query.filter(Transaction.transaction_type == TransactionType.PURCHASE)
 
-    for row in query.order_by(Transaction.id).all():
+    for row in drop_restated_records(query.order_by(Transaction.id).all()):
         grouped.setdefault(row.ticker, []).append(row)
     return grouped
 

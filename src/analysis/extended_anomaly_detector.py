@@ -16,13 +16,23 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from src.db.models import Disclosure, Member, Transaction, TransactionType
+from src.analysis.clustering import _days
+from src.analysis.restatements import member_transactions
+from src.db.models import Member, Transaction, TransactionType
 
 logger = logging.getLogger(__name__)
 
 # Volume-spike tuning. These remain asserted rather than calibrated -- see D6 in
 # docs/DECISIONS.md, which calls for population base rates instead.
 MIN_TRADES_FOR_VOLUME_SPIKE = 8
+
+# A run of same-direction trades only means anything inside a bounded stretch of
+# time. 45 days is the STOCK Act PTR deadline, already asserted as
+# `ptr_deadline_days` in `TradeAnalyzer` and quoted to readers as "The STOCK Act
+# requires filing within 45 days" -- reusing the project's own number beats
+# inventing a rounder one.
+CONSECUTIVE_TRADE_WINDOW_DAYS = 45
+MIN_CONSECUTIVE_TRADES = 5
 VOLUME_SPIKE_SIGMAS = 3.0
 VOLUME_SPIKE_FLAT_MULTIPLE = 5.0
 
@@ -66,22 +76,21 @@ class ExtendedAnomalyDetector:
 
             for member in members:
                 try:
-                    # Get all trades for this member (joined through Disclosure
-                    # because Transaction has no direct member_id column).
-                    trades = (
-                        db.query(Transaction)
-                        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-                        .filter(Disclosure.member_id == member.id)
-                        .order_by(Transaction.transaction_date)
-                        .all()
-                    )
+                    # One row per DISCLOSED trade. An amendment restates its
+                    # original rather than filing the difference, and both row
+                    # sets are stored, so the hand-written join this replaced
+                    # counted every restated trade once per filing carrying it.
+                    # Thom Tillis was published as "14 consecutive trades" for
+                    # 7 real ones; Steve Daines "26" for 13.
+                    trades = member_transactions(db, member.id)
 
                     if not trades:
                         continue
 
                     # Pattern 1: Consecutive same-direction trades (unusual clustering)
-                    consecutive_same_direction = self._check_consecutive_trades(trades)
-                    if consecutive_same_direction:
+                    run = self._check_consecutive_trades(trades)
+                    if run:
+                        consecutive_same_direction, span_days = run
                         anomalies.append(
                             {
                                 "member_id": member.id,
@@ -93,15 +102,18 @@ class ExtendedAnomalyDetector:
                                     f"Consecutive same-direction trades "
                                     f"({consecutive_same_direction} in a row)"
                                 ),
-                                "pattern": "Consecutive trades in same direction within short timeframe",
+                                "pattern": (
+                                    f"{consecutive_same_direction} consecutive same-direction "
+                                    f"trades within {CONSECUTIVE_TRADE_WINDOW_DAYS} days"
+                                ),
                                 "count": consecutive_same_direction,
                                 "computed_value": Decimal(str(consecutive_same_direction)),
-                                "threshold_value": Decimal("5"),
+                                "threshold_value": Decimal(str(MIN_CONSECUTIVE_TRADES)),
                                 "description": (
                                     f"Member made {consecutive_same_direction} consecutive trades "
-                                    f"in the same direction (all buys or all sells) within a short "
-                                    f"period. This describes the sequence only; it does not measure "
-                                    f"timing, profitability, or intent."
+                                    f"in the same direction (all buys or all sells) over "
+                                    f"{_days(span_days)}. This describes the sequence only; it does "
+                                    f"not measure timing, profitability, or intent."
                                 ),
                             }
                         )
@@ -153,25 +165,57 @@ class ExtendedAnomalyDetector:
 
         return anomalies
 
-    def _check_consecutive_trades(self, trades: List[Transaction]) -> int:
-        """Check for consecutive same-direction trades."""
-        if len(trades) < 5:
-            return 0
+    def _check_consecutive_trades(self, trades: List[Transaction]) -> tuple[int, int] | None:
+        """The longest same-direction run that fits inside the filing window.
 
-        max_consecutive = 0
-        current_consecutive = 1
-        prev_type = trades[0].transaction_type
+        This published "within a short period" and applied no time window at
+        all: `transaction_date` was never read. The only temporal input was the
+        caller's ORDER BY, which fixes order and bounds nothing, so a "run"
+        could span years. Sean Casten's "11 consecutive trades" ran from
+        2021-06-25 to 2024-07-30 -- 1,131 days, and his entire disclosed
+        history. Doris Matsui's 18 spanned 866 days.
 
-        for trade in trades[1:]:
-            if trade.transaction_type == prev_type:
-                current_consecutive += 1
-                max_consecutive = max(max_consecutive, current_consecutive)
-            else:
-                current_consecutive = 1
-                prev_type = trade.transaction_type
+        Without a window this does not measure a pattern. It measures which
+        direction a member mostly traded, which for a member who only ever buys
+        is not a finding at all.
 
-        # Flag if 5+ consecutive same-direction trades
-        return max_consecutive if max_consecutive >= 5 else 0
+        The window is `CONSECUTIVE_TRADE_WINDOW_DAYS`, set to the STOCK Act PTR
+        deadline this project already asserts in `TradeAnalyzer` and quotes to
+        readers. A run inside one reporting window is a defensible unit and the
+        number is one the site already explains, which is worth more than a
+        rounder invented constant.
+
+        Returns (run length, span in days), or None.
+        """
+        if len(trades) < MIN_CONSECUTIVE_TRADES:
+            return None
+
+        dated = [t for t in trades if t.transaction_date is not None]
+        if len(dated) < MIN_CONSECUTIVE_TRADES:
+            return None
+
+        best: tuple[int, int] | None = None
+        start = 0
+        for end in range(len(dated)):
+            if dated[end].transaction_type != dated[start].transaction_type:
+                start = end
+                continue
+            # Shrink from the left until the run fits inside the window. The
+            # dates are ordered, so this is a sliding window rather than a
+            # rescan.
+            while (
+                start < end
+                and (dated[end].transaction_date - dated[start].transaction_date).days
+                > CONSECUTIVE_TRADE_WINDOW_DAYS
+            ):
+                start += 1
+            length = end - start + 1
+            if length >= MIN_CONSECUTIVE_TRADES:
+                span = (dated[end].transaction_date - dated[start].transaction_date).days
+                if best is None or length > best[0] or (length == best[0] and span < best[1]):
+                    best = (length, span)
+
+        return best
 
     def _check_volume_spikes(
         self,
@@ -279,13 +323,9 @@ class ExtendedAnomalyDetector:
 
             for member in members:
                 try:
-                    trades = (
-                        db.query(Transaction)
-                        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-                        .filter(Disclosure.member_id == member.id)
-                        .order_by(Transaction.transaction_date)
-                        .all()
-                    )
+                    # Restated rows removed: this walks a nested buy x sell
+                    # loop, so duplication is quadratic rather than a doubling.
+                    trades = member_transactions(db, member.id)
 
                     if len(trades) < 10:
                         continue

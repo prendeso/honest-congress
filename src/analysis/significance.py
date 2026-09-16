@@ -62,6 +62,7 @@ import numpy as np
 from sqlalchemy.orm import Session
 
 from src.analysis.legislation import DEFAULT_WINDOW_DAYS as LEGISLATION_WINDOW_DAYS
+from src.analysis.restatements import drop_restated_records
 from src.analysis.sectors import SectorIndex, policy_area_sectors
 from src.analysis.tier2_detectors import (
     DEFAULT_CONTRACT_WINDOW_DAYS,
@@ -277,19 +278,32 @@ def _shift(dates: np.ndarray, offset: float, origin: float, span: float) -> np.n
 
 def _member_trades(db: Session) -> Dict[int, List[Tuple[str, float, bool]]]:
     """Every disclosed trade as (ticker, ordinal date, is_purchase), by member."""
-    rows = (
+    # Restated rows dropped before the streams are built. This feeds BOTH the
+    # observed statistic and the permutation null, so duplication does not make
+    # the result conservative -- it moves both sides unpredictably, and the
+    # q-value is the number this project asks readers to trust most.
+    rows = drop_restated_records(
         db.query(
-            Disclosure.member_id,
-            Transaction.ticker,
-            Transaction.transaction_date,
-            Transaction.transaction_type,
+            Disclosure.member_id.label("member_id"),
+            Transaction.ticker.label("ticker"),
+            Transaction.transaction_date.label("transaction_date"),
+            Transaction.transaction_type.label("transaction_type"),
+            Transaction.id.label("id"),
+            Transaction.disclosure_id.label("disclosure_id"),
+            Transaction.description.label("description"),
+            Transaction.amount_min.label("amount_min"),
+            Transaction.amount_max.label("amount_max"),
+            Transaction.owner.label("owner"),
+            Disclosure.filing_date.label("filing_date"),
         )
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
         .filter(Transaction.transaction_date.isnot(None))
         .all()
     )
     by_member: Dict[int, List[Tuple[str, float, bool]]] = defaultdict(list)
-    for member_id, ticker, when, kind in rows:
+    for member_id, ticker, when, kind in (
+        (r.member_id, r.ticker, r.transaction_date, r.transaction_type) for r in rows
+    ):
         if member_id is None or when is None:
             continue
         by_member[member_id].append(
@@ -380,19 +394,28 @@ def _collect_contracts(db: Session) -> Dict[int, Streams]:
 def _sector_trades(db: Session) -> Dict[int, Dict[str, List[float]]]:
     """A member's trades grouped by sector, using the same index the detectors use."""
     index = SectorIndex.from_db(db)
-    rows = (
+    rows = drop_restated_records(
         db.query(
-            Disclosure.member_id,
-            Transaction.ticker,
-            Transaction.description,
-            Transaction.transaction_date,
+            Disclosure.member_id.label("member_id"),
+            Transaction.ticker.label("ticker"),
+            Transaction.transaction_date.label("transaction_date"),
+            Transaction.id.label("id"),
+            Transaction.disclosure_id.label("disclosure_id"),
+            Transaction.transaction_type.label("transaction_type"),
+            Transaction.description.label("description"),
+            Transaction.amount_min.label("amount_min"),
+            Transaction.amount_max.label("amount_max"),
+            Transaction.owner.label("owner"),
+            Disclosure.filing_date.label("filing_date"),
         )
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
         .filter(Transaction.transaction_date.isnot(None))
         .all()
     )
     by_member: Dict[int, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
-    for member_id, ticker, description, when in rows:
+    for member_id, ticker, description, when in (
+        (r.member_id, r.ticker, r.description, r.transaction_date) for r in rows
+    ):
         if member_id is None or when is None:
             continue
         for sector in index.classify(ticker, description):
@@ -575,12 +598,19 @@ def _cluster_p_values(
     """A p-value per (ticker, direction) the cluster detector flagged."""
     from src.analysis.clustering import CLUSTER_WINDOW_DAYS
 
-    rows = (
+    rows = drop_restated_records(
         db.query(
-            Disclosure.member_id,
-            Transaction.ticker,
-            Transaction.transaction_date,
-            Transaction.transaction_type,
+            Disclosure.member_id.label("member_id"),
+            Transaction.ticker.label("ticker"),
+            Transaction.transaction_date.label("transaction_date"),
+            Transaction.id.label("id"),
+            Transaction.disclosure_id.label("disclosure_id"),
+            Transaction.transaction_type.label("transaction_type"),
+            Transaction.description.label("description"),
+            Transaction.amount_min.label("amount_min"),
+            Transaction.amount_max.label("amount_max"),
+            Transaction.owner.label("owner"),
+            Disclosure.filing_date.label("filing_date"),
         )
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
         .filter(Transaction.ticker.isnot(None))
@@ -589,7 +619,9 @@ def _cluster_p_values(
     )
 
     grouped: Dict[Tuple[str, str], Dict[int, List[float]]] = defaultdict(lambda: defaultdict(list))
-    for member_id, ticker, when, kind in rows:
+    for member_id, ticker, when, kind in (
+        (r.member_id, r.ticker, r.transaction_date, r.transaction_type) for r in rows
+    ):
         if member_id is None or kind not in (TransactionType.PURCHASE, TransactionType.SALE):
             continue
         direction = "purchase" if kind == TransactionType.PURCHASE else "sale"

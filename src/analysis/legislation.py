@@ -51,13 +51,13 @@ from typing import Any, Dict, List, Set
 
 from sqlalchemy.orm import Session
 
+from src.analysis.restatements import transactions_by_member
 from src.analysis.sectors import SectorIndex, policy_area_sectors
 from src.db.models import (
     Bill,
     BillCommittee,
     BillSponsorship,
     CommitteeAssignment,
-    Disclosure,
     Member,
     Transaction,
 )
@@ -103,16 +103,14 @@ def _severity(days_apart: int) -> str:
 
 
 def _member_transactions(db: Session) -> Dict[int, List[Transaction]]:
-    """Every disclosed transaction, grouped by member. One query, not N."""
-    rows = (
-        db.query(Transaction, Disclosure.member_id)
-        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-        .all()
-    )
-    by_member: Dict[int, List[Transaction]] = defaultdict(list)
-    for transaction, member_id in rows:
-        by_member[member_id].append(transaction)
-    return by_member
+    """Every DISCLOSED transaction, grouped by member. One query, not N.
+
+    Restated rows are dropped. An amendment refiles its original in full rather
+    than filing the difference, and `_matching_trades` returns a list whose
+    length is the finding, so a restated trade counted twice inflates the claim
+    directly.
+    """
+    return defaultdict(list, transactions_by_member(db))
 
 
 def _matching_trades(

@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.analysis.restatements import member_transactions
 from src.db.models import Asset, Disclosure, Liability, Member, Transaction, TransactionType
 
 logger = logging.getLogger(__name__)
@@ -548,12 +549,7 @@ class AdvancedAnomalyDetector:
                 try:
                     # Get all trades for this member (joined through Disclosure
                     # because Transaction has no direct member_id column).
-                    trades = (
-                        db.query(Transaction)
-                        .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
-                        .filter(Disclosure.member_id == member.id)
-                        .all()
-                    )
+                    trades = member_transactions(db, member.id)
 
                     if not trades:
                         continue

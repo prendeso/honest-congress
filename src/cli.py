@@ -920,6 +920,20 @@ _SUPERSEDED_WORDING = (
     # and its description is never rewritten. That window is real -- a pipeline
     # run already in flight analyses with the code it checked out at dispatch.
     ("wealth_vs_salary", "description", "Net worth grew from"),
+    # `trade_clustering` published "within a short period" while its rule read
+    # no dates at all -- Sean Casten's "11 consecutive trades" spanned 1,131
+    # days, his entire disclosed history. The corrected detector bounds the run
+    # to 45 days and states the real span ("over 12 days"), so the old phrase is
+    # one it can no longer write.
+    #
+    # Both halves of the double-publishing trap apply here. The title carries
+    # the run length, and de-duplicating restated transactions changes that
+    # length for most members -- Thom Tillis goes from 14 to 7 -- so the
+    # corrected finding is a NEW identity inserted BESIDE the old one. Where the
+    # length happens to be unchanged the identity holds and the description is
+    # never rewritten, so the stale phrase is served for ever. All 169 live
+    # findings carry it.
+    ("trade_clustering", "description", "within a short period"),
 )
 
 

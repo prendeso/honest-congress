@@ -300,6 +300,45 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
 
         assert db_session.query(Anomaly).count() == 0
 
+    def test_a_clustering_finding_claiming_a_short_period_is_deleted(self, db_session):
+        """The rule read no dates, so "within a short period" described runs
+        spanning years -- Casten's 11 trades covered 1,131 days. All 169 live
+        findings carry the phrase, and the corrected detector cannot write it."""
+        from src.db.models import Anomaly
+
+        self._anomaly(
+            db_session,
+            anomaly_type="trade_clustering",
+            title="Consecutive same-direction trades (7 in a row)",
+            description=(
+                "Member made 7 consecutive trades in the same direction (all buys "
+                "or all sells) within a short period. This describes the sequence "
+                "only; it does not measure timing, profitability, or intent."
+            ),
+        )
+
+        self._purge(db_session)
+
+        assert db_session.query(Anomaly).count() == 0
+
+    def test_a_clustering_finding_stating_its_real_span_survives(self, db_session):
+        from src.db.models import Anomaly
+
+        self._anomaly(
+            db_session,
+            anomaly_type="trade_clustering",
+            title="Consecutive same-direction trades (7 in a row)",
+            description=(
+                "Member made 7 consecutive trades in the same direction (all buys "
+                "or all sells) over 12 days. This describes the sequence only; it "
+                "does not measure timing, profitability, or intent."
+            ),
+        )
+
+        self._purge(db_session)
+
+        assert db_session.query(Anomaly).count() == 1
+
     def test_a_corrected_finding_is_left_alone(self, db_session):
         from src.db.models import Anomaly
 

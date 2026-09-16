@@ -781,6 +781,48 @@ class IngestionOrchestrator:
 
         return as_int(member.district) == as_int(district)
 
+    @staticmethod
+    def _is_a_different_person(sitting: Member, first_name: str, district: str) -> bool:
+        """Whether a lone tier-1 hit is somebody else entirely.
+
+        Tier 1 matches sitting members on ``(surname, state)`` alone, and its
+        docstring defends omitting the first name on the grounds that the key is
+        unique across the sitting House. It is -- but that only rules out
+        collisions BETWEEN SITTING MEMBERS. It says nothing about a FORMER
+        member's filing landing on a sitting namesake, and there the lone hit is
+        confidently wrong:
+
+            index: David Scott, GA, district 13
+            (scott, GA) sitting -> [Austin Scott, GA-8], len == 1
+            -> David Scott's assets and liabilities published under Austin Scott
+
+        Measured on the repair pass over the live database, which proposed
+        exactly that move for documents 30022801 and 10066567 while reporting
+        nothing it could not decide.
+
+        Neither discriminator can gate this alone, because each has a failure
+        mode the other does not:
+
+          * the first name is wrong for Lizzie/"Elizabeth" Fletcher, Greg/
+            "W. Gregory" Steube and C. Scott/"Scott" Franklin -- 16 PTRs whose
+            roster name is unrelated to the legal one, and the reason tier 1
+            skips the name in the first place;
+          * the district is wrong for Rich McCormick, whose index entry still
+            says GA06 against a GA-7 term, which is why `_same_district` is a
+            tiebreak and never a filter.
+
+        So it takes BOTH to disagree. A real member fails at most one test; a
+        different person fails both. Falling through to tier 2 then applies the
+        first-name rule against everyone ever, which is where David Scott is.
+        """
+        if first_names_are_compatible(first_name, sitting.first_name or ""):
+            return False
+        # An absent district cannot disagree, so an unlabelled index entry keeps
+        # tier 1's old behaviour rather than being refused on one weak signal.
+        if not str(district or "").strip():
+            return False
+        return not IngestionOrchestrator._same_district(sitting, district)
+
     def _narrow_house(self, candidates: List[Member], district: str) -> List[Member]:
         """District, and only to choose between survivors.
 
@@ -849,6 +891,8 @@ class IngestionOrchestrator:
             sitting = (self._house_current or {}).get((key, state_key))
             if sitting:
                 if len(sitting) == 1:
+                    if self._is_a_different_person(sitting[0], first_name, district):
+                        break
                     return list(sitting)
                 return self._narrow_house(sitting, district)
 

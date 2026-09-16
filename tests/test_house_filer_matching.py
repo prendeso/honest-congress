@@ -192,6 +192,75 @@ class TestItRefusesTheConfidentWrongAnswer:
         assert [m.bioguide_id for m in result] == ["B001323"]
 
 
+class TestALoneSittingNamesakeIsNotAssumedToBeTheFiler:
+    """Tier 1 matches on `(surname, state)` alone, and defends omitting the
+    first name on the grounds that the key is unique across the sitting House.
+
+    It is -- but that only rules out collisions BETWEEN SITTING MEMBERS. It says
+    nothing about a FORMER member's filing landing on a sitting namesake, and
+    there the lone hit is confidently wrong.
+
+    Caught by the repair pass's dry run over the live database, which proposed
+    moving David Scott's assets and liabilities onto Austin Scott while
+    reporting nothing it could not decide.
+    """
+
+    def test_a_former_members_filing_is_not_moved_onto_a_sitting_namesake(self):
+        """`(scott, GA)` has exactly one sitting member, so David Scott's own
+        disclosure matched Austin Scott: different first name, different
+        district, different person. Documents 30022801 and 10066567, the second
+        carrying 2 assets and 4 liabilities."""
+        austin = Roster("S001189", "Austin", "Scott", "GA", "8", in_office=True)
+        david = Roster("S001157", "David", "Scott", "GA", "13", in_office=False)
+
+        result = matcher([austin, david])._match_representative(None, "David", "Scott", "GA", "13")
+
+        assert [m.bioguide_id for m in result] == ["S001157"]
+
+    @pytest.mark.parametrize(
+        "index_first,roster_first,district,index_district",
+        [
+            # The name disagrees and the district agrees: still tier 1's job.
+            ("Elizabeth", "Lizzie", "7", "07"),
+            ("Greg", "W.", "17", "17"),
+            ("Scott Scott", "C.", "18", "18"),
+        ],
+    )
+    def test_a_roster_nickname_alone_never_refuses_the_match(
+        self, index_first, roster_first, district, index_district
+    ):
+        """The guard needs BOTH signals to disagree. These are the 16 PTRs whose
+        roster first name is unrelated to the legal one -- refusing them on the
+        name alone is the regression that made tier 1 skip names to begin with.
+        """
+        sitting = Roster("X000001", roster_first, "Surname", "TX", district, in_office=True)
+
+        result = matcher([sitting])._match_representative(
+            None, index_first, "Surname", "TX", index_district
+        )
+
+        assert [m.bioguide_id for m in result] == ["X000001"]
+
+    def test_a_stale_district_alone_never_refuses_the_match(self):
+        """Rich McCormick's index entry still says GA06 against a GA-7 term.
+        The district disagrees and the name does not, so he is still matched --
+        `_same_district` is a tiebreak, never a filter."""
+        mccormick = Roster("M001218", "Rich", "McCormick", "GA", "7", in_office=True)
+
+        result = matcher([mccormick])._match_representative(None, "Rich", "McCormick", "GA", "06")
+
+        assert [m.bioguide_id for m in result] == ["M001218"]
+
+    def test_an_unlabelled_district_cannot_disagree(self):
+        """An index entry with no district supplies only one signal, and one
+        weak signal must not refuse a match on its own."""
+        sitting = Roster("X000002", "Lizzie", "Fletcher", "TX", "7", in_office=True)
+
+        result = matcher([sitting])._match_representative(None, "Elizabeth", "Fletcher", "TX", "")
+
+        assert [m.bioguide_id for m in result] == ["X000002"]
+
+
 class TestTierTwoRequiresTheNameToAgree:
     def test_a_departed_member_still_matches_their_own_filings(self):
         """Greene, Green, Connolly, Manning, Sherrill and Waltz all left office

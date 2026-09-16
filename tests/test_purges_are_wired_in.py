@@ -100,3 +100,62 @@ class TestTheCatalogueOfPurgesIsComplete:
             f"the CLI defines {sorted(defined)} but this test guards {sorted(PURGES)}; "
             "an unguarded purge is one nothing makes run"
         )
+
+
+class TestThePurgesCanBeRunOutOfBand:
+    """A purge is useless at the moment you need it if the only way to run it is
+    a three-and-a-half hour pipeline.
+
+    That is not hypothetical. Rebuild #15 finished carrying the corrected
+    `trade_clustering` detector but not the purge entry for the wording it
+    replaced, so 169 findings were published *beside* their own corrections --
+    Thom Tillis served at once as "7 in a row over 0 days" and "14 in a row
+    within a short period", under his own name. The fix was merged. Running it
+    meant re-ingesting, re-parsing 400 filings and re-analysing, which would
+    have moved the whole corpus as a side effect.
+
+    `maintenance.yml` exists so a remediation command can be dispatched on its
+    own. These tests guard the two things that make it safe rather than the
+    thing that makes it convenient.
+    """
+
+    MAINTENANCE = "maintenance.yml"
+
+    def workflow(self) -> dict:
+        return yaml.safe_load((WORKFLOWS / self.MAINTENANCE).read_text())
+
+    def test_it_offers_every_purge_the_cli_defines(self):
+        """The pipelines are checked against each other above. This one has no
+        counterpart, so it is checked against the CLI."""
+        on = self.workflow().get(True) or self.workflow().get("on")
+        offered = set(on["workflow_dispatch"]["inputs"]["command"]["options"])
+
+        assert offered == set(PURGES), (
+            f"maintenance.yml offers {sorted(offered)} but the CLI defines "
+            f"{sorted(PURGES)}; a purge it cannot run is one that needs a pipeline"
+        )
+
+    def test_it_waits_for_the_other_writers(self):
+        """Deleting rows while `analyze` inserts them is the same hazard the
+        other two pipelines already serialise against, so it shares their group.
+        Without this it could race the 06:00 cron."""
+        concurrency = self.workflow()["concurrency"]
+        others = [yaml.safe_load((WORKFLOWS / p).read_text())["concurrency"] for p in PIPELINES]
+
+        assert all(concurrency["group"] == o["group"] for o in others), concurrency
+        assert concurrency["cancel-in-progress"] is False
+
+    def test_it_defaults_to_a_dry_run(self):
+        """It deletes published rows about named people. The safe setting is the
+        one you get by pressing the button without reading."""
+        on = self.workflow().get(True) or self.workflow().get("on")
+
+        assert on["workflow_dispatch"]["inputs"]["dry_run"]["default"] is True
+
+    def test_it_does_not_analyse(self):
+        """Re-deriving the findings is the nightly's job. Doing it here would
+        make a three-second delete move the whole corpus, which is the side
+        effect this workflow exists to avoid."""
+        runs = " ".join(s.get("run") or "" for s in steps(self.MAINTENANCE))
+
+        assert "cli analyze" not in runs

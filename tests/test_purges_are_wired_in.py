@@ -44,6 +44,17 @@ PIPELINES = ("rebuild.yml", "daily-update.yml")
 # would not write. Each must run in both pipelines.
 PURGES = ("purge-non-awards", "purge-stale-wording", "purge-disabled")
 
+# What each remediation command's flag MEANS, which is the thing that must never
+# be guessed. `previews` is the flag that makes it report instead of write;
+# `writes` is the flag that makes it write. Exactly one is set, and the two
+# conventions are opposite.
+CONVENTIONS = {
+    "purge-stale-wording": {"previews": "--dry-run"},
+    "purge-disabled": {"previews": "--dry-run"},
+    "purge-non-awards": {"previews": "--dry-run"},
+    "repair-house-attribution": {"writes": "--apply"},
+}
+
 
 def steps(name: str) -> list[dict]:
     workflow = yaml.safe_load((WORKFLOWS / name).read_text())
@@ -126,11 +137,16 @@ class TestThePurgesCanBeRunOutOfBand:
 
     def test_it_offers_every_purge_the_cli_defines(self):
         """The pipelines are checked against each other above. This one has no
-        counterpart, so it is checked against the CLI."""
+        counterpart, so it is checked against the CLI.
+
+        A subset rather than an equality: the workflow also carries remediation
+        commands that are not purges -- `repair-house-attribution` moves filings
+        rather than deleting findings -- and those are covered by the flag test
+        below."""
         on = self.workflow().get(True) or self.workflow().get("on")
         offered = set(on["workflow_dispatch"]["inputs"]["command"]["options"])
 
-        assert offered == set(PURGES), (
+        assert set(PURGES) <= offered, (
             f"maintenance.yml offers {sorted(offered)} but the CLI defines "
             f"{sorted(PURGES)}; a purge it cannot run is one that needs a pipeline"
         )
@@ -159,3 +175,94 @@ class TestThePurgesCanBeRunOutOfBand:
         runs = " ".join(s.get("run") or "" for s in steps(self.MAINTENANCE))
 
         assert "cli analyze" not in runs
+
+
+class TestTheWorkflowPassesTheRightFlag:
+    """The two dry-run conventions are OPPOSITE, and guessing writes to production.
+
+        the purges                apply by default; ``--dry-run`` only previews
+        repair-house-attribution  previews by default; ``--apply`` writes
+
+    The first version of `maintenance.yml` asserted that only
+    `purge-stale-wording` took `--dry-run`, warned that the other two "have no
+    --dry-run", and ran them for real. All three declare it. So a dry run of
+    `purge-disabled` or `purge-non-awards` would have deleted rows while
+    printing that it was only previewing -- the safe default defeated for two
+    of the three commands it existed to protect.
+
+    Every test above passed the whole time, because they checked that the input
+    existed and defaulted to true, not that anything HONOURED it.
+
+    So this asks the real parser what each command accepts and checks the
+    workflow against the answer. Through `--help` rather than by importing: the
+    parser is built inside `main()` and cannot be reached otherwise, and going
+    through the CLI is what the workflow does too.
+    """
+
+    MAINTENANCE = "maintenance.yml"
+
+    @staticmethod
+    def offered() -> list[str]:
+        workflow = yaml.safe_load((WORKFLOWS / "maintenance.yml").read_text())
+        on = workflow.get(True) or workflow.get("on")
+        return on["workflow_dispatch"]["inputs"]["command"]["options"]
+
+    @staticmethod
+    def accepted_flags(command: str) -> set[str]:
+        """What argparse actually accepts, asked rather than assumed."""
+        import subprocess
+        import sys
+
+        result = subprocess.run(
+            [sys.executable, "-m", "src.cli", command, "--help"],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).resolve().parents[1],
+        )
+        assert result.returncode == 0, result.stderr
+        return {word.strip(" ,") for word in result.stdout.split() if word.startswith("--")}
+
+    def test_every_offered_command_has_a_stated_convention(self):
+        """An unlisted command is one whose flag the workflow would have to
+        guess, and guessing is what caused the bug."""
+        assert set(self.offered()) == set(CONVENTIONS), (
+            f"maintenance.yml offers {sorted(self.offered())} but conventions are "
+            f"declared for {sorted(CONVENTIONS)}"
+        )
+
+    @pytest.mark.parametrize("command", sorted(CONVENTIONS))
+    def test_the_cli_really_accepts_the_flag_the_workflow_sends(self, command):
+        """The exact check that was missing. `purge-disabled` and
+        `purge-non-awards` were assumed not to take `--dry-run`; they do."""
+        convention = CONVENTIONS[command]
+        flag = convention.get("previews") or convention["writes"]
+
+        assert flag in self.accepted_flags(command), (
+            f"maintenance.yml sends `{flag}` to `{command}`, which does not accept it. "
+            "argparse would abort the run."
+        )
+
+    @pytest.mark.parametrize("command", sorted(CONVENTIONS))
+    def test_the_workflow_sends_that_flag_on_the_right_side_of_the_toggle(self, command):
+        """A preview flag must sit under `dry_run == true`; a write flag must
+        sit under its negation. Swapping them is silent and destructive."""
+        run = next(
+            s["run"] for s in steps(self.MAINTENANCE) if "inputs.command" in (s.get("run") or "")
+        )
+        branch = run.split(command, 1)[1].split(";;", 1)[0]
+        convention = CONVENTIONS[command]
+
+        if "previews" in convention:
+            assert convention["previews"] in branch, (
+                f"{command} previews with `{convention['previews']}` and the workflow never sends it, "
+                "so a dry run writes to production"
+            )
+            assert 'dry_run }}" = "true"' in branch, (
+                f"{command} sends its preview flag, but not under `dry_run == true`"
+            )
+        else:
+            assert convention["writes"] in branch
+            assert 'dry_run }}" != "true"' in branch, (
+                f"{command} writes with `{convention['writes']}`, which must be gated on "
+                "dry_run being OFF, not on it being ON"
+            )

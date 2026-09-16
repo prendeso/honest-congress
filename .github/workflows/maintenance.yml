@@ -34,11 +34,17 @@ on:
           - purge-stale-wording
           - purge-disabled
           - purge-non-awards
+          - repair-house-attribution
       dry_run:
-        description: 'Preview the deletions without applying them. Leave ON first.'
+        description: 'Report what would change without writing it. Leave ON first.'
         required: true
         default: true
         type: boolean
+      years:
+        description: 'Filing years, space separated. Only repair-house-attribution reads this.'
+        required: false
+        default: '2024 2025 2026'
+        type: string
 
 # One database, one writer at a time. `daily-update` and `rebuild` share this
 # group because they both write to the production `anomalies` table; a purge
@@ -54,7 +60,10 @@ env:
 jobs:
   maintenance:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The purges are seconds of SQL. `repair-house-attribution` re-reads the
+    # Clerk's whole XML index for every year first, over the network, so the
+    # ceiling is sized for that rather than for the fast case.
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -88,23 +97,48 @@ jobs:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: python -m src.cli init
 
-      # Only `purge-stale-wording` takes `--dry-run`; the other two report what
-      # they would drop and are idempotent, so a dry run of those is the command
-      # itself. Passing an unsupported flag would abort the run, so it is only
-      # added where the parser defines it.
+      # The two conventions are opposite, and getting this wrong is not a
+      # cosmetic failure -- it writes to production while reporting that it is
+      # only looking.
+      #
+      #   the purges        apply by default, and --dry-run only previews
+      #   repair-house-...  previews by default, and --apply writes
+      #
+      # The first version of this file asserted that only `purge-stale-wording`
+      # took `--dry-run` and warned that the other two "have no --dry-run"
+      # before running them for real. That was simply false -- all three
+      # declare it -- so a dry run of `purge-disabled` or `purge-non-awards`
+      # would have deleted rows while printing that it was previewing. Nobody
+      # dispatched those paths before it was caught, but the safe default was
+      # defeated for two of the three commands it was supposed to protect.
+      #
+      # So the mapping is written out per command rather than inferred, and
+      # `tests/test_purges_are_wired_in.py` checks each entry against the
+      # command's real argparse parser. An unsupported flag aborts the run,
+      # and a missing one writes when it should not; both are caught there.
       - name: Run the remediation command
         id: purge
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: |
           FLAGS=""
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            if [ "${{ inputs.command }}" = "purge-stale-wording" ]; then
-              FLAGS="--dry-run"
-            else
-              echo "::warning::${{ inputs.command }} has no --dry-run. It is idempotent and reports what it drops, so it is being run for real."
-            fi
-          fi
+          case "${{ inputs.command }}" in
+            repair-house-attribution)
+              FLAGS="--years ${{ inputs.years }}"
+              if [ "${{ inputs.dry_run }}" != "true" ]; then
+                FLAGS="$FLAGS --apply"
+              fi
+              ;;
+            purge-stale-wording|purge-disabled|purge-non-awards)
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                FLAGS="--dry-run"
+              fi
+              ;;
+            *)
+              echo "::error::Unknown command '${{ inputs.command }}'. Refusing to guess whether it writes."
+              exit 1
+              ;;
+          esac
           echo "Running: src.cli ${{ inputs.command }} $FLAGS"
           python -m src.cli ${{ inputs.command }} $FLAGS
 
@@ -119,7 +153,11 @@ jobs:
             echo "- result: \`${{ steps.purge.outcome }}\`"
             echo ""
             if [ "${{ inputs.dry_run }}" = "true" ]; then
-              echo "Nothing was deleted. Re-dispatch with dry run OFF to apply."
+              echo "Nothing was written. Re-dispatch with dry run OFF to apply."
+            elif [ "${{ inputs.command }}" = "repair-house-attribution" ]; then
+              echo "Filings were moved onto the correct member. Transactions, assets and liabilities hang off \`disclosure_id\` and followed them."
+              echo ""
+              echo "Anomalies did NOT: they are member-level and derived, so the findings stay on the old member until the next \`analyze\`."
             else
               echo "Rows were deleted. The next scheduled nightly re-derives each finding with the corrected wording."
             fi

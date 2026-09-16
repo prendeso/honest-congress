@@ -1,0 +1,126 @@
+name: Maintenance
+
+# Run one remediation command against the production database, and nothing else.
+#
+# The purge commands delete published rows the current code would not write.
+# Until now the only way to run one was to run a whole pipeline: in
+# `daily-update.yml` the purges sit at step 21 of 23, behind an ingest, a
+# 400-filing parse and every feed. Three seconds of DELETE cost three and a half
+# hours, and the `analyze` that follows moves the whole corpus as a side effect.
+#
+# So a purge that needed running out of band did not get run. That is the exact
+# failure this project keeps repeating: `purge-stale-wording` was written,
+# tested, merged and wired into nothing, and 425 findings were served for three
+# pipeline runs with text no detector could write.
+#
+# Measured the day this was added: rebuild #15 finished carrying the corrected
+# `trade_clustering` detector but not the purge entry for the wording it
+# replaced, so 169 findings were published beside their own corrections --
+# Thom Tillis served simultaneously as "7 in a row over 0 days" and "14 in a row
+# within a short period", under his own name.
+#
+# This workflow does not analyse. Deleting the rows is the whole job; the next
+# scheduled nightly re-derives each finding with the corrected wording.
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: 'Which remediation command to run'
+        required: true
+        default: purge-stale-wording
+        type: choice
+        options:
+          - purge-stale-wording
+          - purge-disabled
+          - purge-non-awards
+      dry_run:
+        description: 'Preview the deletions without applying them. Leave ON first.'
+        required: true
+        default: true
+        type: boolean
+
+# One database, one writer at a time. `daily-update` and `rebuild` share this
+# group because they both write to the production `anomalies` table; a purge
+# deleting rows while an `analyze` is inserting them is the same hazard, so it
+# waits its turn rather than racing the 06:00 cron.
+concurrency:
+  group: honest-congress-production-database
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # A stack trace twenty frames deep is a bad way to learn that a secret is
+      # missing. Same guard as the other two pipelines, for the same reason.
+      - name: Check the database secret is configured
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::RAILWAY_DATABASE_URL is not set. Add it under Settings -> Secrets and variables -> Actions. Until then this workflow cannot reach the database."
+            exit 1
+          fi
+          echo "DATABASE_URL is set (${#DATABASE_URL} characters)."
+
+      - name: Run migrations
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: python -m src.cli init
+
+      # Only `purge-stale-wording` takes `--dry-run`; the other two report what
+      # they would drop and are idempotent, so a dry run of those is the command
+      # itself. Passing an unsupported flag would abort the run, so it is only
+      # added where the parser defines it.
+      - name: Run the remediation command
+        id: purge
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          FLAGS=""
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            if [ "${{ inputs.command }}" = "purge-stale-wording" ]; then
+              FLAGS="--dry-run"
+            else
+              echo "::warning::${{ inputs.command }} has no --dry-run. It is idempotent and reports what it drops, so it is being run for real."
+            fi
+          fi
+          echo "Running: src.cli ${{ inputs.command }} $FLAGS"
+          python -m src.cli ${{ inputs.command }} $FLAGS
+
+      - name: Say what was run
+        if: always()
+        run: |
+          {
+            echo "### Maintenance"
+            echo ""
+            echo "- command: \`${{ inputs.command }}\`"
+            echo "- dry run: \`${{ inputs.dry_run }}\`"
+            echo "- result: \`${{ steps.purge.outcome }}\`"
+            echo ""
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "Nothing was deleted. Re-dispatch with dry run OFF to apply."
+            else
+              echo "Rows were deleted. The next scheduled nightly re-derives each finding with the corrected wording."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

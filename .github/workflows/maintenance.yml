@@ -36,6 +36,7 @@ on:
           - purge-non-awards
           - repair-house-attribution
           - move-filing
+          - reparse-annuals
       dry_run:
         description: 'Report what would change without writing it. Leave ON first.'
         required: true
@@ -56,6 +57,11 @@ on:
         required: false
         default: ''
         type: string
+      limit:
+        description: 'How many filings to re-read. Only reparse-annuals reads this. Runs are resumable: each pass takes the least-recently-touched first.'
+        required: false
+        default: '400'
+        type: string
 
 # One database, one writer at a time. `daily-update` and `rebuild` share this
 # group because they both write to the production `anomalies` table; a purge
@@ -74,7 +80,13 @@ jobs:
     # The purges are seconds of SQL. `repair-house-attribution` re-reads the
     # Clerk's whole XML index for every year first, over the network, so the
     # ceiling is sized for that rather than for the fast case.
-    timeout-minutes: 60
+    #
+    # `reparse-annuals` downloads and re-reads one filing at a time with a
+    # delay, so it is sized by `limit` rather than by anything here. 400 filings
+    # at roughly two seconds each is about fifteen minutes; the ceiling leaves
+    # room for a larger batch without letting a stuck run hold the database
+    # lock all day.
+    timeout-minutes: 180
 
     steps:
       - name: Checkout repository
@@ -133,6 +145,7 @@ jobs:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
         run: |
           FLAGS=""
+          COMMAND=""
           case "${{ inputs.command }}" in
             repair-house-attribution)
               FLAGS="--years ${{ inputs.years }}"
@@ -155,13 +168,33 @@ jobs:
                 FLAGS="--dry-run"
               fi
               ;;
+            reparse-annuals)
+              # Not a purge and not a repair: it re-reads annual filings from
+              # the Clerk and from eFD and replaces what the old parser stored.
+              # It is here because the alternative is `daily-update.yml`, which
+              # reaches a parse at step 4 of 23 and only for filings it has
+              # never read.
+              #
+              # The command is `parse`, so the flags below are its own.
+              # `--annual-only` keeps the run off PTRs, which none of the
+              # parser changes touched. `--reparse` is what makes it re-read a
+              # filing already marked parsed -- and `--min-confidence` cannot
+              # substitute for it, because every House annual is stored at 1.0
+              # and that WAS the defect.
+              COMMAND="parse"
+              FLAGS="--reparse --annual-only --limit ${{ inputs.limit }}"
+              if [ "${{ inputs.dry_run }}" = "true" ]; then
+                FLAGS="$FLAGS --dry-run"
+              fi
+              ;;
             *)
               echo "::error::Unknown command '${{ inputs.command }}'. Refusing to guess whether it writes."
               exit 1
               ;;
           esac
-          echo "Running: src.cli ${{ inputs.command }} $FLAGS"
-          python -m src.cli ${{ inputs.command }} $FLAGS
+          COMMAND="${COMMAND:-${{ inputs.command }}}"
+          echo "Running: src.cli $COMMAND $FLAGS"
+          python -m src.cli $COMMAND $FLAGS
 
       - name: Say what was run
         if: always()
@@ -175,6 +208,10 @@ jobs:
             echo ""
             if [ "${{ inputs.dry_run }}" = "true" ]; then
               echo "Nothing was written. Re-dispatch with dry run OFF to apply."
+            elif [ "${{ inputs.command }}" = "reparse-annuals" ]; then
+              echo "Annual filings were re-read and their assets and liabilities replaced. Published net worth will have RISEN -- the old reader captured about half of Schedule A, and the half it lost was the large half."
+              echo ""
+              echo "Runs are resumable: each pass takes the least-recently-touched filings first, so dispatch again to continue. Findings are not re-derived here; the next scheduled nightly does that."
             elif [ "${{ inputs.command }}" = "repair-house-attribution" ] || [ "${{ inputs.command }}" = "move-filing" ]; then
               echo "Filings were moved onto the correct member. Transactions, assets and liabilities hang off \`disclosure_id\` and followed them."
               echo ""

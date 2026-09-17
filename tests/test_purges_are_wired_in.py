@@ -48,12 +48,22 @@ PURGES = ("purge-non-awards", "purge-stale-wording", "purge-disabled")
 # be guessed. `previews` is the flag that makes it report instead of write;
 # `writes` is the flag that makes it write. Exactly one is set, and the two
 # conventions are opposite.
+#
+# `cli` names the command argparse actually sees, where the workflow's label is
+# not itself a CLI command. `extra` lists the other flags the workflow sends,
+# which must be accepted too -- argparse aborts the run on any it does not know,
+# and a re-parse that aborts leaves the corpus exactly as wrong as it was.
 CONVENTIONS = {
     "purge-stale-wording": {"previews": "--dry-run"},
     "purge-disabled": {"previews": "--dry-run"},
     "purge-non-awards": {"previews": "--dry-run"},
-    "repair-house-attribution": {"writes": "--apply"},
-    "move-filing": {"writes": "--apply"},
+    "repair-house-attribution": {"writes": "--apply", "extra": ("--years",)},
+    "move-filing": {"writes": "--apply", "extra": ("--document-id", "--to-bioguide")},
+    "reparse-annuals": {
+        "previews": "--dry-run",
+        "cli": "parse",
+        "extra": ("--reparse", "--annual-only", "--limit"),
+    },
 }
 
 
@@ -208,12 +218,47 @@ class TestTheWorkflowPassesTheRightFlag:
         on = workflow.get(True) or workflow.get("on")
         return on["workflow_dispatch"]["inputs"]["command"]["options"]
 
+    @classmethod
+    def branch_of(cls, command: str) -> str:
+        """The `case` arm this command runs, alternation labels included.
+
+        Three of the commands share one arm -- `a|b|c)` -- so splitting on
+        `command)` finds nothing for two of them and silently returns the whole
+        script, which would make every assertion below pass for the wrong
+        reason."""
+        run = next(
+            s["run"] for s in steps(cls.MAINTENANCE) if "inputs.command" in (s.get("run") or "")
+        )
+        arms = run.split(";;")
+        for arm in arms:
+            label = arm.split(")", 1)[0]
+            if command in [part.strip() for part in label.strip().splitlines()[-1].split("|")]:
+                return arm.split(")", 1)[1]
+        raise AssertionError(f"maintenance.yml has no case arm for `{command}`")
+
+    @classmethod
+    def flags_sent(cls, command: str) -> set[str]:
+        """Every `--flag` the workflow's arm for this command passes on.
+
+        Read out of the workflow rather than listed, because a list passes while
+        the workflow sends something else -- the same failure as asserting a
+        command's flags instead of asking it."""
+        import re
+
+        return {
+            flag
+            for line in cls.branch_of(command).splitlines()
+            if "FLAGS=" in line
+            for flag in re.findall(r"--[a-z0-9][a-z0-9-]*", line)
+        }
+
     @staticmethod
     def accepted_flags(command: str) -> set[str]:
         """What argparse actually accepts, asked rather than assumed."""
         import subprocess
         import sys
 
+        command = CONVENTIONS.get(command, {}).get("cli", command)
         result = subprocess.run(
             [sys.executable, "-m", "src.cli", command, "--help"],
             capture_output=True,
@@ -244,13 +289,43 @@ class TestTheWorkflowPassesTheRightFlag:
         )
 
     @pytest.mark.parametrize("command", sorted(CONVENTIONS))
+    def test_the_cli_accepts_every_other_flag_the_workflow_sends(self, command):
+        """The preview flag is not the only one that can be wrong.
+
+        `reparse-annuals` sends `--reparse --annual-only --limit`, none of which
+        the dry-run test above would notice going missing. argparse aborts on an
+        unknown flag, so a renamed option turns a re-parse campaign into a
+        workflow that fails at the last step every time it is dispatched.
+
+        The flags are read out of the workflow rather than listed here. A list
+        would pass while the workflow sent something else entirely, which is the
+        same failure mode as asserting what a command's flags are instead of
+        asking it."""
+        accepted = self.accepted_flags(command)
+        for flag in sorted(self.flags_sent(command)):
+            assert flag in accepted, (
+                f"maintenance.yml sends `{flag}` to `{command}`, which does not accept it. "
+                "argparse would abort the run."
+            )
+
+    @pytest.mark.parametrize("command", sorted(CONVENTIONS))
+    def test_the_declared_flags_are_the_ones_actually_sent(self, command):
+        """`extra` is documentation, and documentation that drifts is worse than
+        none: it is what says, in review, that the workflow is fine."""
+        declared = set(CONVENTIONS[command].get("extra", ()))
+        convention = CONVENTIONS[command]
+        sent = self.flags_sent(command) - {convention.get("previews"), convention.get("writes")}
+
+        assert sent == declared, (
+            f"maintenance.yml sends {sorted(sent)} to `{command}` but CONVENTIONS declares "
+            f"{sorted(declared)}"
+        )
+
+    @pytest.mark.parametrize("command", sorted(CONVENTIONS))
     def test_the_workflow_sends_that_flag_on_the_right_side_of_the_toggle(self, command):
         """A preview flag must sit under `dry_run == true`; a write flag must
         sit under its negation. Swapping them is silent and destructive."""
-        run = next(
-            s["run"] for s in steps(self.MAINTENANCE) if "inputs.command" in (s.get("run") or "")
-        )
-        branch = run.split(command, 1)[1].split(";;", 1)[0]
+        branch = self.branch_of(command)
         convention = CONVENTIONS[command]
 
         if "previews" in convention:

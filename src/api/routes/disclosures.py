@@ -488,10 +488,16 @@ async def get_member_disclosure_summary(
     if not member:
         raise HTTPException(status_code=404, detail="Member not found")
 
+    # Same order as `wealth_analyzer.analyze_member`, for the same reason: this
+    # endpoint publishes a net-worth history, and `filing_year` alone does not
+    # decide which of a member's six 2024 filings is shown as their 2024 net
+    # worth. Unlike the detector this one lists every filing rather than picking
+    # a baseline, so the stakes are lower -- but a page that reorders itself
+    # between refreshes is its own credibility problem.
     disclosures = (
         db.query(Disclosure)
         .filter(Disclosure.member_id == member_id, Disclosure.parsed == True)
-        .order_by(Disclosure.filing_year)
+        .order_by(Disclosure.filing_year, Disclosure.filing_date, Disclosure.id)
         .all()
     )
 

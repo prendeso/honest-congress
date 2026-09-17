@@ -934,6 +934,28 @@ _SUPERSEDED_WORDING = (
     # never rewritten, so the stale phrase is served for ever. All 169 live
     # findings carry it.
     ("trade_clustering", "description", "within a short period"),
+    # `excessive_wealth_growth` compared whichever filing the database happened
+    # to return last for the earlier year. `wealth_analyzer` ordered only by
+    # `filing_year`, and its growth loop skips same-year pairs, so "last filing
+    # of the year" was the baseline and nothing decided which one that was.
+    # Candidate reports -- filed before the person held the seat, describing a
+    # private citizen's finances -- were in the running and sometimes won.
+    #
+    # Two live findings were measured against one, and both name sitting members:
+    #
+    #   Craig Goldman  published $15,008,502.50 of growth in a year. Against his
+    #                  own 2024 House annual the figure is $551,001.
+    #   Laura Gillen   published $476,500.50. Against her own annual, $75,499.50
+    #                  -- under the $174,000 salary threshold, so the finding
+    #                  should never have existed.
+    #
+    # Six of the thirteen live findings would not fire at all once the baseline
+    # is chosen deterministically, and two of those describe growth that ran
+    # backwards: Marlin Stutzman's net worth FELL about $12M.
+    #
+    # The corrected detector names the filings it compared rather than only the
+    # years, so "would not explain" is a phrase it can no longer write.
+    ("excessive_wealth_growth", "description", "would not explain"),
 )
 
 

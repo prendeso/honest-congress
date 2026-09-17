@@ -190,6 +190,68 @@ class TestWordsLandInTheColumnTheyArePrintedIn:
         assert [[w["text"] for w in line] for line in lines] == [["a", "b"], ["c"]]
 
 
+def variant_header_words(top: float) -> List[Dict[str, Any]]:
+    """The House annual form's OTHER Schedule A header.
+
+    It has no "Tx. > $1,000?" column and ends in a second Income instead.
+    """
+    return [
+        word("Asset", ASSET_X, top),
+        word("Owner", OWNER_X, top),
+        word("Value", VALUE_X, top),
+        word("of", VALUE_X + 34, top),
+        word("Asset", VALUE_X + 46, top),
+        word("Income", TYPE_X, top),
+        word("Type(s)", TYPE_X + 42, top),
+        word("Income", INCOME_X, top),
+    ]
+
+
+class TestBothHeaderShapes:
+    """Requiring the "Tx." column cost half of every filing without one.
+
+    Found in the live re-parse, not in a test: documents 10071959, 10067533 and
+    10060579 stored 4 of 8, 6 of 13 and 8 of 16 holdings and scored 0.50, 0.46
+    and 0.50. `_header_columns` returned None on their header, so
+    `_schedule_bands` found no columns and the whole filing fell back to the
+    table reader. With the variant accepted they store 8 of 8, 13 of 13 and 16
+    of 16.
+    """
+
+    def variant_page(self) -> FakePage:
+        page = carter_page()
+        page._words = [w for w in page._words if w["top"] != 100.0]
+        page._words += variant_header_words(100.0)
+        return page
+
+    def test_the_variant_header_is_recognised(self):
+        bands, _ = _schedule_bands(self.variant_page(), "A")
+        assert [(top, bottom) for top, bottom, _ in bands] == [
+            (115.0, 145.0),
+            (145.0, 175.0),
+            (175.0, 190.0),
+        ]
+
+    def test_it_reads_the_same_holdings(self):
+        assets = DisclosureParser()._assets_from_row_bands(FakePdf(self.variant_page()))
+        guardian = next(a for a in assets if a["description"].startswith("Guardian"))
+        assert (guardian["value_min"], guardian["value_max"]) == (5000001, 25000000)
+
+    def test_the_longer_shape_wins_where_both_could_match(self):
+        # The five-column shape is a prefix of the six-column one, so a header
+        # WITH a Tx column matches both. Taking the shorter one leaves the
+        # Income cell running to the page edge, swallowing whatever the Tx
+        # column holds into the income figure.
+        _, _, columns = _schedule_bands(carter_page(), "A")[0][0]
+        assert len(columns) == 7
+        assert columns[-2] == TX_X - 2
+
+    def test_the_variant_stops_one_column_earlier(self):
+        _, _, columns = _schedule_bands(self.variant_page(), "A")[0][0]
+        assert len(columns) == 6
+        assert columns[-1] == PAGE_WIDTH
+
+
 class TestTheHeaderIsReadNotAssumed:
     def test_the_schedule_a_header_gives_one_edge_per_column(self):
         xs = _header_columns(header_words(100.0), ("Asset", "Owner", "Value", "Income", "Income"))

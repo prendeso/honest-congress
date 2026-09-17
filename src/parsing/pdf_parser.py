@@ -27,6 +27,58 @@ VALUE_RANGES = {
     "Over $50,000,000": (50000001, None),
 }
 
+# The asset-class codes the House annual form prints in square brackets beside
+# every Schedule A holding -- BA bank account, ST stock, MF mutual fund, RP real
+# property, HE hedge fund, and so on. Every holding carries exactly one, which
+# makes counting them an independent measure of how many rows the document
+# HOLDS, against however many the parser managed to STORE.
+#
+# Independent is the whole point. Confidence derived from the parser's own
+# output can only ever say "it ran"; that is what `score_fd_parse` used to do,
+# and it reported 1.0 on every one of the 927 House annual filings in the corpus
+# while capturing about half their holdings.
+_SCHEDULE_A_ASSET_CODE = re.compile(
+    r"\[(?:BA|ST|MF|OT|RP|HE|PS|EF|IH|FA|GS|WU|CS|PE|DO|OL|OI|TR|VA|IC|AB|BK|CO|EQ|FU|SA)\]"
+)
+
+# `clean_text` reduces "SCHEDULE A: ASSETS AND "UNEARNED" INCOME" to `S A: A "U" I`,
+# so both spellings have to be accepted.
+_SCHEDULE_A_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+A\s*:", re.MULTILINE | re.IGNORECASE)
+_SCHEDULE_B_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+B\s*:", re.MULTILINE | re.IGNORECASE)
+
+
+def count_schedule_a_rows(text: str) -> int:
+    """How many Schedule A holdings the document appears to contain.
+
+    Measured on the text layer, deliberately, because the table layer is what
+    loses them: pdfplumber simply does not find some holdings as table rows, and
+    the parser has no other way to see them. On Earl Carter's 2024 annual
+    (document 10066714) the Schedule A region names 48 holdings and the parser
+    stores 22 -- "Guardian Point Capital [HE] $5,000,001 - $25,000,000" and
+    "Ameris Bank [BA] $1,000,001 - $5,000,000" appear in the text and in no
+    table at all.
+
+    Bounded to the Schedule A region so Schedule B's trades, which carry the
+    same codes, are not counted as holdings.
+
+    Both spellings of the heading are accepted because `clean_text` mangles it:
+    "SCHEDULE A: ASSETS AND "UNEARNED" INCOME" survives cleaning as `S A: A "U" I`.
+    Matching only the uppercase form found the region in the raw page text and
+    never in `raw_text`, which is the string this is actually called with --
+    caught by running it against Carter's real filing end to end, where it
+    scored a perfect 1.0 by detecting zero rows.
+    """
+    if not text:
+        return 0
+    start = _SCHEDULE_A_HEADING.search(text)
+    if start is None:
+        return 0
+    rest = text[start.end() :]
+    end = _SCHEDULE_B_HEADING.search(rest)
+    region = rest[: end.start()] if end else rest
+    return len(_SCHEDULE_A_ASSET_CODE.findall(region))
+
+
 # Common ticker patterns
 TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
 # The House Clerk's asset-class code, which trails a description in square

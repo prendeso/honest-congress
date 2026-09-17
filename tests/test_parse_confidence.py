@@ -182,7 +182,68 @@ def test_recovered_rows_are_reported_not_hidden():
 
 
 def test_an_annual_filing_with_holdings_scores_one():
+    """With nothing to count against, the old behaviour stands.
+
+    `rows_detected` is optional so callers with no document to measure -- the
+    Senate path, and tests like this one -- are not scored against zero.
+    """
     assert score_fd_parse(True, assets=12, liabilities=2).confidence == 1.0
+
+
+class TestConfidenceMeasuresHowMuchWasRead:
+    """It used to be binary: 1.0 unless the parse produced nothing at all.
+
+    That reported 1.0 on every one of the 927 House annual filings in the
+    corpus, while capturing about half of Schedule A. Measured against the
+    documents themselves:
+
+        Carter   (10066714)   44 holdings named, 22 stored
+        Moulton  (10067208)   60 named, 33 stored
+        Davidson (10067467)   26 named, 13 stored
+
+    And the missing half is not random. pdfplumber fails to see some holdings
+    as table rows, and the parser has no other way in -- so Carter's stored net
+    worth tops out at $1,000,000 while his filing discloses "Guardian Point
+    Capital [HE] $5,000,001 - $25,000,000". The loss is biased toward
+    understating wealth, which is the direction that flatters.
+
+    A confidence that cannot fall is not a measurement, and it is why this hid:
+    `--min-confidence`, the opacity index and the parsed-data page all trusted
+    it and saw nothing wrong.
+    """
+
+    def test_reading_half_the_holdings_scores_half(self):
+        score = score_fd_parse(True, assets=22, liabilities=2, rows_detected=44)
+
+        assert score.confidence == 0.5
+
+    def test_it_says_how_many_it_lost(self):
+        score = score_fd_parse(True, assets=22, liabilities=2, rows_detected=44)
+
+        assert "22 of 44" in score.summary
+        assert "50%" in score.summary
+
+    def test_reading_everything_still_scores_one(self):
+        score = score_fd_parse(True, assets=44, liabilities=2, rows_detected=44)
+
+        assert score.confidence == 1.0
+        assert score.summary is None, "a complete parse should carry no warning at all"
+
+    def test_storing_more_than_were_detected_does_not_exceed_one(self):
+        """The count is a heuristic over the text layer; a row can carry two
+        class codes, or the parser can split one holding into two. Neither is a
+        reason to publish a confidence above 1.0."""
+        score = score_fd_parse(True, assets=50, liabilities=0, rows_detected=44)
+
+        assert score.confidence == 1.0
+
+    def test_an_error_still_beats_a_good_capture_rate(self):
+        assert (
+            score_fd_parse(
+                True, assets=44, liabilities=2, errors=["boom"], rows_detected=44
+            ).confidence
+            == 0.0
+        )
 
 
 def test_an_annual_filing_with_nothing_in_it_scores_zero():

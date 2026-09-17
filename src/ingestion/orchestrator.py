@@ -26,7 +26,7 @@ from src.parsing.confidence import (
     score_filing_with_no_schedule,
     score_ptr_parse,
 )
-from src.parsing.pdf_parser import DisclosureParser
+from src.parsing.pdf_parser import DisclosureParser, count_schedule_a_rows
 from src.parsing.ptr_parser import PTRParser
 from src.parsing.senate_html_parser import SenateHtmlParser
 
@@ -1118,11 +1118,16 @@ class IngestionOrchestrator:
                     # the corpus, more than any real one.
                     score = score_filing_with_no_schedule(disclosure.filing_type or "")
                 else:
+                    # Counted from the document's own text, not from the
+                    # parser's output, so the score can disagree with the parser
+                    # about how well it did. That is the entire point: scored
+                    # against itself it said 1.0 on 927 of 927 filings.
                     score = score_fd_parse(
                         text_extracted,
                         len(parsed.get("assets") or []),
                         len(parsed.get("liabilities") or []),
                         parsed.get("parse_errors") or [],
+                        rows_detected=count_schedule_a_rows(parsed.get("raw_text") or ""),
                     )
 
             # `parsed` means the parser ran, which is all it has ever meant. The

@@ -222,9 +222,41 @@ def cmd_parse(args):
     """Parse disclosure PDFs."""
     from src.ingestion.orchestrator import IngestionOrchestrator
 
-    print("Parsing disclosure PDFs...")
-
     orchestrator = IngestionOrchestrator()
+
+    if args.dry_run:
+        # A parse run downloads every filing it selects and rewrites its stored
+        # rows. Until now there was no way to see WHICH filings a set of flags
+        # would take before it took them, and the selection is the part that
+        # goes wrong: `--min-confidence 1.0` looks like "re-read everything the
+        # parser read badly" and selects nothing at all when the bad reads were
+        # all stored at 1.0.
+        #
+        # This writes nothing and downloads nothing.
+        with get_db() as db:
+            selected = orchestrator._disclosures_to_parse(
+                db,
+                limit=args.limit,
+                member_id=args.member_id,
+                year=args.year,
+                ptr_only=args.ptr_only,
+                annual_only=args.annual_only,
+                reparse=args.reparse,
+                failed_only=args.failed_only,
+                min_confidence=args.min_confidence,
+            )
+            print(f"Dry run: {len(selected)} filing(s) would be re-read. Nothing was written.")
+            for disclosure in selected[:20]:
+                print(
+                    f"  {disclosure.document_id}  year={disclosure.filing_year} "
+                    f"type={disclosure.filing_type!r} ptr={disclosure.is_ptr} "
+                    f"confidence={disclosure.parse_confidence}"
+                )
+            if len(selected) > 20:
+                print(f"  ... and {len(selected) - 20} more")
+        return
+
+    print("Parsing disclosure PDFs...")
 
     with get_db() as db:
         result = orchestrator.parse_disclosures(
@@ -233,6 +265,7 @@ def cmd_parse(args):
             member_id=args.member_id,
             year=args.year,
             ptr_only=args.ptr_only,
+            annual_only=args.annual_only,
             reparse=args.reparse,
             failed_only=args.failed_only,
             min_confidence=args.min_confidence,
@@ -1502,6 +1535,16 @@ def main():
     parse_parser.add_argument("-y", "--year", type=int, help="Parse disclosures for specific year")
     parse_parser.add_argument(
         "--ptr-only", action="store_true", help="Only parse PTR (stock trade) disclosures"
+    )
+    parse_parser.add_argument(
+        "--annual-only",
+        action="store_true",
+        help="Only parse annual filings (everything that is not a PTR)",
+    )
+    parse_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="List the filings this run would re-read, download nothing and write nothing",
     )
     parse_parser.add_argument(
         "--reparse", action="store_true", help="Re-parse already parsed disclosures"

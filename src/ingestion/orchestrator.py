@@ -1379,6 +1379,7 @@ class IngestionOrchestrator:
         member_id: int | None = None,
         year: int | None = None,
         ptr_only: bool = False,
+        annual_only: bool = False,
         reparse: bool = False,
         failed_only: bool = False,
         min_confidence: float | None = None,
@@ -1446,6 +1447,19 @@ class IngestionOrchestrator:
         if ptr_only:
             query = query.filter(Disclosure.is_ptr == True)
 
+        # The mirror of `--ptr-only`, and it exists because the corpus now needs
+        # re-reading in exactly this shape. The banded Schedule A and D readers
+        # and the Senate annual reader all changed what an ANNUAL filing yields
+        # and none of them touched PTRs, so a re-parse of the whole corpus would
+        # spend most of its time and its rate limit re-reading transactions that
+        # cannot have changed.
+        #
+        # `--min-confidence` cannot do this job. Every House annual in the
+        # database is stored at 1.0 -- that was the defect -- so the filter that
+        # exists for "re-read what the parser read badly" selects none of them.
+        if annual_only:
+            query = query.filter(Disclosure.is_ptr == False)
+
         # Least-recently-touched first, and this is what makes `--limit`
         # resumable rather than a treadmill.
         #
@@ -1475,6 +1489,7 @@ class IngestionOrchestrator:
         member_id: int | None = None,
         year: int | None = None,
         ptr_only: bool = False,
+        annual_only: bool = False,
         reparse: bool = False,
         failed_only: bool = False,
         min_confidence: float | None = None,
@@ -1489,6 +1504,7 @@ class IngestionOrchestrator:
             member_id: Filter to specific member
             year: Filter to specific year
             ptr_only: Only parse PTR disclosures
+            annual_only: Only parse annual filings (everything that is not a PTR)
             reparse: Re-parse already parsed disclosures
             failed_only: Only retry disclosures that failed to download
             min_confidence: Re-parse filings the parser read worse than this
@@ -1503,6 +1519,7 @@ class IngestionOrchestrator:
             member_id=member_id,
             year=year,
             ptr_only=ptr_only,
+            annual_only=annual_only,
             reparse=reparse,
             failed_only=failed_only,
             min_confidence=min_confidence,

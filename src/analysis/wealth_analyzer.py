@@ -61,6 +61,23 @@ def is_net_worth_snapshot(disclosure: Disclosure) -> bool:
     return not label.startswith(_NOT_A_NET_WORTH_PREFIX)
 
 
+def net_worth_snapshot_clause():
+    """`is_net_worth_snapshot` as a SQL predicate, for counting without loading.
+
+    The same rule twice is a liability -- this project has been bitten more than
+    once by two lists that drifted -- so
+    `tests/test_wealth_baseline.py::TestTheTwoSpellingsOfTheRuleAgree` asserts
+    the Python predicate and this clause classify every stored filing
+    identically. Change one, and that test names the other.
+    """
+    from sqlalchemy import func, not_, or_
+
+    label = func.lower(func.trim(func.coalesce(Disclosure.filing_type, "")))
+    excluded = [label == value for value in _NOT_A_NET_WORTH_SNAPSHOT]
+    excluded += [label.startswith(prefix) for prefix in _NOT_A_NET_WORTH_PREFIX]
+    return (Disclosure.is_ptr == False) & not_(or_(*excluded))  # noqa: E712
+
+
 settings = get_settings()
 
 

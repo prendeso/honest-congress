@@ -66,10 +66,27 @@ def _fd_disclosures_by_member(db: Session, member_ids: List[int]) -> Dict[int, L
     to go and read them, which against Railway from a GitHub runner is a network
     round trip each.
     """
+    # The second half of the same dead filter. `members_with_annual_filings`
+    # returned [] because no row carries filing_type "FD"; even once that is
+    # fixed, THIS query would still return nothing and the detectors would stay
+    # silent -- so both had to move together or neither counted.
+    #
+    # Ordered the same way as the net-worth series in `wealth_analyzer`, and for
+    # the same reason: the caller reads `[0]` and `[-1]` as the first and last
+    # filings, and `filing_year` alone does not decide which of a member's six
+    # 2024 filings is either one.
+    from src.analysis.wealth_analyzer import net_worth_snapshot_clause
+
     rows = (
         db.query(Disclosure)
-        .filter(Disclosure.member_id.in_(member_ids), Disclosure.filing_type == "FD")
-        .order_by(Disclosure.member_id, Disclosure.filing_year)
+        .filter(Disclosure.member_id.in_(member_ids))
+        .filter(net_worth_snapshot_clause())
+        .order_by(
+            Disclosure.member_id,
+            Disclosure.filing_year,
+            Disclosure.filing_date,
+            Disclosure.id,
+        )
         .all()
     )
     by_member: Dict[int, List[Disclosure]] = defaultdict(list)

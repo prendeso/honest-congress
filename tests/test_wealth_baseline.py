@@ -184,3 +184,124 @@ class TestTheCorrectedFindingCanBePublished:
             )
 
         assert "annual filings" in found[0]["title"]
+
+
+class TestTheTwoSpellingsOfTheRuleAgree:
+    """The same rule exists twice: a Python predicate for rows already loaded,
+    and a SQL clause for counting without loading them.
+
+    Two copies of one rule is how `filing_type == "FD"` survived -- a label that
+    matched zero of 3,900 stored rows, gating BOTH advanced detectors, returning
+    an empty roster in silence. `wealth_vs_salary` reading 0 findings looked like
+    a fact about Congress; it was a fact about one line.
+
+    So this asserts the two spellings classify every filing identically, over
+    every `filing_type` the live corpus actually stores.
+    """
+
+    # The 33 distinct values on the live corpus, plus the shapes that matter.
+    LIVE_TYPES = [
+        "O",
+        "A",
+        "H",
+        "T",
+        "X",
+        "C",
+        "PTR",
+        "G",
+        "B",
+        "W",
+        "D",
+        "E",
+        "Annual Report",
+        "Annual Report (Amendment)",
+        "Annual Report for CY 2024",
+        "Annual Report for CY 2025 (Amendment 2)",
+        "Candidate Report",
+        "Candidate Report  (Amendment 1)",
+        "Candidate Report  (Amendment 3)",
+        "New Filer Report for 01/21/2025",
+        # Shapes the corpus does not currently hold but the parsers could write.
+        "c",
+        " C ",
+        "candidate report",
+        "",
+        "  ",
+    ]
+
+    def test_every_stored_filing_type_is_classified_the_same_way(self, db_session, member):
+        from src.analysis.wealth_analyzer import is_net_worth_snapshot, net_worth_snapshot_clause
+
+        for index, filing_type in enumerate(self.LIVE_TYPES):
+            db_session.add(
+                Disclosure(
+                    member_id=member.id,
+                    filing_year=2024,
+                    filing_type=filing_type,
+                    filing_date=datetime(2024, 1, 1),
+                    document_id=f"TYPE-{index}",
+                    parsed=True,
+                    is_ptr=filing_type == "PTR",
+                )
+            )
+        db_session.commit()
+
+        stored = db_session.query(Disclosure).filter(Disclosure.member_id == member.id).all()
+        by_python = {d.id for d in stored if is_net_worth_snapshot(d)}
+        by_sql = {
+            d.id
+            for d in db_session.query(Disclosure)
+            .filter(Disclosure.member_id == member.id)
+            .filter(net_worth_snapshot_clause())
+            .all()
+        }
+
+        disagreed = by_python ^ by_sql
+        assert not disagreed, "the Python predicate and the SQL clause disagree about " + str(
+            sorted(d.filing_type for d in stored if d.id in disagreed)
+        )
+
+    def test_the_gate_no_longer_matches_a_label_nothing_writes(self, db_session, member):
+        """`members_with_annual_filings` returned [] because it asked for a
+        filing_type no ingester has written since the Senate stopped falling
+        back to it."""
+        from src.analysis import members_with_annual_filings
+
+        for index, day in enumerate((1, 2)):
+            db_session.add(
+                Disclosure(
+                    member_id=member.id,
+                    filing_year=2023 + index,
+                    filing_type="O",
+                    filing_date=datetime(2023 + index, 1, day),
+                    document_id=f"ANNUAL-{index}",
+                    parsed=True,
+                )
+            )
+        db_session.commit()
+
+        found = members_with_annual_filings(db_session)
+
+        assert [m.id for m in found] == [member.id], (
+            "two annual filings should make a member comparable; the old gate "
+            "asked for filing_type == 'FD' and found nobody at all"
+        )
+
+    def test_candidate_reports_do_not_make_a_member_comparable(self, db_session, member):
+        """Two candidate reports are not two annual filings."""
+        from src.analysis import members_with_annual_filings
+
+        for index in (0, 1):
+            db_session.add(
+                Disclosure(
+                    member_id=member.id,
+                    filing_year=2023 + index,
+                    filing_type="C",
+                    filing_date=datetime(2023 + index, 1, 1),
+                    document_id=f"CAND-{index}",
+                    parsed=True,
+                )
+            )
+        db_session.commit()
+
+        assert members_with_annual_filings(db_session) == []

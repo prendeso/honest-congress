@@ -1168,6 +1168,103 @@ def cmd_purge_non_awards(args):
         print(f"\nDeleted {len(unsupported)} findings that no award supports.")
 
 
+def cmd_move_filing(args):
+    """Move ONE named filing onto the member who actually filed it.
+
+    `repair-house-attribution` re-reads the Clerk's index and runs today's
+    matcher over every stored filing. It is the right tool when the question is
+    "which of these are wrong", and it is deliberately blind to filings the index
+    parser drops -- candidate reports among them, because a candidate is not a
+    member and `_parse_xml_index` stops them attaching in the first place.
+
+    That blindness is correct at ingest and leaves a gap afterwards. Document
+    10058876 is a 2024 Candidate Report whose index entry reads
+
+        Last=Begich  First=Nicholas  Suffix=III  StateDst=AK00  FilingType=C
+
+    -- the sitting member's own filing, stored against B000315, who disappeared
+    in a plane crash in October 1972. It carries 30 assets and 2 liabilities, and
+    it is that member record's ONLY filing, so the site publishes a page whose
+    entire financial history is one misattributed document. The sweep reports it
+    as "stored but not in the index" and moves on, for ever.
+
+    Un-blinding the sweep is the wrong fix: `test_house_attribution_repair.py`
+    pins that behaviour deliberately, and running the matcher over candidate
+    reports would have it guess filers for people who are not members. What was
+    missing is the other half of the rule this project already wrote down --
+    "they need an explicit, auditable repair ... silently rewriting member_id on
+    published rows is its own integrity problem". Explicit means naming the
+    document and the member, not inferring them.
+
+    So this takes both as arguments, refuses anything it cannot resolve to
+    exactly one row, prints the move and everything riding on it, and does
+    nothing at all without `--apply`.
+    """
+    from src.db.models import Asset, Disclosure, Liability, Member, Transaction
+
+    with get_db() as db:
+        matches = db.query(Disclosure).filter(Disclosure.document_id == args.document_id).all()
+        if not matches:
+            print(f"No filing with document_id {args.document_id!r}. Nothing done.")
+            return
+        if len(matches) > 1:
+            print(
+                f"{len(matches)} filings share document_id {args.document_id!r}: "
+                f"{[d.id for d in matches]}. Refusing to guess which one you mean. "
+                "(`Disclosure.document_id` is unique, so reaching this means that "
+                "constraint has gone.)"
+            )
+            return
+
+        disclosure = matches[0]
+        target = db.query(Member).filter(Member.bioguide_id == args.to_bioguide).first()
+        if target is None:
+            print(f"No member with bioguide_id {args.to_bioguide!r}. Nothing done.")
+            return
+
+        current = db.query(Member).filter(Member.id == disclosure.member_id).first()
+
+        def describe(member: Member | None) -> str:
+            if member is None:
+                return "(no member)"
+            seat = "sitting" if member.in_office else "former"
+            district = f"-{member.district}" if member.district else ""
+            return (
+                f"{member.bioguide_id} {member.first_name} {member.last_name} "
+                f"({member.state}{district}, {seat})"
+            )
+
+        if current is not None and current.id == target.id:
+            print(f"doc {disclosure.document_id} is already on {describe(target)}. Nothing to do.")
+            return
+
+        transactions = (
+            db.query(Transaction).filter(Transaction.disclosure_id == disclosure.id).count()
+        )
+        assets = db.query(Asset).filter(Asset.disclosure_id == disclosure.id).count()
+        liabilities = db.query(Liability).filter(Liability.disclosure_id == disclosure.id).count()
+
+        print(f"  doc {disclosure.document_id}  {disclosure.filing_year} {disclosure.filing_type}")
+        print(f"      from {describe(current)}")
+        print(f"      to   {describe(target)}")
+        print(
+            f"      carries {transactions} transaction(s), {assets} asset(s), "
+            f"{liabilities} liabilit(y/ies)"
+        )
+
+        if not args.apply:
+            print("\nNothing written; pass --apply.")
+            return
+
+        disclosure.member_id = target.id
+        db.commit()
+        print(
+            "\nMoved. Transactions, assets and liabilities hang off disclosure_id and "
+            "followed it. Anomalies did NOT -- they are member-level and derived, so "
+            "run `analyze` to re-derive them against the corrected attribution."
+        )
+
+
 def cmd_repair_house_attribution(args):
     """Move House filings stored against the wrong member onto the right one.
 
@@ -1708,6 +1805,28 @@ def main():
         help="Write the moves. Without it the command only reports them.",
     )
     attribution_parser.set_defaults(func=cmd_repair_house_attribution)
+
+    # One filing, named explicitly, for the ones the sweep cannot see
+    move_parser = subparsers.add_parser(
+        "move-filing",
+        help="Move one named filing onto the member who actually filed it",
+    )
+    move_parser.add_argument(
+        "--document-id",
+        required=True,
+        help="The Clerk's DocID, e.g. 10058876",
+    )
+    move_parser.add_argument(
+        "--to-bioguide",
+        required=True,
+        help="Bioguide ID of the member who filed it, e.g. B001323",
+    )
+    move_parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Write the move. Without it the command only reports it.",
+    )
+    move_parser.set_defaults(func=cmd_move_filing)
 
     # Serve command
     serve_parser = subparsers.add_parser("serve", help="Start API server")

@@ -35,6 +35,7 @@ on:
           - purge-disabled
           - purge-non-awards
           - repair-house-attribution
+          - move-filing
       dry_run:
         description: 'Report what would change without writing it. Leave ON first.'
         required: true
@@ -44,6 +45,16 @@ on:
         description: 'Filing years, space separated. Only repair-house-attribution reads this.'
         required: false
         default: '2024 2025 2026'
+        type: string
+      document_id:
+        description: "The Clerk's DocID. Only move-filing reads this."
+        required: false
+        default: ''
+        type: string
+      to_bioguide:
+        description: 'Bioguide ID of the member who filed it. Only move-filing reads this.'
+        required: false
+        default: ''
         type: string
 
 # One database, one writer at a time. `daily-update` and `rebuild` share this
@@ -129,6 +140,16 @@ jobs:
                 FLAGS="$FLAGS --apply"
               fi
               ;;
+            move-filing)
+              if [ -z "${{ inputs.document_id }}" ] || [ -z "${{ inputs.to_bioguide }}" ]; then
+                echo "::error::move-filing needs both document_id and to_bioguide. It moves ONE named filing onto ONE named member and will not guess either."
+                exit 1
+              fi
+              FLAGS="--document-id ${{ inputs.document_id }} --to-bioguide ${{ inputs.to_bioguide }}"
+              if [ "${{ inputs.dry_run }}" != "true" ]; then
+                FLAGS="$FLAGS --apply"
+              fi
+              ;;
             purge-stale-wording|purge-disabled|purge-non-awards)
               if [ "${{ inputs.dry_run }}" = "true" ]; then
                 FLAGS="--dry-run"
@@ -154,7 +175,7 @@ jobs:
             echo ""
             if [ "${{ inputs.dry_run }}" = "true" ]; then
               echo "Nothing was written. Re-dispatch with dry run OFF to apply."
-            elif [ "${{ inputs.command }}" = "repair-house-attribution" ]; then
+            elif [ "${{ inputs.command }}" = "repair-house-attribution" ] || [ "${{ inputs.command }}" = "move-filing" ]; then
               echo "Filings were moved onto the correct member. Transactions, assets and liabilities hang off \`disclosure_id\` and followed them."
               echo ""
               echo "Anomalies did NOT: they are member-level and derived, so the findings stay on the old member until the next \`analyze\`."

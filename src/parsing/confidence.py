@@ -146,14 +146,42 @@ def score_filing_with_no_schedule(filing_type: str) -> ParseConfidence:
 
 
 def score_fd_parse(
-    text_extracted: bool, assets: int, liabilities: int, errors: Sequence[str] = ()
+    text_extracted: bool,
+    assets: int,
+    liabilities: int,
+    errors: Sequence[str] = (),
+    rows_detected: int | None = None,
 ) -> ParseConfidence:
-    """Score an annual FD parse.
+    """Score an annual FD parse, by how much of it was actually read.
 
-    Deliberately coarser than the PTR score. Annual filings produce holdings
-    rather than transactions, they carry no per-row structure this project
-    depends on, and no detector reads them the way the trade detectors read
-    PTRs. Document-level signals are what is worth recording.
+    This was binary -- 1.0 unless the parse produced nothing -- and its docstring
+    defended that as "deliberately coarser", on the grounds that annual filings
+    "carry no per-row structure this project depends on". Both halves were
+    wrong. Net worth is a sum over those rows, and the detectors built on it
+    publish dollar figures about named members of Congress.
+
+    What that cost: every one of the 927 House annual filings in the corpus
+    reported confidence 1.0, while capturing roughly half of Schedule A.
+    Measured against the documents --
+
+        Carter   (10066714)   48 holdings in the text, 22 stored   46%
+        Moulton  (10067208)  103 holdings in the text, 33 stored   32%
+        Davidson (10067467)   26 holdings in the text, 13 stored   50%
+
+    -- and the rows lost are not a random half. The largest holdings are the
+    ones pdfplumber most often fails to see as table rows, so the loss is
+    systematically biased toward understating wealth. Carter's stored net worth
+    tops out at $1,000,000 while his filing discloses "Guardian Point Capital
+    [HE] $5,000,001 - $25,000,000".
+
+    A confidence that cannot fall is not a measurement. It is also why this hid
+    for so long: every downstream guard -- `--min-confidence`, the opacity
+    index, the parsed-data page -- trusted it and saw nothing wrong.
+
+    `rows_detected` is the independent count, from `count_schedule_a_rows`. It
+    is optional so callers that genuinely have no document to count against
+    (tests, and the Senate path, which produces no assets at all today) keep the
+    old behaviour rather than being scored against zero.
     """
     warnings: List[str] = []
     if errors:
@@ -163,7 +191,20 @@ def score_fd_parse(
     if not assets and not liabilities:
         warnings.append("no assets or liabilities found in an annual filing")
         return ParseConfidence(0.0, warnings)
-    return ParseConfidence(0.0 if errors else 1.0, warnings)
+    if errors:
+        return ParseConfidence(0.0, warnings)
+
+    if not rows_detected:
+        return ParseConfidence(1.0, warnings)
+
+    captured = min(assets / rows_detected, 1.0)
+    if assets < rows_detected:
+        warnings.append(
+            f"stored {assets} of {rows_detected} Schedule A holdings the document names "
+            f"({captured:.0%}); the rest are in the text layer and in no table, and the "
+            "largest holdings are the likeliest to be missing"
+        )
+    return ParseConfidence(round(captured, 4), warnings)
 
 
 def _present(value: Any) -> bool:

@@ -105,11 +105,25 @@ def members_with_annual_filings(db, minimum: int = 2):
     """
     from sqlalchemy import func
 
+    from src.analysis.wealth_analyzer import net_worth_snapshot_clause
     from src.db.models import Disclosure, Member
 
+    # `filing_type == "FD"` matched ZERO of the 3,900 stored rows. Only
+    # `senate.py` ever wrote "FD", as a fallback for when it could not read a
+    # report title off the page, and it stopped firing once real titles were
+    # stored -- the House never used it at all. So this returned [], and BOTH
+    # detectors that call it (advanced_anomaly_detector.py:134 and :387) walked
+    # an empty roster and found nothing, silently, for months.
+    #
+    # `wealth_vs_salary` sitting at 0 findings looked like a fact about
+    # Congress. It was a fact about this line.
+    #
+    # The replacement asks what the filing IS rather than matching a label no
+    # ingester writes, and shares its definition with the net-worth series so
+    # the two cannot disagree about what an annual filing is.
     comparable = (
         db.query(Disclosure.member_id)
-        .filter(Disclosure.filing_type == "FD")
+        .filter(net_worth_snapshot_clause())
         .group_by(Disclosure.member_id)
         .having(func.count(Disclosure.id) >= minimum)
     )

@@ -19,6 +19,65 @@ logger = logging.getLogger(__name__)
 # in the log said which of the two it was, or whether either was moving.
 PROGRESS_EVERY_MEMBERS = 100
 
+# Filings that are NOT a snapshot of a sitting member's own finances, and so
+# must never become a baseline in the net-worth series.
+#
+# A CANDIDATE REPORT is the dangerous one. It is filed by somebody running for
+# the seat, before they hold it, on a different schedule -- so it describes a
+# private citizen's finances, and comparing it against their first member annual
+# measures the change of form, not a change of wealth. Measured live, that
+# produced two published accusations against sitting members:
+#
+#   Craig Goldman  published $15,008,502 of growth; against his own 2024 House
+#                  annual the figure is $551,001
+#   Laura Gillen   published $476,500; against her own annual it is $75,499 --
+#                  below the salary threshold, so it should not have fired at all
+#
+# Stored as bare "C" on the House side and as free text on the Senate side, so
+# both spellings are covered.
+#
+# This cannot reuse `house._NOT_A_MEMBER_FILING`: that set is keyed to the
+# Clerk's INDEX vocabulary, where a periodic transaction report is "P". Stored
+# rows spell it "PTR", and the Senate spells everything in prose. Two different
+# vocabularies, deliberately not conflated.
+_NOT_A_NET_WORTH_SNAPSHOT = ("c",)
+_NOT_A_NET_WORTH_PREFIX = ("candidate report",)
+
+
+def is_net_worth_snapshot(disclosure: Disclosure) -> bool:
+    """Whether this filing may stand as a member's net worth for its year.
+
+    A negative test rather than a list of permitted types: the corpus carries 33
+    distinct `filing_type` values across two chambers, House single letters and
+    Senate free text, and an allow-list would silently drop every type nobody
+    thought of -- which is the failure mode that left `filing_type == "FD"`
+    matching zero rows for months.
+    """
+    if disclosure.is_ptr:
+        return False
+    label = (disclosure.filing_type or "").strip().lower()
+    if label in _NOT_A_NET_WORTH_SNAPSHOT:
+        return False
+    return not label.startswith(_NOT_A_NET_WORTH_PREFIX)
+
+
+def net_worth_snapshot_clause():
+    """`is_net_worth_snapshot` as a SQL predicate, for counting without loading.
+
+    The same rule twice is a liability -- this project has been bitten more than
+    once by two lists that drifted -- so
+    `tests/test_wealth_baseline.py::TestTheTwoSpellingsOfTheRuleAgree` asserts
+    the Python predicate and this clause classify every stored filing
+    identically. Change one, and that test names the other.
+    """
+    from sqlalchemy import func, not_, or_
+
+    label = func.lower(func.trim(func.coalesce(Disclosure.filing_type, "")))
+    excluded = [label == value for value in _NOT_A_NET_WORTH_SNAPSHOT]
+    excluded += [label.startswith(prefix) for prefix in _NOT_A_NET_WORTH_PREFIX]
+    return (Disclosure.is_ptr == False) & not_(or_(*excluded))  # noqa: E712
+
+
 settings = get_settings()
 
 
@@ -61,13 +120,31 @@ class WealthAnalyzer:
 
         anomalies = []
 
-        # Get all disclosures ordered by year
-        disclosures = (
-            db.query(Disclosure)
-            .filter(Disclosure.member_id == member_id, Disclosure.parsed == True)
-            .order_by(Disclosure.filing_year)
-            .all()
-        )
+        # Ordered by year, then by WHEN IT WAS FILED, then by a unique key.
+        #
+        # `filing_year` alone is not an order. The growth loop below compares
+        # consecutive entries and skips any pair inside one year, so the only
+        # comparison that survives is LAST-filing-of-a-year against
+        # first-of-the-next -- which makes "last of the year" the baseline, and
+        # `ORDER BY filing_year` leaves that unspecified. Members here hold up to
+        # six filings in 2024 whose net worths differ by millions, so the
+        # published figure depended on which row the database happened to return
+        # last. Same defect as the unstable pagination order, with a worse
+        # consequence: this one names a person and a dollar amount.
+        #
+        # Filing date first, because within a year the later filing supersedes
+        # the earlier -- an amendment restates the original in full. `id` last,
+        # because `filing_date` is nullable and ties must still break.
+        disclosures = [
+            disclosure
+            for disclosure in (
+                db.query(Disclosure)
+                .filter(Disclosure.member_id == member_id, Disclosure.parsed == True)
+                .order_by(Disclosure.filing_year, Disclosure.filing_date, Disclosure.id)
+                .all()
+            )
+            if is_net_worth_snapshot(disclosure)
+        ]
 
         if len(disclosures) < 2:
             return []  # Need at least 2 years to compare
@@ -146,12 +223,30 @@ class WealthAnalyzer:
                             "severity": self._calculate_severity(
                                 growth_percent, salary_growth_percent
                             ),
-                            "title": f"Wealth growth {growth_range} exceeds salary-based expectation ({prev['year']}-{curr['year']})",
+                            # The wording names the filings compared, not just
+                            # the years. Which filing served as the baseline was
+                            # the whole defect here -- a candidate report could
+                            # win the role and nothing on the page said so -- and
+                            # a claim about someone's wealth should say what it
+                            # was measured against.
+                            #
+                            # It also earns the finding a new identity.
+                            # `anomaly_key` keys a member-level row on its TITLE,
+                            # so a corrected finding landing in the same growth
+                            # bucket and year pair as a stale one would be
+                            # silently DISCARDED by `find_existing` and the wrong
+                            # dollar figure served for ever. `_SUPERSEDED_WORDING`
+                            # carries the matching entry that deletes the old rows.
+                            "title": (
+                                f"Wealth growth {growth_range} exceeds salary-based expectation "
+                                f"({prev['year']}-{curr['year']} annual filings)"
+                            ),
                             "description": (
-                                f"Between {prev['year']} and {curr['year']}, "
+                                f"Between the {prev['year']} and {curr['year']} annual filings, "
                                 f"net worth grew by approximately {growth_amount}. "
-                                f"Congressional salary for {years_between} year(s) would not explain "
-                                f"this level of wealth accumulation."
+                                f"{years_between} year(s) of congressional salary does not account "
+                                f"for that. Both figures are midpoints of the reported bands, and "
+                                f"candidate reports are excluded from the comparison."
                             ),
                             "computed_value": Decimal(str(growth)),
                             "threshold_value": Decimal(str(max_salary_growth)),

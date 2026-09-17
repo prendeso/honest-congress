@@ -1,10 +1,11 @@
 """PDF parsing for financial disclosures."""
 
+import bisect
 import logging
 import re
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Sequence, Tuple
 
 import pdfplumber
 
@@ -37,9 +38,24 @@ VALUE_RANGES = {
 # output can only ever say "it ran"; that is what `score_fd_parse` used to do,
 # and it reported 1.0 on every one of the 927 House annual filings in the corpus
 # while capturing about half their holdings.
-_SCHEDULE_A_ASSET_CODE = re.compile(
-    r"\[(?:BA|ST|MF|OT|RP|HE|PS|EF|IH|FA|GS|WU|CS|PE|DO|OL|OI|TR|VA|IC|AB|BK|CO|EQ|FU|SA)\]"
-)
+#
+# The list used to be spelled out -- BA|ST|MF|OT|RP|HE|PS|EF|IH|FA|GS|WU|CS|PE|
+# DO|OL|OI|TR|VA|IC|AB|BK|CO|EQ|FU|SA -- and I wrote it from what I expected the
+# codes to be rather than from what the documents use. Counted over a sample of
+# House annual filings carrying 2,580 bracketed codes between them, that list
+# MISSED seven that really occur (5F, 5P, CT, DB, FN, IP, OP) and named nine that
+# occur nowhere (BK, CO, EQ, FU, IC, OI, SA, TR, VA). The Clerk publishes the
+# authoritative list at https://fd.house.gov/reference/asset-type-codes.aspx,
+# which this network cannot reach, so the shape is taken from the documents
+# instead: two uppercase alphanumerics in square brackets.
+#
+# That shape also matches a bracketed two-letter TICKER, which a few filers write
+# into a description -- [ET], [MO], [RE]. Nine of those 2,580 are that, against
+# 2,571 real codes. Both directions of the error are small and the safer one is
+# chosen deliberately: an over-count lowers `parse_confidence`, which asks a
+# human to look. An under-count is what this project has just spent a day
+# discovering it cannot afford.
+_SCHEDULE_A_ASSET_CODE = re.compile(r"\[[A-Z0-9]{2}\]")
 
 # `clean_text` reduces "SCHEDULE A: ASSETS AND "UNEARNED" INCOME" to `S A: A "U" I`,
 # so both spellings have to be accepted.
@@ -61,6 +77,13 @@ def count_schedule_a_rows(text: str) -> int:
     Bounded to the Schedule A region so Schedule B's trades, which carry the
     same codes, are not counted as holdings.
 
+    It over-counts slightly, and deliberately in that direction: a filer's own
+    comment row can name an asset code ("D: TOBACCO SETTLEMENT FING CORP VA SER
+    A1 TAXABLE SENIOR B/E CPN [CS]"), and this counts it. Over 20 House annual
+    filings naming 1,422 holdings that happens twice. An over-count lowers
+    `parse_confidence` and asks a human to look; an under-count is what let the
+    parser lose half of Schedule A unnoticed.
+
     Both spellings of the heading are accepted because `clean_text` mangles it:
     "SCHEDULE A: ASSETS AND "UNEARNED" INCOME" survives cleaning as `S A: A "U" I`.
     Matching only the uppercase form found the region in the raw page text and
@@ -77,6 +100,115 @@ def count_schedule_a_rows(text: str) -> int:
     end = _SCHEDULE_B_HEADING.search(rest)
     region = rest[: end.start()] if end else rest
     return len(_SCHEDULE_A_ASSET_CODE.findall(region))
+
+
+# The column headings each schedule prints above its rows. Schedule A is the one
+# this reader wants; the others are listed so it knows where A stops on a page
+# that carries the end of one schedule and the start of the next.
+_SCHEDULE_A_COLUMNS = ("Asset", "Owner", "Value", "Income", "Income", "Tx.")
+_OTHER_SCHEDULE_COLUMNS = (
+    ("Asset", "Owner", "Date", "Tx.", "Amount", "Cap."),  # B, transactions
+    ("Source", "Type", "Amount"),  # C, earned income
+    ("Owner", "Creditor", "Date", "Type", "Amount"),  # D, liabilities
+)
+
+# Below this a band is a hairline or a border segment rather than a row.
+_MIN_BAND_HEIGHT = 3.0
+
+# Two words are on the same visual line if their tops are within this.
+_SAME_LINE = 2.0
+
+
+def _visual_lines(words: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+    """Words grouped into the lines they are printed on, each left to right."""
+    lines: List[List[Dict[str, Any]]] = []
+    for word in sorted(words, key=lambda w: (w["top"], w["x0"])):
+        if lines and abs(word["top"] - lines[-1][0]["top"]) <= _SAME_LINE:
+            lines[-1].append(word)
+        else:
+            lines.append([word])
+    return [sorted(line, key=lambda w: w["x0"]) for line in lines]
+
+
+def _header_columns(line: Sequence[Dict[str, Any]], wanted: Sequence[str]) -> List[float] | None:
+    """Where each of `wanted` starts on this line, or None if it is not that header.
+
+    Matched in order and allowed to skip words, because the headings are
+    multi-word ("Value of Asset", "Income Type(s)") and only the first word of
+    each carries the column's left edge.
+    """
+    xs: List[float] = []
+    for word in line:
+        if len(xs) < len(wanted) and word["text"] == wanted[len(xs)]:
+            xs.append(word["x0"])
+    return xs if len(xs) == len(wanted) else None
+
+
+def _schedule_a_bands(page: Any) -> List[Tuple[float, float, List[float]]]:
+    """The row bands of Schedule A on one page, as (top, bottom, column edges).
+
+    The House annual form draws its own grid: every row of a schedule is a
+    filled rectangle, and the alternating rows that carry no fill still have the
+    1-point left and right border segments drawn around them. So the document
+    states where each logical row begins and ends, and this reads that out
+    instead of guessing it from where the text happens to wrap.
+
+    That distinction is the whole fix. `extract_tables` finds four tables on
+    Earl Carter's first page and twenty-two holdings in his whole filing; the
+    document draws forty-four bands and names forty-four holdings, including
+    "Guardian Point Capital [HE] $5,000,001 - $25,000,000", which appears in no
+    table pdfplumber can see. A holding whose description or value band wraps
+    onto a second and third line is one band here, however many lines it takes.
+
+    Column edges come from the header the page prints above the rows, so they
+    are read rather than assumed as well.
+    """
+    lines = _visual_lines(page.extract_words())
+
+    top: float | None = None
+    columns: List[float] | None = None
+    bottom = float(page.height)
+
+    for line in lines:
+        xs = _header_columns(line, _SCHEDULE_A_COLUMNS)
+        if xs is not None:
+            # Repeated on every page the schedule runs onto, so the last one
+            # wins and a continuation page is read like any other.
+            top = float(line[0]["top"])
+            columns = [x - 2 for x in xs] + [float(page.width)]
+            continue
+        if top is not None and any(
+            _header_columns(line, wanted) is not None for wanted in _OTHER_SCHEDULE_COLUMNS
+        ):
+            bottom = float(line[0]["top"])
+            break
+
+    if top is None or columns is None:
+        return []
+
+    edges = sorted(
+        {round(edge, 1) for rect in page.rects for edge in (rect["top"], rect["bottom"])}
+    )
+    inside = [y for y in edges if top < y <= bottom]
+    return [
+        (a, b, columns)
+        for a, b in zip(inside, inside[1:], strict=False)
+        if b - a > _MIN_BAND_HEIGHT
+    ]
+
+
+def _cells_in_band(
+    words: Sequence[Dict[str, Any]], top: float, bottom: float, columns: Sequence[float]
+) -> List[str]:
+    """One band's words, distributed into the columns and read in reading order."""
+    cells: List[List[Tuple[float, float, str]]] = [[] for _ in range(len(columns) - 1)]
+    for word in words:
+        if not (top - 1 <= word["top"] < bottom - 1):
+            continue
+        index = bisect.bisect_right(columns, word["x0"]) - 1
+        if 0 <= index < len(cells):
+            cells[index].append((word["top"], word["x0"], word["text"]))
+    return [clean_text(" ".join(text for _, _, text in sorted(cell))).strip() for cell in cells]
 
 
 # Common ticker patterns
@@ -200,7 +332,16 @@ class DisclosureParser:
                 result["raw_text"] = text
 
                 # Identify document sections and parse accordingly
-                result["assets"] = self._parse_assets_section(text, tables)
+                # The banded reader is preferred where the document draws its
+                # own grid, which is every House annual form seen so far. It
+                # captures roughly twice as many holdings as the table reader
+                # and about 2.7x as much value; see `_assets_from_row_bands`.
+                # `_parse_assets_section` stays as the fallback for anything
+                # that draws no bands -- older forms, and any layout not
+                # measured here.
+                result["assets"] = self._assets_from_row_bands(pdf) or self._parse_assets_section(
+                    text, tables
+                )
                 result["transactions"] = self._parse_transactions_section(text, tables)
                 result["liabilities"] = self._parse_liabilities_section(text, tables)
                 result["earned_income"] = self._parse_income_section(text, tables)
@@ -210,6 +351,54 @@ class DisclosureParser:
             result["parse_errors"].append(str(e))
 
         return result
+
+    def _assets_from_row_bands(self, pdf: Any) -> List[Dict[str, Any]]:
+        """Schedule A holdings, one per row band the form draws.
+
+        Measured against 16 House annual filings whose documents name 1,376
+        holdings between them::
+
+            table reader   722 holdings    $312,182,404 of disclosed value
+            banded reader  1,420 holdings  $847,571,007
+
+        The value grows faster than the count -- 2.71x against 1.97x -- which is
+        the bias this was looking for. pdfplumber loses the taller rows, a row
+        is taller when its description or its value band wraps, and the longest
+        bands are the largest numbers: "$5,000,001 - $25,000,000" takes two
+        lines where "$1,001 - $15,000" takes one. The holdings that went missing
+        were systematically the big ones, so every net worth this project has
+        ever published understated the wealthy by more than it understated
+        anyone else.
+
+        A band is kept only if its Asset cell carries an asset-class code. That
+        is what separates a holding from the form's own comment rows ("D: ...",
+        "L: ...", "C: ..."), which are bands too.
+        """
+        assets: List[Dict[str, Any]] = []
+        for page in pdf.pages:
+            bands = _schedule_a_bands(page)
+            if not bands:
+                continue
+            words = page.extract_words()
+            for top, bottom, columns in bands:
+                cells = _cells_in_band(words, top, bottom, columns)
+                description = cells[0] if cells else ""
+                if not _SCHEDULE_A_ASSET_CODE.search(description):
+                    continue
+                value_min, value_max = self._parse_value_range(cells[2] if len(cells) > 2 else "")
+                income_min, income_max = self._parse_value_range(cells[4] if len(cells) > 4 else "")
+                assets.append(
+                    {
+                        "description": description,
+                        "ticker": self._extract_ticker(description),
+                        "asset_type": self._determine_asset_type(description),
+                        "value_min": value_min,
+                        "value_max": value_max,
+                        "income_min": income_min,
+                        "income_max": income_max,
+                    }
+                )
+        return assets
 
     def _parse_assets_section(
         self, text: str, tables: List[List[List[str]]]

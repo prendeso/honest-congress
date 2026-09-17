@@ -28,7 +28,7 @@ from src.parsing.confidence import (
 )
 from src.parsing.pdf_parser import DisclosureParser, count_schedule_a_rows
 from src.parsing.ptr_parser import PTRParser
-from src.parsing.senate_html_parser import SenateHtmlParser
+from src.parsing.senate_html_parser import SenateHtmlParser, count_senate_asset_rows
 
 logger = logging.getLogger(__name__)
 
@@ -1081,7 +1081,35 @@ class IngestionOrchestrator:
             # are not scans; eFD simply does not serve PDFs. The suffix is set by
             # the download path, which already saves what the server actually
             # returned rather than assuming.
-            if pdf_path.suffix.lower() in {".html", ".htm"}:
+            if pdf_path.suffix.lower() in {".html", ".htm"} and not disclosure.is_ptr:
+                # A Senate ANNUAL report. This branch did not exist: every
+                # Senate filing went to `parse_senate_html`, which looks for
+                # transaction tables, and an annual report has none. So all 343
+                # Senate annual reports in the corpus stored ZERO assets and
+                # half of Congress has had no asset data on this site.
+                #
+                # Rick Scott's 2024 annual lists 390 holdings in Part 3 --
+                # including a residence at $25,000,001 - $50,000,000 -- and one
+                # debt in Part 7 at $5,000,001 - $25,000,000. None of it was
+                # here.
+                parsed = self.senate_html_parser.parse_senate_annual(str(pdf_path))
+                self._clear_parsed_rows(
+                    db,
+                    disclosure,
+                    (parsed.get("assets") or []) + (parsed.get("liabilities") or []),
+                )
+                self._store_fd_data(db, disclosure, parsed)
+                text_extracted = bool((parsed.get("raw_text") or "").strip())
+                score = score_fd_parse(
+                    text_extracted,
+                    len(parsed.get("assets") or []),
+                    len(parsed.get("liabilities") or []),
+                    parsed.get("parse_errors") or [],
+                    rows_detected=count_senate_asset_rows(
+                        pdf_path.read_text(encoding="utf-8", errors="replace")
+                    ),
+                )
+            elif pdf_path.suffix.lower() in {".html", ".htm"}:
                 parsed = self.senate_html_parser.parse_senate_html(str(pdf_path))
                 self._clear_parsed_rows(db, disclosure, parsed.get("transactions") or [])
                 self._store_ptr_data(db, disclosure, parsed)

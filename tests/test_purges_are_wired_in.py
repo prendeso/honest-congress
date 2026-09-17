@@ -62,7 +62,7 @@ CONVENTIONS = {
     "reparse-annuals": {
         "previews": "--dry-run",
         "cli": "parse",
-        "extra": ("--reparse", "--annual-only", "--limit"),
+        "extra": ("--reparse", "--annual-only", "--limit", "--min-confidence"),
     },
 }
 
@@ -307,6 +307,34 @@ class TestTheWorkflowPassesTheRightFlag:
                 f"maintenance.yml sends `{flag}` to `{command}`, which does not accept it. "
                 "argparse would abort the run."
             )
+
+    def test_an_optional_flag_is_gated_on_having_a_value(self):
+        """`min_confidence` defaults to empty, and an empty one must not be sent.
+
+        `--min-confidence` takes a value. Sending the flag with nothing after it
+        makes argparse consume the NEXT token as its value -- or abort -- so a
+        dispatch that simply left the box blank would either fail at the last
+        step or re-read the wrong set. The flag has to sit behind a test that
+        the input is non-empty.
+        """
+        branch = self.branch_of("reparse-annuals")
+        line = next(
+            line for line in branch.splitlines() if "--min-confidence" in line and "FLAGS=" in line
+        )
+        guard = branch.split(line)[0].strip().splitlines()[-1]
+
+        assert "-n " in guard and "min_confidence" in guard, (
+            f"`--min-confidence` is sent from {line.strip()!r} under {guard!r}, "
+            "which does not check the input is non-empty"
+        )
+
+    def test_the_optional_flag_is_absent_by_default(self):
+        """The default is blank, so the ordinary campaign dispatch re-reads the
+        whole queue in order rather than silently filtering it."""
+        workflow = yaml.safe_load((WORKFLOWS / self.MAINTENANCE).read_text())
+        on = workflow.get(True) or workflow.get("on")
+
+        assert on["workflow_dispatch"]["inputs"]["min_confidence"]["default"] == ""
 
     @pytest.mark.parametrize("command", sorted(CONVENTIONS))
     def test_the_declared_flags_are_the_ones_actually_sent(self, command):

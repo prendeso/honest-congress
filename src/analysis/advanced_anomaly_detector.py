@@ -96,11 +96,25 @@ def _fd_disclosures_by_member(db: Session, member_ids: List[int]) -> Dict[int, L
 
 
 def _assets_by_disclosure(db: Session, disclosure_ids: List[int]) -> Dict[int, List[Asset]]:
-    """All the assets at once, keyed by the filing they were reported on."""
+    """All the assets at once, keyed by the filing they were reported on.
+
+    Ordered by primary key. Without it the database returns rows in whatever
+    order it likes, and `rapid_asset_appreciation` reads that order: two
+    holdings a member lists under the same name are compared against each other,
+    so WHICH one counts as "before" was decided by the query planner. The same
+    defect class as the pagination and wealth-baseline bugs -- an ORDER BY that
+    is not total is a result that is not reproducible.
+    """
     by_disclosure: Dict[int, List[Asset]] = defaultdict(list)
     if not disclosure_ids:
         return by_disclosure
-    for asset in db.query(Asset).filter(Asset.disclosure_id.in_(disclosure_ids)).all():
+    rows = (
+        db.query(Asset)
+        .filter(Asset.disclosure_id.in_(disclosure_ids))
+        .order_by(Asset.disclosure_id, Asset.id)
+        .all()
+    )
+    for asset in rows:
         by_disclosure[asset.disclosure_id].append(asset)
     return by_disclosure
 
@@ -112,7 +126,13 @@ def _liabilities_by_disclosure(
     by_disclosure: Dict[int, List[Liability]] = defaultdict(list)
     if not disclosure_ids:
         return by_disclosure
-    for liability in db.query(Liability).filter(Liability.disclosure_id.in_(disclosure_ids)).all():
+    rows = (
+        db.query(Liability)
+        .filter(Liability.disclosure_id.in_(disclosure_ids))
+        .order_by(Liability.disclosure_id, Liability.id)
+        .all()
+    )
+    for liability in rows:
         by_disclosure[liability.disclosure_id].append(liability)
     return by_disclosure
 
@@ -424,6 +444,24 @@ class AdvancedAnomalyDetector:
                         list
                     )
 
+                    # One entry per (asset, YEAR), not per row. A member who
+                    # holds the same thing in two accounts lists it twice in one
+                    # filing -- "Fidelity Inv. - IRA Cash [IH]" appears twice in
+                    # Warren Davidson's 2024 annual -- and the loop below
+                    # compares CONSECUTIVE entries. Two rows from the same filing
+                    # were therefore compared against each other, as though one
+                    # had grown into the other over no time at all: `years_diff`
+                    # is 0, `annual_growth` falls back to the raw growth, and
+                    # `annual_growth > 500` still fires. A member listing the
+                    # same asset at $1-$1,000 in one account and $500,001-$1M in
+                    # another produces "49,900% appreciation (2024-2024)",
+                    # CRITICAL, under their name.
+                    #
+                    # Summing is the right arithmetic as well as the safe one:
+                    # what the member holds of that asset in that year is the
+                    # total across the accounts they hold it in.
+                    per_year: defaultdict[str, Dict[int, Dict[str, Any]]] = defaultdict(dict)
+
                     for disclosure in disclosures:
                         assets = assets_by_disclosure.get(disclosure.id, [])
 
@@ -433,18 +471,26 @@ class AdvancedAnomalyDetector:
                             if asset.value_max:
                                 value_min = float(asset.value_min or 0)
                                 value_max = float(asset.value_max)
-                                assets_by_description[key].append(
-                                    {
-                                        "year": disclosure.filing_year,
-                                        # Midpoint for display; the bounds drive
-                                        # the actual decision below.
-                                        "value": (value_min + value_max) / 2,
+                                year = disclosure.filing_year
+                                held = per_year[key].get(year)
+                                if held is None:
+                                    per_year[key][year] = {
+                                        "year": year,
                                         "value_min": value_min,
                                         "value_max": value_max,
                                         "asset_type": asset.asset_type,
                                         "description": asset.description,
                                     }
-                                )
+                                else:
+                                    held["value_min"] += value_min
+                                    held["value_max"] += value_max
+
+                    for key, by_year in per_year.items():
+                        for entry in by_year.values():
+                            # Midpoint for display; the bounds drive the actual
+                            # decision below.
+                            entry["value"] = (entry["value_min"] + entry["value_max"]) / 2
+                            assets_by_description[key].append(entry)
 
                     # Check for suspicious appreciation
                     for asset_desc, values in assets_by_description.items():

@@ -30,7 +30,7 @@ from src.parsing.pdf_parser import (
     DisclosureParser,
     _cells_in_band,
     _header_columns,
-    _schedule_a_bands,
+    _schedule_bands,
     _visual_lines,
 )
 
@@ -118,7 +118,7 @@ def carter_page() -> FakePage:
 
 class TestABandIsWhateverTheFormDrew:
     def test_every_drawn_band_below_the_header_is_a_row(self):
-        bands = _schedule_a_bands(carter_page())
+        bands = _schedule_bands(carter_page(), "A")[0]
         assert [(top, bottom) for top, bottom, _ in bands] == [
             (115.0, 145.0),
             (145.0, 175.0),
@@ -126,7 +126,7 @@ class TestABandIsWhateverTheFormDrew:
         ]
 
     def test_the_columns_come_from_the_header_the_page_prints(self):
-        _, _, columns = _schedule_a_bands(carter_page())[0]
+        _, _, columns = _schedule_bands(carter_page(), "A")[0][0]
         assert columns == [
             ASSET_X - 2,
             OWNER_X - 2,
@@ -139,14 +139,14 @@ class TestABandIsWhateverTheFormDrew:
 
     def test_a_page_with_no_schedule_a_header_yields_nothing(self):
         page = FakePage([word("Asset", ASSET_X, 100.0)], band_rects((115.0, 145.0)))
-        assert _schedule_a_bands(page) == []
+        assert _schedule_bands(page, "A")[0] == []
 
     def test_a_border_hairline_is_not_a_row(self):
         # The form draws 0.8pt segments at the corners of its grid. Reading one
         # as a row would put an empty holding into the database.
         page = carter_page()
         page.rects += band_rects((190.0, 190.8))
-        assert all(bottom - top > 3.0 for top, bottom, _ in _schedule_a_bands(page))
+        assert all(bottom - top > 3.0 for top, bottom, _ in _schedule_bands(page, "A")[0])
 
     def test_schedule_a_stops_where_the_next_schedule_starts(self):
         # Schedule B carries the same Asset and Owner columns and its Amount
@@ -162,7 +162,7 @@ class TestABandIsWhateverTheFormDrew:
             word("Cap.", TX_X, 200.0),
         ]
         page.rects += band_rects((205.0, 235.0))
-        assert [(top, bottom) for top, bottom, _ in _schedule_a_bands(page)] == [
+        assert [(top, bottom) for top, bottom, _ in _schedule_bands(page, "A")[0]] == [
             (115.0, 145.0),
             (145.0, 175.0),
             (175.0, 190.0),
@@ -172,7 +172,7 @@ class TestABandIsWhateverTheFormDrew:
 class TestWordsLandInTheColumnTheyArePrintedIn:
     def test_a_band_is_split_at_the_column_edges(self):
         page = carter_page()
-        _, _, columns = _schedule_a_bands(page)[0]
+        _, _, columns = _schedule_bands(page, "A")[0][0]
         cells = _cells_in_band(page.extract_words(), 115.0, 145.0, columns)
         assert cells[0] == "Ameris Bank [BA]"
         assert cells[2] == "$1,000,001 - $5,000,000"
@@ -181,7 +181,7 @@ class TestWordsLandInTheColumnTheyArePrintedIn:
 
     def test_a_wrapped_value_band_is_rejoined_in_reading_order(self):
         page = carter_page()
-        _, _, columns = _schedule_a_bands(page)[1]
+        _, _, columns = _schedule_bands(page, "A")[0][1]
         cells = _cells_in_band(page.extract_words(), 145.0, 175.0, columns)
         assert cells[2] == "$5,000,001 - $25,000,000"
 

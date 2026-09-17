@@ -53,6 +53,7 @@ CONVENTIONS = {
     "purge-disabled": {"previews": "--dry-run"},
     "purge-non-awards": {"previews": "--dry-run"},
     "repair-house-attribution": {"writes": "--apply"},
+    "move-filing": {"writes": "--apply"},
 }
 
 

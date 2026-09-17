@@ -82,10 +82,47 @@ class Settings(BaseSettings):
     #     Remove them once someone has looked at a sample of their output and
     #     can say it is sound. That is a lower bar than the three above, which
     #     need price data that does not exist. Do not conflate the two.
+    #
+    #   excessive_wealth_growth - held for the length of one operation, and for
+    #     a different reason again: nothing is wrong with it and its input is
+    #     about to change scale underneath it.
+    #
+    #     The parsers were just corrected. A House annual now yields roughly
+    #     twice the holdings and 2.7x the disclosed value; Senate annuals yield
+    #     assets where they yielded none; liabilities carry amounts where 85%
+    #     carried none. Re-reading 1,300-1,600 stored filings takes several
+    #     dispatches, and while it runs the corpus is MIXED -- some filings read
+    #     by the new parser, some by the old.
+    #
+    #     This detector compares CONSECUTIVE annual filings
+    #     (`wealth_analyzer.py:170-195`). Nothing in the analysis layer reads
+    #     `parse_confidence`, so it cannot tell a corrected filing from a stale
+    #     one; both are just `parsed=True`. The re-parse queue is ordered by
+    #     `updated_at`, so for roughly half the members mid-campaign the LATER
+    #     year is corrected first and their net worth appears to double. Its
+    #     threshold is a floor, `_calculate_severity` escalates above 500%, and
+    #     it is in NO_NULL_MODEL so it carries a NULL q-value and always passes
+    #     the FDR filter. On the ~450 members with two or more annual filings
+    #     that is on the order of a hundred false accusations against named
+    #     people -- the Craig Goldman failure again, at scale.
+    #
+    #     Finishing the re-parse before the nightly is the plan. This is what
+    #     makes an unexpected `analyze` harmless: a delayed cron, a `rebuild`
+    #     dispatch, or the admin dashboard's Analyze / Regenerate / Full Refresh
+    #     buttons, any of which would otherwise publish from the mixed corpus.
+    #
+    #     Disabling does not retract what it already wrote -- serving applies no
+    #     type filter -- so `purge-disabled` runs with it. That also empties the
+    #     table, so when the hold lifts it re-derives from scratch rather than
+    #     inserting corrected findings BESIDE the broken ones, which is what
+    #     `anomaly_key` identity-by-title would otherwise do.
+    #
+    #     Remove once the re-parse is complete and somebody has read a sample of
+    #     what it says about the corrected corpus.
     disabled_anomaly_types: str = Field(
         default=(
             "outperforming_trades,perfect_timing,loss_avoidance,"
-            "wealth_vs_salary,rapid_asset_appreciation"
+            "wealth_vs_salary,rapid_asset_appreciation,excessive_wealth_growth"
         ),
         alias="DISABLED_ANOMALY_TYPES",
     )

@@ -130,21 +130,51 @@ class TestThePageRendersTheDeclaredUnit:
     """
 
     @staticmethod
-    def render(anomaly_type, value):
+    def catalogue():
+        """Every detector's declared unit, not just the ones switched on today.
+
+        `as_dicts()` is built from `live_detectors()`, so a detector held in
+        configuration drops out of it. That is right for the page's legend --
+        the site should not describe work it is not doing -- and wrong for this
+        test, which is about `formatValue` honouring a DECLARED unit. The
+        declaration lives on the detector in `DETECTORS` and does not change
+        when the detector is switched off.
+
+        Building from `as_dicts()` made these tests fail the moment
+        `excessive_wealth_growth` was held for the re-parse, even though nothing
+        about `formatValue` had changed -- and it would have kept failing,
+        because that detector is the only one in the catalogue that declares
+        `dollars`. A test that breaks on a configuration change was testing the
+        configuration.
+        """
+        return [
+            {"anomaly_type": d.anomaly_type, "name": d.name, "value_unit": d.value_unit}
+            for d in DETECTORS
+        ]
+
+    @staticmethod
+    def render(anomaly_type, value, types=None):
         html = TEMPLATE.read_text()
 
         body = re.search(r"\n(\s*)formatValue\(value, type\) \{.*?\n\1\},\n", html, re.S)
         assert body, "formatValue is no longer in the template under that signature"
         dollars = re.search(r"\n(\s*)formatDollars\(n\) \{.*?\n\1\}\n", html, re.S)
         assert dollars, "formatDollars is no longer in the template"
+        lookup = re.search(r"\n(\s*)detectorFor\(type\) \{.*?\n\1\},\n", html, re.S)
+        assert lookup, "detectorFor is no longer in the template under that signature"
 
-        types = json.dumps(as_dicts())
+        types = json.dumps(
+            TestThePageRendersTheDeclaredUnit.catalogue() if types is None else types
+        )
+        # `detectorFor` is extracted from the shipped template too, not stubbed
+        # here. A stub is how the first version of the fallback test passed
+        # against a mutation that gave the fallback a unit: it was exercising
+        # this file's idea of the lookup rather than the page's. Same reason
+        # `formatValue` was never copied in.
         script = f"""
-        const detectorTypes = {types};
         const page = {{
-            detectorFor(type) {{
-                return detectorTypes.find(d => d.anomaly_type === type) || {{value_unit: null}};
-            }},
+            detectorTypes: {types},
+            {lookup.group(0).strip().rstrip(",")},
             {body.group(0).strip().rstrip(",")},
             {dollars.group(0).strip()}
         }};
@@ -161,6 +191,21 @@ class TestThePageRendersTheDeclaredUnit:
 
     def test_the_salary_threshold_beside_it_is_dollars_too(self):
         assert self.render("excessive_wealth_growth", 174000.0) == "$174K"
+
+    def test_a_held_detectors_leftover_finding_prints_a_bare_number(self):
+        """The deliberate fallback at `detectorFor`, exercised rather than assumed.
+
+        A detector held in configuration keeps its stored rows until
+        `purge-disabled` runs, and the page still has to render them. It drops
+        out of `/api/anomalies/types`, so `detectorFor` returns the fallback --
+        which supplies no unit ON PURPOSE, because guessing one for a detector
+        the catalogue no longer describes is how "$2,625,000" became
+        "2625000.0%" in the first place.
+
+        So the number prints bare. That is the correct outcome, and it is worth
+        a test of its own now that a real detector takes this path.
+        """
+        assert self.render("excessive_wealth_growth", 2625000.0, types=[]) == "2,625,000"
 
     @pytest.mark.parametrize(
         "anomaly_type,value",

@@ -31,6 +31,8 @@ reintroduced here by a second implementation.
 """
 
 import logging
+import re
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -169,6 +171,148 @@ class SenateHtmlParser(PTRParser):
             result["quality"] = quality.as_dict()
 
         return result
+
+    def parse_senate_annual(self, path: str) -> Dict[str, Any]:
+        """Read a Senate ANNUAL report. Same result shape as `parse_pdf`.
+
+        343 of 343 Senate annual reports in the corpus stored ZERO assets, and
+        the reason was not a bug in anything: **nothing in this project had ever
+        read one**. `parse_disclosure` dispatches on the file suffix, so every
+        Senate filing went to `parse_senate_html`, which looks for transaction
+        tables. An annual report has none, so it was recorded as an empty parse
+        -- and half of Congress has had no asset data on this site ever since.
+
+        Rick Scott's 2024 annual names 390 holdings in Part 3, including a
+        personal residence at $25,000,001 - $50,000,000, and one debt in Part 7
+        at $5,000,001 - $25,000,000. The database had none of it.
+
+        eFD's markup is better than the House PDFs: Part 3 is a real table with
+        named columns, the asset name is in its own element, and eFD states the
+        asset class instead of leaving it to be guessed from a description. What
+        it costs is elsewhere -- see `_senate_band` for two bands whose meaning a
+        generic reader gets exactly wrong, and for the one that says a spouse's
+        holding is worth "over $1,000,000" with no upper bound, which is a real
+        ceiling on what Senate wealth can ever be known to be.
+        """
+        result: Dict[str, Any] = {
+            "assets": [],
+            "transactions": [],
+            "liabilities": [],
+            "earned_income": [],
+            "positions": [],
+            "agreements": [],
+            "parse_errors": [],
+            "raw_text": "",
+        }
+
+        try:
+            markup = Path(path).read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            result["parse_errors"].append(f"could not read {path}: {e}")
+            return result
+
+        try:
+            soup = BeautifulSoup(markup, "html.parser")
+            result["raw_text"] = soup.get_text(" ", strip=True)
+
+            if _is_a_page_image_scan(soup):
+                # Nothing to read, and not this parser's failure. The same
+                # distinction `parse_senate_html` draws.
+                result["raw_text"] = ""
+                result["parse_errors"].append(
+                    "a scanned paper filing: eFD serves it as page images, "
+                    "so there is no asset table to read"
+                )
+                return result
+
+            result["assets"] = self._senate_assets(soup)
+            result["liabilities"] = self._senate_liabilities(soup)
+
+            logger.info(
+                "Parsed %d assets and %d liabilities from a Senate annual report",
+                len(result["assets"]),
+                len(result["liabilities"]),
+            )
+        except Exception as e:  # pragma: no cover - defensive, mirrors parse_ptr
+            logger.error("Error parsing Senate annual report %s: %s", path, e)
+            result["parse_errors"].append(str(e))
+
+        return result
+
+    def _senate_assets(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
+        """Part 3, one holding per row."""
+        table = _part_table(soup, "Part 3")
+        if table is None:
+            return []
+        columns = _named_columns(table, _ASSET_COLUMNS)
+        if "value" not in columns:
+            return []
+
+        rows = [(_row_number(cells), cells) for cells in _body_rows(table)]
+        itemised = {
+            number.split(".")[0]
+            for number, cells in rows
+            if "." in number and _senate_band(_cell(cells, columns, "value"))[0] is not None
+        }
+
+        assets: List[Dict[str, Any]] = []
+        for number, cells in rows:
+            description = _asset_name(cells)
+            if not description:
+                continue
+            value_min, value_max = _senate_band(_cell(cells, columns, "value"))
+            if number and "." not in number and number in itemised:
+                # A holding company whose contents eFD lists separately beneath
+                # it. Its stated value IS those contents, so counting both sums
+                # the container and what is inside it -- the one way an asset
+                # reader can OVERstate somebody, and this project has published
+                # enough overstatements already.
+                #
+                # The row is kept rather than dropped, so what is stored still
+                # corresponds one-to-one with what the filing lists and the
+                # confidence ratio stays meaningful. Only the value is set
+                # aside. Rick Scott's 2024 annual has nine such containers and
+                # every one of them states "--" anyway, so nothing observed is
+                # changed by this; it is here for the filing that does not.
+                value_min, value_max = None, None
+            income_min, income_max = _senate_band(_cell(cells, columns, "income"))
+            assets.append(
+                {
+                    "description": description,
+                    "ticker": self._extract_ticker(description),
+                    "asset_type": _senate_asset_type(_cell(cells, columns, "asset_type")),
+                    "value_min": value_min,
+                    "value_max": value_max,
+                    "income_min": income_min,
+                    "income_max": income_max,
+                }
+            )
+        return assets
+
+    def _senate_liabilities(self, soup: BeautifulSoup) -> List[Dict[str, Any]]:
+        """Part 7, one debt per row."""
+        table = _part_table(soup, "Part 7")
+        if table is None:
+            return []
+        columns = _named_columns(table, _LIABILITY_COLUMNS)
+        if "creditor" not in columns or "amount" not in columns:
+            return []
+
+        liabilities: List[Dict[str, Any]] = []
+        for cells in _body_rows(table):
+            creditor = _cell(cells, columns, "creditor")
+            amount_min, amount_max = _senate_band(_cell(cells, columns, "amount"))
+            if not creditor or amount_min is None:
+                continue
+            liabilities.append(
+                {
+                    "creditor": creditor,
+                    "description": _cell(cells, columns, "type"),
+                    "amount_min": amount_min,
+                    "amount_max": amount_max,
+                }
+            )
+        return liabilities
 
     def _transaction_tables(self, soup: BeautifulSoup):
         """Every transaction table in the filing, as (table, column index).
@@ -312,3 +456,158 @@ class SenateHtmlParser(PTRParser):
         # while it only ever read one table.
         quality.rows_parsed += len(transactions)
         return transactions
+
+
+# What Part 3 and Part 7 call their columns. Matched on the header text so a
+# reordering is eFD's to make -- the same rule the transaction tables follow.
+_ASSET_COLUMNS = {
+    "asset": "description",
+    "asset type": "asset_type",
+    "owner": "owner",
+    "value": "value",
+    "income type": "income_type",
+    "income": "income",
+}
+_LIABILITY_COLUMNS = {
+    "incurred": "incurred",
+    "debtor": "owner",
+    "type": "type",
+    "amount": "amount",
+    "creditor": "creditor",
+}
+
+# Bands eFD writes that are not "$A - $B", and that the generic reader gets
+# exactly wrong rather than merely missing:
+#
+#   "None (or less than $1,001)" reads as an EXACT $1,001 -- it is the band for
+#   an asset worth less than that, and 116 of Rick Scott's 390 holdings carry
+#   it, so a naive read adds $116,116 of wealth that his filing denies.
+#
+#   "Over $1,000,000 and held independently by spouse or dependent child" reads
+#   as an exact $1,000,000 and is in fact unbounded above. 50 of his holdings
+#   carry it. Senate rules let a filer stop counting there for a spouse's
+#   separate property, which is a real limit on what this project can ever know
+#   about Senate wealth, and recording it as a flat million states a number the
+#   document does not.
+_SENATE_UNBOUNDED = "over $1,000,000 and held independently by spouse or dependent child"
+_LESS_THAN = re.compile(r"none\s*\(or less than\s*\$?([\d,]+)\s*\)", re.IGNORECASE)
+_OVER = re.compile(r"^over\s*\$?([\d,]+)", re.IGNORECASE)
+_BAND = re.compile(r"\$\s*([\d,]+(?:\.\d{1,2})?)\s*-\s*\$\s*([\d,]+(?:\.\d{1,2})?)")
+
+# eFD names the asset class in its own column, which is better evidence than
+# guessing from a description. Checked against the longest match first, so
+# "Government Securities Municipal Security" is a bond rather than falling
+# through on the word "security".
+_ASSET_TYPE_BY_PHRASE = (
+    ("exchange traded fund", "mutual_fund"),
+    ("mutual fund", "mutual_fund"),
+    ("government securities", "bond"),
+    ("municipal security", "bond"),
+    ("treasury", "bond"),
+    ("corporate bond", "bond"),
+    ("corporate securities stock", "stock"),
+    ("stock", "stock"),
+    ("real estate", "real_estate"),
+    ("bank deposit", "bank_account"),
+    ("retirement", "retirement"),
+    ("ira", "retirement"),
+    ("401", "retirement"),
+)
+
+
+def _senate_band(text: str) -> tuple[Decimal | None, Decimal | None]:
+    """One of eFD's value bands, as (min, max). Unknown text yields nothing."""
+    value = _clean(text)
+    if not value or value.lower() in _EMPTY:
+        return None, None
+    if value.lower() == _SENATE_UNBOUNDED:
+        return Decimal(1000001), None
+    less_than = _LESS_THAN.search(value)
+    if less_than:
+        return Decimal(0), Decimal(less_than.group(1).replace(",", "")) - 1
+    band = _BAND.search(value)
+    if band:
+        return (
+            Decimal(band.group(1).replace(",", "")),
+            Decimal(band.group(2).replace(",", "")),
+        )
+    over = _OVER.match(value)
+    if over:
+        return Decimal(over.group(1).replace(",", "")) + 1, None
+    return None, None
+
+
+def _senate_asset_type(text: str) -> str:
+    label = _clean(text).lower()
+    for phrase, kind in _ASSET_TYPE_BY_PHRASE:
+        if phrase in label:
+            return kind
+    return "other"
+
+
+def _part_table(soup: BeautifulSoup, part: str):
+    """The table under a numbered Part heading, or None if that Part is absent."""
+    for heading in soup.find_all(["h2", "h3", "h4"]):
+        if _clean(heading.get_text(" ", strip=True)).startswith(part):
+            return heading.find_next("table")
+    return None
+
+
+def _named_columns(table, aliases: Dict[str, str]) -> Dict[str, int]:
+    """Column index per field, keyed by what the header says rather than order."""
+    header = table.find("thead")
+    cells = (header or table).find_all("th")
+    columns: Dict[str, int] = {}
+    for index, cell in enumerate(cells):
+        label = _clean(cell.get_text(" ", strip=True)).lower()
+        field = aliases.get(label)
+        if field and field not in columns:
+            columns[field] = index
+    return columns
+
+
+def _body_rows(table) -> List[List[Any]]:
+    body = table.find("tbody") or table
+    return [row.find_all("td") for row in body.find_all("tr") if row.find_all("td")]
+
+
+def _cell(cells: List[Any], columns: Dict[str, int], field: str) -> str:
+    index = columns.get(field)
+    if index is None or index >= len(cells):
+        return ""
+    return _clean(cells[index].get_text(" ", strip=True))
+
+
+def _row_number(cells: List[Any]) -> str:
+    """eFD's own row number: "7" for a holding, "7.1" for one inside it."""
+    return _clean(cells[0].get_text(" ", strip=True)) if cells else ""
+
+
+def _asset_name(cells: List[Any]) -> str:
+    """The holding's name, without eFD's company and filer-comment annotations.
+
+    The name is in its own element. Taking the cell's whole text instead reads
+    "Personal Residence LLC Company: Personal Residence LLC (Naples, FL)
+    Description: Holding company for personal residence" as the asset.
+    """
+    for cell in cells:
+        name = cell.find("strong")
+        if name is not None:
+            return _clean(name.get_text(" ", strip=True))
+    return ""
+
+
+def count_senate_asset_rows(markup: str) -> int:
+    """How many holdings Part 3 lists, counted from the markup.
+
+    The Senate counterpart of `count_schedule_a_rows`, and it exists for the
+    same reason: a score derived from the parser's own output can only ever say
+    "it ran". This counts the rows eFD prints, against however many the parser
+    turns into stored holdings, so a header eFD renames or a row shape this
+    reader does not know shows up as a confidence below 1.0 instead of as
+    silence.
+    """
+    if not markup:
+        return 0
+    table = _part_table(BeautifulSoup(markup, "html.parser"), "Part 3")
+    return len(_body_rows(table)) if table is not None else 0

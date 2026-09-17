@@ -102,15 +102,20 @@ def count_schedule_a_rows(text: str) -> int:
     return len(_SCHEDULE_A_ASSET_CODE.findall(region))
 
 
-# The column headings each schedule prints above its rows. Schedule A is the one
-# this reader wants; the others are listed so it knows where A stops on a page
-# that carries the end of one schedule and the start of the next.
-_SCHEDULE_A_COLUMNS = ("Asset", "Owner", "Value", "Income", "Income", "Tx.")
-_OTHER_SCHEDULE_COLUMNS = (
-    ("Asset", "Owner", "Date", "Tx.", "Amount", "Cap."),  # B, transactions
-    ("Source", "Type", "Amount"),  # C, earned income
-    ("Owner", "Creditor", "Date", "Type", "Amount"),  # D, liabilities
-)
+# The column headings each schedule prints above its rows, keyed by the schedule.
+# A reader wants one of these and needs the others, so it knows where its own
+# schedule stops on a page carrying the end of one and the start of the next.
+_SCHEDULE_COLUMNS = {
+    "A": ("Asset", "Owner", "Value", "Income", "Income", "Tx."),  # holdings
+    "B": ("Asset", "Owner", "Date", "Tx.", "Amount", "Cap."),  # transactions
+    "C": ("Source", "Type", "Amount"),  # earned income
+    "D": ("Owner", "Creditor", "Date", "Type", "Amount"),  # liabilities
+}
+
+# Schedules E onward carry no column header of this shape, so a heading is the
+# only thing that says the previous schedule has ended. `clean_text` reduces
+# "SCHEDULE E: POSITIONS" to `S E: P`, and both spellings occur.
+_SCHEDULE_HEADING = re.compile(r"^S(?:CHEDULE)?\s+[A-I]\s*:", re.IGNORECASE)
 
 # Below this a band is a hairline or a border segment rather than a row.
 _MIN_BAND_HEIGHT = 3.0
@@ -144,8 +149,13 @@ def _header_columns(line: Sequence[Dict[str, Any]], wanted: Sequence[str]) -> Li
     return xs if len(xs) == len(wanted) else None
 
 
-def _schedule_a_bands(page: Any) -> List[Tuple[float, float, List[float]]]:
-    """The row bands of Schedule A on one page, as (top, bottom, column edges).
+def _schedule_bands(
+    page: Any, schedule: str, carried: Sequence[float] | None = None
+) -> Tuple[List[Tuple[float, float, List[float]]], List[float] | None]:
+    """The row bands of one schedule on one page, and whether it is still open.
+
+    Returns (bands, columns still open at the foot of the page). Each band is
+    (top, bottom, column edges).
 
     The House annual form draws its own grid: every row of a schedule is a
     filled rectangle, and the alternating rows that carry no fill still have the
@@ -162,39 +172,54 @@ def _schedule_a_bands(page: Any) -> List[Tuple[float, float, List[float]]]:
 
     Column edges come from the header the page prints above the rows, so they
     are read rather than assumed as well.
+
+    `carried` is the previous page's still-open columns. A schedule that runs
+    past the foot of a page usually reprints its header at the top of the next
+    one, but not always: Schedule D of Nancy Pelosi's 2024 annual spills one row
+    onto the following page with no header above it, and that row is her largest
+    debt -- a $25,000,001 - $50,000,000 brokerage margin account. Requiring a
+    header on every page silently dropped it, which is the same shape of error
+    this whole change exists to correct.
     """
+    wanted = _SCHEDULE_COLUMNS[schedule]
+    others = [cols for letter, cols in _SCHEDULE_COLUMNS.items() if letter != schedule]
     lines = _visual_lines(page.extract_words())
 
-    top: float | None = None
-    columns: List[float] | None = None
+    top: float | None = 0.0 if carried is not None else None
+    columns: List[float] | None = list(carried) if carried is not None else None
     bottom = float(page.height)
+    closed = False
 
     for line in lines:
-        xs = _header_columns(line, _SCHEDULE_A_COLUMNS)
+        xs = _header_columns(line, wanted)
         if xs is not None:
-            # Repeated on every page the schedule runs onto, so the last one
-            # wins and a continuation page is read like any other.
             top = float(line[0]["top"])
             columns = [x - 2 for x in xs] + [float(page.width)]
+            closed = False
             continue
-        if top is not None and any(
-            _header_columns(line, wanted) is not None for wanted in _OTHER_SCHEDULE_COLUMNS
+        if top is None:
+            continue
+        text = clean_text(" ".join(word["text"] for word in line)).strip()
+        if any(_header_columns(line, cols) is not None for cols in others) or (
+            _SCHEDULE_HEADING.match(text) and not text.upper().startswith(f"S {schedule}:")
         ):
             bottom = float(line[0]["top"])
+            closed = True
             break
 
     if top is None or columns is None:
-        return []
+        return [], None
 
     edges = sorted(
         {round(edge, 1) for rect in page.rects for edge in (rect["top"], rect["bottom"])}
     )
     inside = [y for y in edges if top < y <= bottom]
-    return [
+    bands = [
         (a, b, columns)
         for a, b in zip(inside, inside[1:], strict=False)
         if b - a > _MIN_BAND_HEIGHT
     ]
+    return bands, (None if closed else columns)
 
 
 def _cells_in_band(
@@ -343,7 +368,9 @@ class DisclosureParser:
                     text, tables
                 )
                 result["transactions"] = self._parse_transactions_section(text, tables)
-                result["liabilities"] = self._parse_liabilities_section(text, tables)
+                result["liabilities"] = self._liabilities_from_row_bands(
+                    pdf
+                ) or self._parse_liabilities_section(text, tables)
                 result["earned_income"] = self._parse_income_section(text, tables)
 
         except Exception as e:
@@ -375,8 +402,9 @@ class DisclosureParser:
         "L: ...", "C: ..."), which are bands too.
         """
         assets: List[Dict[str, Any]] = []
+        carried: List[float] | None = None
         for page in pdf.pages:
-            bands = _schedule_a_bands(page)
+            bands, carried = _schedule_bands(page, "A", carried)
             if not bands:
                 continue
             words = page.extract_words()
@@ -586,6 +614,55 @@ class DisclosureParser:
             "amount_max": amount_max,
             "owner": owner,
         }
+
+    def _liabilities_from_row_bands(self, pdf: Any) -> List[Dict[str, Any]]:
+        """Schedule D debts, one per row band the form draws.
+
+        Schedule D was losing its rows the same way Schedule A was, and the
+        damage runs the other direction: `_calculate_wealth_progression`
+        SUBTRACTS liabilities, so a debt the parser cannot read raises the
+        member's apparent net worth.
+
+        What the table reader made of it, measured over the same 20 House annual
+        filings: 114 debts, of which **97 (85%) carried no amount at all**. Not
+        because the documents omit one -- the whole row had been flattened into
+        the creditor field, band and all::
+
+            creditor:   "Town & Country Bank November 2014 138 Acre Farm,
+                         House, Hay & Cattle $100,001 -\n$250,000"
+            amount_min: None
+
+        Read from the bands the form draws, that same row is five cells: owner
+        JT, creditor "Town & Country Bank", incurred November 2014, type "138
+        Acre Farm, House, Hay & Cattle", amount $100,001 - $250,000.
+
+        A band is kept only if it carries both a creditor and an amount, which
+        is what separates a debt from the trailing "no liabilities disclosed"
+        note and from the heading of whatever schedule follows.
+        """
+        liabilities: List[Dict[str, Any]] = []
+        carried: List[float] | None = None
+        for page in pdf.pages:
+            bands, carried = _schedule_bands(page, "D", carried)
+            if not bands:
+                continue
+            words = page.extract_words()
+            for top, bottom, columns in bands:
+                cells = _cells_in_band(words, top, bottom, columns)
+                cells += [""] * (5 - len(cells))
+                creditor, incurred, description, amount = cells[1], cells[2], cells[3], cells[4]
+                amount_min, amount_max = self._parse_value_range(amount)
+                if not creditor or amount_min is None:
+                    continue
+                liabilities.append(
+                    {
+                        "creditor": creditor,
+                        "description": description or incurred,
+                        "amount_min": amount_min,
+                        "amount_max": amount_max,
+                    }
+                )
+        return liabilities
 
     def _parse_liabilities_section(
         self, text: str, tables: List[List[List[str]]]

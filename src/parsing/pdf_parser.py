@@ -102,14 +102,37 @@ def count_schedule_a_rows(text: str) -> int:
     return len(_SCHEDULE_A_ASSET_CODE.findall(region))
 
 
-# The column headings each schedule prints above its rows, keyed by the schedule.
-# A reader wants one of these and needs the others, so it knows where its own
-# schedule stops on a page carrying the end of one and the start of the next.
+# The column headings each schedule prints above its rows, keyed by the schedule,
+# each an ordered list of the shapes that schedule's header is known to take. A
+# reader wants one schedule's shapes and needs the others, so it knows where its
+# own schedule stops on a page carrying the end of one and the start of the next.
+#
+# Schedule A has two, and missing the second one cost half of every filing that
+# uses it. The House annual form comes in a variant with NO "Tx. > $1,000?"
+# column, ending in a second Income instead:
+#
+#     Asset Owner Value of Asset Income Type(s) Income Tx. >     <- the common one
+#     Asset Owner Value of Asset Income Type(s) Income Income    <- and this
+#
+# Requiring the literal "Tx." made `_header_columns` return None on the variant,
+# so `_schedule_bands` found no columns, returned nothing, and the whole filing
+# fell back to the table reader that captures about half. Found in the live
+# re-parse: documents 10071959, 10067533 and 10060579 stored 4 of 8, 6 of 13 and
+# 8 of 16 holdings and scored 0.50, 0.46 and 0.50 -- which is the honest
+# confidence from #80 pointing straight at a defect the parse itself could not
+# see.
+#
+# ORDER MATTERS. The longer shape is tried first: matching the five-column one
+# against a header that does have a Tx column would leave the Income cell
+# running to the page edge and swallowing that column's contents.
 _SCHEDULE_COLUMNS = {
-    "A": ("Asset", "Owner", "Value", "Income", "Income", "Tx."),  # holdings
-    "B": ("Asset", "Owner", "Date", "Tx.", "Amount", "Cap."),  # transactions
-    "C": ("Source", "Type", "Amount"),  # earned income
-    "D": ("Owner", "Creditor", "Date", "Type", "Amount"),  # liabilities
+    "A": (  # holdings
+        ("Asset", "Owner", "Value", "Income", "Income", "Tx."),
+        ("Asset", "Owner", "Value", "Income", "Income"),
+    ),
+    "B": (("Asset", "Owner", "Date", "Tx.", "Amount", "Cap."),),  # transactions
+    "C": (("Source", "Type", "Amount"),),  # earned income
+    "D": (("Owner", "Creditor", "Date", "Type", "Amount"),),  # liabilities
 }
 
 # Schedules E onward carry no column header of this shape, so a heading is the
@@ -181,8 +204,13 @@ def _schedule_bands(
     header on every page silently dropped it, which is the same shape of error
     this whole change exists to correct.
     """
-    wanted = _SCHEDULE_COLUMNS[schedule]
-    others = [cols for letter, cols in _SCHEDULE_COLUMNS.items() if letter != schedule]
+    shapes = _SCHEDULE_COLUMNS[schedule]
+    others = [
+        cols
+        for letter, alternatives in _SCHEDULE_COLUMNS.items()
+        if letter != schedule
+        for cols in alternatives
+    ]
     lines = _visual_lines(page.extract_words())
 
     top: float | None = 0.0 if carried is not None else None
@@ -191,7 +219,10 @@ def _schedule_bands(
     closed = False
 
     for line in lines:
-        xs = _header_columns(line, wanted)
+        xs = next(
+            (found for cols in shapes if (found := _header_columns(line, cols)) is not None),
+            None,
+        )
         if xs is not None:
             top = float(line[0]["top"])
             columns = [x - 2 for x in xs] + [float(page.width)]

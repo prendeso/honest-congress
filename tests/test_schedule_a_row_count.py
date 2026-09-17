@@ -43,6 +43,60 @@ S D: L
 """
 
 
+NESTED = """S A: A  "U" I
+Asset Owner Value of Asset Income Type(s) Income Tx. >
+457 Nationwide Retirement Plan > AMCAP Fund (RAFGX) [MF] [MF] $100,001 - Tax-Deferred
+Florida Retirement System [DB] [PE] SP Undetermined Tax-Deferred
+Athene IRA #1 > Athene Fixed Indez Annuity [FN] [MF] SP $250,001 - Tax-Deferred
+Diamondback Energy, Inc. (FANG) [ST] $15,001 - $50,000 Dividends
+S B: T
+"""
+
+
+class TestAHoldingMayCarryMoreThanOneCode:
+    """The count used to assert "every holding carries exactly one". It is false.
+
+    A holding nested inside a plan prints the container's class beside its own,
+    so one row carries two codes. Counting codes therefore ran ahead of the
+    truth and marked COMPLETE filings as half-read: document 10067730 stores all
+    25 of its holdings and was scored 0.714 against 35 codes, which put it in
+    the re-read queue permanently.
+
+    Adjacent codes are collapsed because they demonstrably belong to one
+    holding -- checked against that filing's stored descriptions, not assumed.
+    """
+
+    def test_a_nested_holding_counts_once(self):
+        assert count_schedule_a_rows(NESTED) == 4
+
+    def test_counting_codes_would_say_seven(self):
+        # The number this returned before, kept as the thing being fixed.
+        import re
+
+        region = NESTED.split("S B:")[0]
+        assert len(re.findall(r"\[[A-Z0-9]{2}\]", region)) == 7
+
+    def test_a_single_code_still_counts_once(self):
+        assert (
+            count_schedule_a_rows(
+                'S A: A  "U" I\nDiamondback Energy, Inc. (FANG) [ST] $15,001 - $50,000\nS B: T\n'
+            )
+            == 1
+        )
+
+    def test_codes_on_separate_lines_are_separate_holdings(self):
+        # Only ADJACENT codes collapse. Two holdings on two lines stay two, or
+        # the count would under-report -- the direction that hid the original
+        # defect.
+        assert (
+            count_schedule_a_rows(
+                'S A: A  "U" I\nFirstEnergy Corp. (FE) [ST] $1 - $1,000\n'
+                "Ford Expedition [OT] JT $15,001 - $50,000\nS B: T\n"
+            )
+            == 2
+        )
+
+
 class TestItCountsOnlyScheduleA:
     def test_it_counts_the_holdings(self):
         assert count_schedule_a_rows(CARTER) == 5

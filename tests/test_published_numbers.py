@@ -245,7 +245,7 @@ class TestTheReadmeMatchesTheCatalogue:
     def test_the_disabled_count_is_right(self):
         text = self.README.read_text()
         actual = len(get_settings().disabled_anomaly_types_set)
-        words = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five"}
+        words = {1: "One", 2: "Two", 3: "Three", 4: "Four", 5: "Five", 6: "Six", 7: "Seven"}
 
         assert f"{words[actual]} detectors are disabled" in text, (
             f"README does not say {words[actual]} detectors are disabled, but {actual} are"

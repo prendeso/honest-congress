@@ -12,11 +12,14 @@ inconsistencies in reported wealth or trading activity.
 - **PDF parsing** — assets, transactions, and liabilities extracted from
   disclosure documents (pdfplumber).
 - **Anomaly detection** — detectors covering late PTR filings, large trades,
-  sector concentration, trade clustering, volume spikes, excessive wealth
-  growth, and donor / lobbying / contract conflict windows.
-  Five detectors are disabled by default, for two different reasons: three
-  because their output is not defensible, and two held pending a first read of
-  output nobody has seen — see [docs/DECISIONS.md](docs/DECISIONS.md).
+  sector concentration, trade clustering, volume spikes, and donor / lobbying /
+  contract conflict windows.
+  Six detectors are disabled by default, for three different reasons: three
+  because their output is not defensible, two held pending a first read of
+  output nobody has seen, and one — excessive wealth growth — held for the
+  length of a re-parse, because it compares consecutive annual filings and the
+  corpus is being re-read a batch at a time. See
+  [docs/DECISIONS.md](docs/DECISIONS.md).
 - **Web dashboard** — server-rendered Jinja2 templates + Alpine.js for
   members, disclosures, trades, parsed data, and anomalies.
 - **STOCK Act compliance scoring** — per-member late-filing rates computed

@@ -62,6 +62,11 @@ on:
         required: false
         default: '400'
         type: string
+      min_confidence:
+        description: 'Only reparse-annuals. Blank re-reads the whole queue in order; a number (0-1) re-reads only filings scored BELOW it, which is the cleanup pass after a parser fix.'
+        required: false
+        default: ''
+        type: string
 
 # One database, one writer at a time. `daily-update` and `rebuild` share this
 # group because they both write to the production `anomalies` table; a purge
@@ -183,6 +188,18 @@ jobs:
               # and that WAS the defect.
               COMMAND="parse"
               FLAGS="--reparse --annual-only --limit ${{ inputs.limit }}"
+              # The cleanup pass after a parser fix. `--min-confidence` is
+              # evaluated BEFORE the `--reparse` check in
+              # `_disclosures_to_parse`, so passing both re-reads exactly the
+              # filings stored below the threshold rather than the whole queue.
+              #
+              # It is needed because a fix can land mid-campaign -- #86 did --
+              # and because the campaign's own scores say which filings still
+              # read badly. That is the point of an honest `parse_confidence`:
+              # the instrument names the work.
+              if [ -n "${{ inputs.min_confidence }}" ]; then
+                FLAGS="$FLAGS --min-confidence ${{ inputs.min_confidence }}"
+              fi
               if [ "${{ inputs.dry_run }}" = "true" ]; then
                 FLAGS="$FLAGS --dry-run"
               fi

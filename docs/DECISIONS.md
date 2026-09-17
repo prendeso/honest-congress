@@ -428,3 +428,40 @@ significance for a detector that has no null model.
 git history. `PHASE_8_IMPLEMENTATION.md` and `PHASE_8_READY.md` differed by 12
 lines; `PHASE_8_ACTION_ITEMS.md` and `PHASE_8_USER_CHECKLIST.md` were the same
 checklist twice.
+
+## D15. Two more detectors are held, which is not the same as disabled
+
+`DISABLED_ANOMALY_TYPES` now carries five names for two different reasons, and
+conflating them would be a mistake in either direction — leaving these two off
+for ever, or turning them back on without looking.
+
+The three in D3 are **condemned**: their arithmetic is indefensible and fixing
+them needs share-level price history this project does not have.
+
+`wealth_vs_salary` and `rapid_asset_appreciation` are **held**. Nothing is known
+to be wrong with them. Both read their roster from
+`members_with_annual_filings`, which gated on `Disclosure.filing_type == "FD"` —
+a value **zero of 3,900 stored rows carry**. Only the Senate ingester ever wrote
+it, as a fallback that stopped firing once real report titles were stored, and
+the House never used it at all. So both walked an empty roster and found
+nothing, silently, for months. `wealth_vs_salary` reading 0 findings looked like
+a fact about Congress; it was a fact about one line.
+
+That gate is fixed, and that is precisely the problem: they publish again, and
+nobody has ever read what they say.
+
+The bar for turning them back on is low and specific: **read a sample of their
+output and say it is sound.** Not "prove them correct" — look at what they
+accuse people of. Then delete
+`tests/test_disabled_detectors.py::TestTheHeldDetectorsAreStillHeld`, restore
+the `after > before` assertion in
+`test_run_advanced_persists_nothing_while_both_detectors_are_held`, and say in
+the commit message who looked.
+
+The reason for the ceremony: this project has published four confident false
+accusations against named members of Congress — three checkers caught during the
+1,000-finding audit, and the wealth findings that had Craig Goldman gaining
+$15,008,502.50 in a year against a real figure of $551,001, and Laura Gillen
+flagged at $476,500.50 when her true figure was below the reporting threshold
+entirely. Every one of them was produced by code that looked reasonable and had
+passing tests. A fifth unread accuser is the same mistake in a new place.

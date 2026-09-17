@@ -62,8 +62,31 @@ class Settings(BaseSettings):
     #   loss_avoidance       - increments numerator and denominator on the same
     #     branch, so its rate is always exactly 100%.
     # Re-enabling requires real price history; see the plan's "Price data" note.
+    #
+    # The next two are HELD, NOT CONDEMNED, and the distinction is the whole
+    # reason this comment is here. Nothing is known to be wrong with them:
+    #   wealth_vs_salary         - both read their roster from
+    #   rapid_asset_appreciation   `members_with_annual_filings`, which gated on
+    #     `Disclosure.filing_type == "FD"` -- a value ZERO of 3,900 stored rows
+    #     carry. Only the Senate ingester ever wrote it, as a fallback that
+    #     stopped firing once real report titles were stored. So both detectors
+    #     walked an empty roster and found nothing, silently, for months.
+    #
+    #     That gate is fixed. These are off because the fix means they publish
+    #     again, and NOBODY HAS EVER READ WHAT THEY SAY. This project has
+    #     published four confident false accusations against named members of
+    #     Congress -- three checkers during the audit, and the wealth findings
+    #     that had Craig Goldman gaining $15,008,502.50 in a year against a real
+    #     figure of $551,001. A fifth unread accuser is the same mistake.
+    #
+    #     Remove them once someone has looked at a sample of their output and
+    #     can say it is sound. That is a lower bar than the three above, which
+    #     need price data that does not exist. Do not conflate the two.
     disabled_anomaly_types: str = Field(
-        default="outperforming_trades,perfect_timing,loss_avoidance",
+        default=(
+            "outperforming_trades,perfect_timing,loss_avoidance,"
+            "wealth_vs_salary,rapid_asset_appreciation"
+        ),
         alias="DISABLED_ANOMALY_TYPES",
     )
 

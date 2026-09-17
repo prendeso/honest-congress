@@ -503,14 +503,24 @@ class TestLossAvoidance:
 
 
 class TestPersistence:
+    """The sample type here is incidental -- these test `persist_anomalies`, not
+    any one detector.
+
+    It used to be `wealth_vs_salary`, which is now HELD pending review of output
+    nobody has read, so `persist_anomalies` correctly refuses to store it and
+    these tests failed for the right reason. Swapped to a live type rather than
+    weakened, because a persistence test that silently exercised the
+    disabled-type branch would stop testing persistence at all.
+    """
+
     def test_persist_writes_anomaly_rows(self, db_session):
         member = _make_member(db_session, bioguide="X000001")
         anomalies = [
             {
                 "member_id": member.id,
-                "anomaly_type": "wealth_vs_salary",
+                "anomaly_type": "volume_spikes",
                 "severity": "HIGH",
-                "title": "Wealth growth far exceeds salary (2020-2024)",
+                "title": "Unusual trading volume spikes (3)",
                 "description": "Test description",
             },
             {
@@ -533,7 +543,7 @@ class TestPersistence:
         member = _make_member(db_session, bioguide="Y000001")
         a = {
             "member_id": member.id,
-            "anomaly_type": "wealth_vs_salary",
+            "anomaly_type": "volume_spikes",
             "severity": "high",
             "title": "Same title",
             "description": "x",
@@ -541,7 +551,19 @@ class TestPersistence:
         assert persist_anomalies(db_session, [a]) == 1
         assert persist_anomalies(db_session, [a]) == 0
 
-    def test_run_advanced_persists_results(self, db_session):
+    def test_run_advanced_persists_nothing_while_both_detectors_are_held(self, db_session):
+        """This asserted `after > before` until both of this pipeline's
+        detectors were held pending review.
+
+        Inverted rather than deleted, and rather than forced green with a
+        stand-in detector. It now pins the thing that is actually true -- the run
+        completes cleanly and writes nothing -- and it is the second tripwire:
+        re-enabling `wealth_vs_salary` or `rapid_asset_appreciation` fails here
+        as well as in `TestTheHeldDetectorsAreStillHeld`, which is the right
+        amount of friction for turning an unread accuser back on.
+
+        Restore the original assertion in the same change that re-enables them.
+        """
         member = _make_member(db_session, bioguide="Z000001", last="Persisted")
         d1 = _make_disclosure(db_session, member, 2023, "FDz1")
         d2 = _make_disclosure(db_session, member, 2024, "FDz2")
@@ -551,7 +573,12 @@ class TestPersistence:
         before = db_session.query(Anomaly).count()
         run_advanced_anomaly_detection(db_session)
         after = db_session.query(Anomaly).count()
-        assert after > before
+
+        assert after == before, (
+            "the advanced pipeline wrote rows while both its detectors are "
+            "disabled -- either a detector was re-enabled (restore the original "
+            "`after > before` assertion) or the disabled gate has stopped holding"
+        )
 
 
 # ---------------- edge cases ----------------
@@ -633,14 +660,14 @@ class TestEdgeCases:
             [
                 {
                     "member_id": member.id,
-                    "anomaly_type": "wealth_vs_salary",
+                    "anomaly_type": "volume_spikes",
                     "severity": "CRITICAL",
                     "title": "T1",
                     "description": "d",
                 },
                 {
                     "member_id": member.id,
-                    "anomaly_type": "wealth_vs_salary",
+                    "anomaly_type": "volume_spikes",
                     "severity": "MEDIUM",
                     "title": "T2",
                     "description": "d",

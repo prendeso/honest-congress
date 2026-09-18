@@ -8,7 +8,6 @@ The detectors were also never invoked anywhere and never persisted their
 results to the database.
 """
 
-from contextlib import contextmanager
 from datetime import datetime
 from decimal import Decimal
 
@@ -37,33 +36,15 @@ from src.db.models import (
     Transaction,
     TransactionType,
 )
+from tests.conftest import enabling_anomaly_type
 
 # ---------------- helpers ----------------
 
 
-@contextmanager
-def _enabling(anomaly_type: str, monkeypatch):
-    """Run a block with `anomaly_type` temporarily enabled.
-
-    Three detector types are disabled by default because their arithmetic is
-    indefensible, and they are now SKIPPED rather than computed and thrown
-    away. Their logic is still worth testing -- they are disabled for being
-    wrong, not for being uninteresting, and whoever re-enables one needs a test
-    that still describes what it does.
-
-    `get_settings` is lru_cached, so the cache has to be cleared on the way in
-    and on the way out or the override leaks into the next test.
-    """
-    from src.config import get_settings
-
-    remaining = get_settings().disabled_anomaly_types_set - {anomaly_type}
-    monkeypatch.setenv("DISABLED_ANOMALY_TYPES", ",".join(sorted(remaining)))
-    get_settings.cache_clear()
-    try:
-        yield
-    finally:
-        monkeypatch.delenv("DISABLED_ANOMALY_TYPES", raising=False)
-        get_settings.cache_clear()
+# Lives in conftest now: three test files need it, and the rule it encodes --
+# a held detector does not run, so a test of its logic has to lift the hold --
+# is one rule, not three.
+_enabling = enabling_anomaly_type
 
 
 def _make_member(db, bioguide="A000001", first="Test", last="Member") -> Member:

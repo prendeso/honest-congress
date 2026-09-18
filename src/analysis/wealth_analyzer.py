@@ -111,6 +111,19 @@ class WealthAnalyzer:
         Returns:
             List of detected anomalies
         """
+        # Imported here rather than at module scope: `src.analysis` imports this
+        # module, so a top-level import is a cycle. Same reason as the local
+        # import in `run_advanced_anomaly_detection`.
+        from src.analysis import detector_is_disabled
+
+        # `excessive_wealth_growth` is the ONLY type this analyzer emits, so
+        # while it is held there is nothing here to do but the work. Everything
+        # below reads Asset and Liability rows -- the half of the corpus the
+        # re-parse campaign just doubled -- to build findings the gate at the
+        # end of `analyze_all_members` then throws away.
+        if detector_is_disabled("excessive_wealth_growth"):
+            return []
+
         # Same as TradeAnalyzer.analyze_member: the roster walk above already
         # holds this row, and fetching it back costs one round trip per member.
         if member is None:
@@ -265,9 +278,23 @@ class WealthAnalyzer:
         Returns:
             Summary of analysis with all detected anomalies
         """
+        from src.analysis import detector_is_disabled
         from src.config import get_settings
 
         disabled_types = get_settings().disabled_anomaly_types_set
+
+        # Returned before the roster query rather than after it, so that a held
+        # detector costs nothing at all rather than one walk producing nothing.
+        # `analyze_member` carries the same gate for the callers that reach it
+        # directly (`analyze_wealth(db, member_id)`, the detect route).
+        if detector_is_disabled("excessive_wealth_growth"):
+            logger.info("Wealth growth analysis is disabled; not running it.")
+            return {
+                "members_analyzed": 0,
+                "members_with_anomalies": 0,
+                "total_anomalies": 0,
+                "anomalies": [],
+            }
 
         # `analyze_member` needs at least two parsed filings to compare, and
         # returns [] otherwise. Asking the database which members have that

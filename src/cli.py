@@ -302,8 +302,8 @@ def cmd_parse(args):
             f" across {quality['filings_with_travel']} filings"
         )
         print(
-            f"  House annual filings parsed: {quality['house_annuals_parsed']}"
-            "  - the only form that has a Schedule H"
+            f"  House filings that could disclose one: {quality['house_annuals_parsed']}"
+            "  - annual and termination reports; no other form prints a Schedule H"
         )
 
 

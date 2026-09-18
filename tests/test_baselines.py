@@ -348,11 +348,11 @@ class TestScheduleHCoverageIsReported:
         return m
 
     @staticmethod
-    def _filing(db, member, doc_id, *, is_ptr=False):
+    def _filing(db, member, doc_id, *, is_ptr=False, filing_type=None):
         d = Disclosure(
             member_id=member.id,
             filing_year=2024,
-            filing_type="P" if is_ptr else "O",
+            filing_type=filing_type or ("P" if is_ptr else "O"),
             filing_date=datetime(2025, 5, 1),
             document_id=doc_id,
             is_ptr=is_ptr,
@@ -414,5 +414,38 @@ class TestScheduleHCoverageIsReported:
         self._filing(db_session, house, "COV-4")
         self._filing(db_session, house, "COV-5", is_ptr=True)
         self._filing(db_session, senate, "COV-6")
+
+        assert parse_quality_summary(db_session)["house_annuals_parsed"] == 1
+
+    def test_forms_without_a_schedule_h_are_not_in_the_denominator(self, db_session):
+        """The correction. Measured live, the first version reported 1813.
+
+        It counted every House non-PTR filing. The Clerk's index carries roughly
+        800 type-O annual reports against 2,358 candidate reports and 1,415
+        extension requests, and none of those three print a Schedule H -- the
+        candidate, amendment and new-filer forms print A C D E F J, and the
+        letters are one page with no lettered schedule at all. So the ratio read
+        about 2.3x worse than the truth, which makes a healthy backfill look
+        broken.
+        """
+        house = self._member(db_session, "CVH0004", Chamber.HOUSE)
+        self._filing(db_session, house, "ANN-1", filing_type="O")
+        self._filing(db_session, house, "TERM-1", filing_type="T")
+        for doc, kind in (
+            ("CAND-1", "C"),
+            ("AMEND-1", "A"),
+            ("EXT-1", "X"),
+            ("NEWEMP-1", "E"),
+        ):
+            self._filing(db_session, house, doc, filing_type=kind)
+
+        assert parse_quality_summary(db_session)["house_annuals_parsed"] == 2
+
+    def test_a_termination_report_counts_because_it_has_a_schedule_h(self, db_session):
+        # Read the documents rather than guessing from the letter: Earl
+        # Blumenauer's termination report lists 196 holdings across the same
+        # nine schedules an annual prints, Schedule H among them.
+        house = self._member(db_session, "CVH0005", Chamber.HOUSE)
+        self._filing(db_session, house, "TERM-2", filing_type="T")
 
         assert parse_quality_summary(db_session)["house_annuals_parsed"] == 1

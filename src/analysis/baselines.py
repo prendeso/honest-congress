@@ -272,6 +272,22 @@ def significance_summary(db: Session) -> Dict[str, object]:
     }
 
 
+# House filing types whose form prints a Schedule H, verified by reading the
+# documents rather than inferred from the letter:
+#
+#   O  Annual Report      -- A B C D E F G H I. The ordinary case.
+#   T  Termination Report -- the same nine schedules. Earl Blumenauer's
+#      (10063241) lists 196 holdings and Colin Allred's (10063338) 33.
+#
+# Deliberately NOT here, all verified as printing A C D E F J with no H at all:
+# the Candidate, Amendment and New Filer reports. Nor the one-page letters in
+# `NO_FINANCIAL_SCHEDULE` (X, D, W, E), which print no lettered schedule.
+#
+# A letter nobody has read a document for stays out. That understates coverage
+# rather than overstating it, which is the safe direction for a denominator.
+SCHEDULE_H_FILING_TYPES = frozenset({"O", "T"})
+
+
 def parse_quality_summary(db: Session) -> Dict[str, object]:
     """How well the filings behind these findings were actually read.
 
@@ -324,11 +340,18 @@ def parse_quality_summary(db: Session) -> Dict[str, object]:
     filings_with_travel = (
         db.query(func.count(func.distinct(TravelPayment.disclosure_id))).scalar() or 0
     )
-    # The denominator, and the reason it needs a join. ONLY the House annual
-    # form has a Schedule H: Senate annuals are HTML with numbered Parts, and
-    # the House candidate, amendment and new-filer variants print A C D E F J
-    # with no H at all (see D16). Measured against the whole corpus this would
-    # be a ratio nobody could read.
+    # The denominator, and it has to be the filings that COULD have disclosed a
+    # trip -- not every House filing that is not a PTR.
+    #
+    # Measured live and got this wrong the first time: "House annual filings
+    # parsed: 1813" counted candidate reports, amendments, new-filer reports and
+    # extension requests alongside real annuals. The Clerk's own index carries
+    # roughly 800 type-O reports against 2,358 candidate reports and 1,415
+    # extension requests, so the ratio read about 2.3x worse than the truth --
+    # a number that makes a healthy backfill look broken.
+    #
+    # `SCHEDULE_H_FILING_TYPES` is the verified set, read from the documents the
+    # way `NO_FINANCIAL_SCHEDULE` was.
     house_annuals = (
         db.query(func.count(Disclosure.id))
         .join(Member, Member.id == Disclosure.member_id)
@@ -336,6 +359,7 @@ def parse_quality_summary(db: Session) -> Dict[str, object]:
             Disclosure.parsed.is_(True),
             Disclosure.is_ptr.is_(False),
             Member.chamber == Chamber.HOUSE,
+            func.upper(func.trim(Disclosure.filing_type)).in_(SCHEDULE_H_FILING_TYPES),
         )
         .scalar()
         or 0

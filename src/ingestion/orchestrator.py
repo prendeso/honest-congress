@@ -26,7 +26,11 @@ from src.parsing.confidence import (
     score_filing_with_no_schedule,
     score_ptr_parse,
 )
-from src.parsing.pdf_parser import DisclosureParser, count_schedule_a_rows
+from src.parsing.pdf_parser import (
+    DisclosureParser,
+    count_schedule_a_rows,
+    discloses_no_rows,
+)
 from src.parsing.ptr_parser import PTRParser
 from src.parsing.senate_html_parser import SenateHtmlParser, count_senate_asset_rows
 
@@ -1156,6 +1160,7 @@ class IngestionOrchestrator:
                         len(parsed.get("liabilities") or []),
                         parsed.get("parse_errors") or [],
                         rows_detected=count_schedule_a_rows(parsed.get("raw_text") or ""),
+                        discloses_no_rows=discloses_no_rows(parsed.get("raw_text") or ""),
                     )
 
             # `parsed` means the parser ran, which is all it has ever meant. The

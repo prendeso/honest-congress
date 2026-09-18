@@ -151,6 +151,7 @@ def score_fd_parse(
     liabilities: int,
     errors: Sequence[str] = (),
     rows_detected: int | None = None,
+    discloses_no_rows: bool = False,
 ) -> ParseConfidence:
     """Score an annual FD parse, by how much of it was actually read.
 
@@ -182,6 +183,17 @@ def score_fd_parse(
     is optional so callers that genuinely have no document to count against
     (tests, and the Senate path, which produces no assets at all today) keep the
     old behaviour rather than being scored against zero.
+
+    `discloses_no_rows` is the other independent reading of the document, from
+    `pdf_parser.discloses_no_rows`: the filing PRINTS "None disclosed." under
+    Schedules A, B and D. Then nothing stored is everything there was, and the
+    parse is complete. Without it, seven House annuals -- Frost, Boebert,
+    Crawford and Valadao, who between them hold nothing this project stores --
+    were recorded at 0.0 with "no assets or liabilities found in an annual
+    filing", the same sentence a real failure gets, and were re-downloaded from
+    the Clerk by every cleanup pass to arrive at the same answer. Same mistake
+    as scoring an extension request against the annual rubric; see
+    `score_filing_with_no_schedule`.
     """
     warnings: List[str] = []
     if errors:
@@ -189,6 +201,12 @@ def score_fd_parse(
     if not text_extracted:
         return ParseConfidence(0.0, ["no text layer in PDF - likely a scan"])
     if not assets and not liabilities:
+        # `errors` still wins: a filing that says "None disclosed." AND failed
+        # partway through was not read completely, whatever it says.
+        if discloses_no_rows and not errors:
+            return ParseConfidence(
+                1.0, ["the filing discloses no assets, transactions or liabilities"]
+            )
         warnings.append("no assets or liabilities found in an annual filing")
         return ParseConfidence(0.0, warnings)
     if errors:

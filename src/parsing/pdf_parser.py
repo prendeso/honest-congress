@@ -86,6 +86,62 @@ _SCHEDULE_A_ASSET_CODE_RUN = re.compile(r"\[[A-Z0-9]{2}\](?:\s*\[[A-Z0-9]{2}\])*
 _SCHEDULE_A_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+A\s*:", re.MULTILINE | re.IGNORECASE)
 _SCHEDULE_B_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+B\s*:", re.MULTILINE | re.IGNORECASE)
 
+# The form's own words for an empty schedule. It prints this under the heading
+# instead of a grid, so there are no row bands to find and nothing to store --
+# and that is the document being complete, not the reader failing.
+_NONE_DISCLOSED = re.compile(r"^\s*None\s+disclosed\.?\s*$", re.MULTILINE | re.IGNORECASE)
+_ANY_SCHEDULE_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+[A-I]\s*:", re.MULTILINE | re.IGNORECASE)
+
+# The three schedules that produce stored rows: holdings, transactions, debts.
+# C (earned income), E (positions), F (agreements), G (gifts), H (travel) and I
+# (compensation) are read by nobody today, so their contents cannot make a
+# filing's stored rows non-empty and they are not consulted here.
+_ROW_BEARING_SCHEDULES = ("A", "B", "D")
+
+
+def _schedule_region(text: str, schedule: str) -> str | None:
+    """The text between one schedule's heading and the next heading of any kind."""
+    heading = re.compile(rf"^\s*S(?:CHEDULE)?\s+{schedule}\s*:", re.MULTILINE | re.IGNORECASE)
+    start = heading.search(text)
+    if start is None:
+        return None
+    rest = text[start.end() :]
+    end = _ANY_SCHEDULE_HEADING.search(rest)
+    return rest[: end.start()] if end else rest
+
+
+def discloses_no_rows(text: str) -> bool:
+    """Whether the filing itself says Schedules A, B and D are all empty.
+
+    A filing can be read perfectly and yield nothing, because the member holds
+    nothing to report. Maxwell Frost's 2024 annual says "None disclosed." under
+    every one of the nine schedules; David Valadao's says it under A, B and D
+    while disclosing $28,800 of farm labour income, two positions and four
+    privately funded trips in C, E and H -- none of which this project stores.
+
+    Both were recorded at `parse_confidence` 0.0 with "no assets or liabilities
+    found in an annual filing", which is the same sentence a genuine failure
+    gets. Seven House annuals sat that way, re-downloaded from the Clerk by
+    every cleanup pass to arrive at the same answer, exactly as the nested
+    asset-code miscount parked complete filings in that queue for ever.
+
+    This is the affirmative half of the test, deliberately: an absence of rows
+    is not evidence, but the form printing its own "None disclosed." is. A
+    schedule this cannot find at all returns False, so a document whose headings
+    were mangled beyond recognition still scores as the failure it is.
+
+    Same reasoning as `score_filing_with_no_schedule`, one case along. An
+    extension request is not a failed annual; neither is an annual that
+    discloses nothing.
+    """
+    if not text:
+        return False
+    for schedule in _ROW_BEARING_SCHEDULES:
+        region = _schedule_region(text, schedule)
+        if region is None or not _NONE_DISCLOSED.search(region):
+            return False
+    return True
+
 
 def count_schedule_a_rows(text: str) -> int:
     """How many Schedule A holdings the document appears to contain.

@@ -30,9 +30,22 @@ VALUE_RANGES = {
 
 # The asset-class codes the House annual form prints in square brackets beside
 # every Schedule A holding -- BA bank account, ST stock, MF mutual fund, RP real
-# property, HE hedge fund, and so on. Every holding carries exactly one, which
-# makes counting them an independent measure of how many rows the document
-# HOLDS, against however many the parser managed to STORE.
+# property, HE hedge fund, and so on. Counting them is an independent measure of
+# how many rows the document HOLDS, against however many the parser managed to
+# STORE.
+#
+# This used to say "Every holding carries exactly one", and that is FALSE. A
+# holding nested inside a plan prints the container's class and its own:
+#
+#     457 Nationwide Retirement Plan > AMCAP Fund (RAFGX) [MF] [MF]
+#     Florida Retirement System [DB] [PE]
+#     Athene IRA #1 > Athene Fixed Indez Annuity [FN] [MF]
+#
+# So the count ran ahead of the truth and marked COMPLETE filings as half-read.
+# Document 10067730 stores all 25 of its holdings and was scored 0.714 against
+# 35 codes -- a false alarm, in the queue for re-reading for ever. Adjacent
+# codes are collapsed below because they demonstrably belong to one holding,
+# checked against the stored descriptions rather than assumed.
 #
 # Independent is the whole point. Confidence derived from the parser's own
 # output can only ever say "it ran"; that is what `score_fd_parse` used to do,
@@ -57,6 +70,17 @@ VALUE_RANGES = {
 # discovering it cannot afford.
 _SCHEDULE_A_ASSET_CODE = re.compile(r"\[[A-Z0-9]{2}\]")
 
+# One holding's codes, however many it prints: a code and any that follow it
+# with nothing but whitespace between.
+#
+# Collapsing them raises confidence, and UP is the direction that hid the
+# original defect, so it is worth being explicit about why this is the right
+# side of the line. Measured over the sampled corpus the count goes from 23
+# above the stored total to 5 above it -- still ABOVE, so the score stays
+# slightly pessimistic rather than flattering, which is the property that
+# matters. What it stops is crying wolf about filings that are already complete.
+_SCHEDULE_A_ASSET_CODE_RUN = re.compile(r"\[[A-Z0-9]{2}\](?:\s*\[[A-Z0-9]{2}\])*")
+
 # `clean_text` reduces "SCHEDULE A: ASSETS AND "UNEARNED" INCOME" to `S A: A "U" I`,
 # so both spellings have to be accepted.
 _SCHEDULE_A_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+A\s*:", re.MULTILINE | re.IGNORECASE)
@@ -77,12 +101,17 @@ def count_schedule_a_rows(text: str) -> int:
     Bounded to the Schedule A region so Schedule B's trades, which carry the
     same codes, are not counted as holdings.
 
-    It over-counts slightly, and deliberately in that direction: a filer's own
-    comment row can name an asset code ("D: TOBACCO SETTLEMENT FING CORP VA SER
-    A1 TAXABLE SENIOR B/E CPN [CS]"), and this counts it. Over 20 House annual
-    filings naming 1,422 holdings that happens twice. An over-count lowers
-    `parse_confidence` and asks a human to look; an under-count is what let the
-    parser lose half of Schedule A unnoticed.
+    It still over-counts slightly, and deliberately in that direction. A filer's
+    own comment row can name an asset code ("D: TOBACCO SETTLEMENT FING CORP VA
+    SER A1 TAXABLE SENIOR B/E CPN [CS]"), and a holding that wraps onto a second
+    line repeats its codes there. An over-count lowers `parse_confidence` and
+    asks a human to look; an under-count is what let the parser lose half of
+    Schedule A unnoticed.
+
+    What it no longer does is over-count a NESTED holding, which prints its
+    container's class beside its own and so carries two codes for one row. That
+    was not a rounding error: it scored complete filings at 0.714 and kept them
+    in the re-read queue permanently.
 
     Both spellings of the heading are accepted because `clean_text` mangles it:
     "SCHEDULE A: ASSETS AND "UNEARNED" INCOME" survives cleaning as `S A: A "U" I`.
@@ -99,7 +128,7 @@ def count_schedule_a_rows(text: str) -> int:
     rest = text[start.end() :]
     end = _SCHEDULE_B_HEADING.search(rest)
     region = rest[: end.start()] if end else rest
-    return len(_SCHEDULE_A_ASSET_CODE.findall(region))
+    return len(_SCHEDULE_A_ASSET_CODE_RUN.findall(region))
 
 
 # The column headings each schedule prints above its rows, keyed by the schedule,

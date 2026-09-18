@@ -292,6 +292,19 @@ def cmd_parse(args):
         f"  Scans with no text layer: {quality['filings_with_no_text_layer']}"
         "  - not a parse failure; there is nothing in them to read"
     )
+    # Reported whenever there is a House annual corpus to report against, so a
+    # backfill that stores nothing says so instead of looking like a quiet
+    # success. Nothing else in the project counts these rows.
+    if quality["house_annuals_parsed"]:
+        print("\nSchedule H (privately funded travel):")
+        print(
+            f"  Trips stored: {quality['travel_rows']}"
+            f" across {quality['filings_with_travel']} filings"
+        )
+        print(
+            f"  House annual filings parsed: {quality['house_annuals_parsed']}"
+            "  - the only form that has a Schedule H"
+        )
 
 
 def cmd_download_pdfs(args):

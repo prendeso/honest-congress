@@ -183,12 +183,52 @@ class TestItIsNotPublishedYet:
             "and say so in the commit, rather than letting it happen quietly"
         )
 
-    def test_no_detector_reads_travel(self):
+    def test_travel_is_not_a_detector_source(self):
+        """The assertion that actually protects anybody.
+
+        A finding about a named person derived from travel data would have to
+        declare its source here, because `detectors_without_source_data` reports
+        any detector whose input table is empty.
+        """
+        from src.analysis.baselines import DETECTOR_SOURCE_TABLES
+        from src.db.models import TravelPayment
+
+        sourced = [t for t, model in DETECTOR_SOURCE_TABLES.items() if model is TravelPayment]
+        assert sourced == [], f"{sourced} produce findings from travel data"
+
+    def test_only_the_corpus_quality_count_touches_travel_in_the_analysis_layer(self):
+        """Counting rows is not publishing them, and the distinction is the point.
+
+        `parse_quality_summary` counts travel rows so that a backfill storing
+        zero of them says so out loud -- nothing else in the project reports on
+        that table at all. It produces no `Anomaly` and names no member; it is
+        read by `cli parse`'s operator summary.
+
+        Every OTHER module under `src/analysis` is where a detector would live,
+        so this is an exact allowlist rather than a substring search: adding
+        travel to `tier2_detectors`, `legislation`, `clustering` or a new file
+        fails here, which is the case the guard exists for.
+        """
+        from pathlib import Path
+
+        allowed = {"src/analysis/baselines.py"}
+        offenders = [
+            p.as_posix()
+            for p in Path("src/analysis").rglob("*.py")
+            if "TravelPayment" in p.read_text() and p.as_posix() not in allowed
+        ]
+        assert offenders == [], (
+            f"{offenders} read travel data. If that is a detector it needs the "
+            "sample-reading bar D15 sets for any accuser, and a decision -- not "
+            "an addition to this allowlist."
+        )
+
+    def test_no_template_shows_travel(self):
         from pathlib import Path
 
         offenders = [
             p.as_posix()
-            for p in Path("src/analysis").rglob("*.py")
-            if "TravelPayment" in p.read_text()
+            for p in Path("src/templates").rglob("*.html")
+            if "travel_payment" in p.read_text() or "travelPayment" in p.read_text()
         ]
         assert offenders == []

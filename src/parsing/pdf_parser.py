@@ -257,6 +257,17 @@ _SCHEDULE_COLUMNS = {
     "B": (("Asset", "Owner", "Date", "Tx.", "Amount", "Cap."),),  # transactions
     "C": (("Source", "Type", "Amount"),),  # earned income
     "D": (("Owner", "Creditor", "Date", "Type", "Amount"),),  # liabilities
+    # Travel paid for by somebody else. Two printed variants -- "Start End Date"
+    # and "Start Date End Date" -- both match this one shape, because
+    # `_header_columns` matches first words in order and is allowed to skip.
+    #
+    # The last three headings are matched and then THROWN AWAY. They are the
+    # only reason the `Days at Own Exp.` column has a right-hand edge, and their
+    # own cells cannot be read at all: the ticks under Lodging?, Food? and
+    # Family? are drawn as vector curves, not text. Page 6 of document 10074944
+    # carries seven trips and ZERO characters to the right of x=400, where all
+    # three columns sit.
+    "H": (("Source", "Start", "End", "Itinerary", "Days", "Lodging?", "Food?", "Family?"),),
 }
 
 # Schedules E onward carry no column header of this shape, so a heading is the
@@ -472,6 +483,7 @@ class DisclosureParser:
             "earned_income": [],
             "positions": [],
             "agreements": [],
+            "travel_payments": [],
             "parse_errors": [],
             # Whether the PDF had a text layer, which is a property of the
             # DOCUMENT and not of this parse. `orchestrator.parse_disclosure`
@@ -527,6 +539,7 @@ class DisclosureParser:
                     pdf
                 ) or self._parse_liabilities_section(text, tables)
                 result["earned_income"] = self._parse_income_section(text, tables)
+                result["travel_payments"] = self._travel_from_row_bands(pdf)
 
         except Exception as e:
             logger.error(f"Error parsing PDF {pdf_path}: {e}")
@@ -818,6 +831,66 @@ class DisclosureParser:
                     }
                 )
         return liabilities
+
+    def _travel_from_row_bands(self, pdf: Any) -> List[Dict[str, Any]]:
+        """Schedule H trips, one per row band the form draws.
+
+        "Travel Payments and Reimbursements" -- who paid for a member to go
+        somewhere. 52% of House annual reports disclose at least one, measured
+        over a random sample of 70 drawn from the Clerk's 2024-25 index, 67 of
+        which parsed and which carry 61 dated trips between them. Nothing in
+        this project read it, so these were in the documents and in no database:
+
+            Norma Torres     American Israel Education Foundation, Inc. (AIEF)
+                             06/13 - 06/19  San Francisco, CA - Tel Aviv
+            Pramila Jayapal  Center for Democracy in the Americas
+                             02/19 - 02/22  Washington, DC - Havana, Cuba
+            Greg Murphy      The Aspen Institute
+                             04/01 - 04/06  Raleigh, NC - Bellagio, Italy
+
+        Banded exactly like Schedules A and D, so `_schedule_bands` reads it
+        with no new machinery: the itinerary of a multi-leg trip wraps over four
+        or five printed lines and is still one band, one trip.
+
+        A band is kept only if it carries a source AND a parsable start date --
+        the analogue of Schedule D's creditor-and-amount test, and what
+        separates a trip from the form's trailing note and from the heading of
+        whatever schedule follows.
+
+        The last three columns of the form are read as headings and then
+        dropped; see `_SCHEDULE_COLUMNS["H"]` for why they cannot be read as
+        values at all.
+        """
+        trips: List[Dict[str, Any]] = []
+        carried: List[float] | None = None
+        for page in pdf.pages:
+            bands, carried = _schedule_bands(page, "H", carried)
+            if not bands:
+                continue
+            words = page.extract_words()
+            for top, bottom, columns in bands:
+                cells = _cells_in_band(words, top, bottom, columns)
+                cells += [""] * (8 - len(cells))
+                source, start, end, itinerary, days = (
+                    cells[0],
+                    cells[1],
+                    cells[2],
+                    cells[3],
+                    cells[4],
+                )
+                start_date = self._parse_date(start)
+                if not source or start_date is None:
+                    continue
+                trips.append(
+                    {
+                        "source": source,
+                        "start_date": start_date,
+                        "end_date": self._parse_date(end),
+                        "itinerary": itinerary or None,
+                        "days_at_own_expense": int(days) if days.strip().isdigit() else None,
+                    }
+                )
+        return trips
 
     def _parse_liabilities_section(
         self, text: str, tables: List[List[List[str]]]

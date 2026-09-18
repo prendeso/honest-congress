@@ -28,12 +28,14 @@ from src.db.models import (
     BillCommittee,
     BillSponsorship,
     CampaignDonation,
+    Chamber,
     CommitteeAssignment,
     Disclosure,
     GovernmentContract,
     LobbyingDisclosure,
     Member,
     Transaction,
+    TravelPayment,
 )
 
 logger = logging.getLogger(__name__)
@@ -312,6 +314,33 @@ def parse_quality_summary(db: Session) -> Dict[str, object]:
         .scalar()
     )
 
+    # Schedule H coverage. Reported here because nothing else in the project
+    # reports it at all: `detection_summary` is keyed on anomaly TYPES and
+    # their `DETECTOR_SOURCE_TABLES`, and travel has no detector, so a backfill
+    # storing 700 trips and one storing zero looked identical from every
+    # operator-facing surface. That is the shape of defect this file exists to
+    # undo -- a number nobody can see is a number nobody can check.
+    travel_rows = db.query(func.count(TravelPayment.id)).scalar() or 0
+    filings_with_travel = (
+        db.query(func.count(func.distinct(TravelPayment.disclosure_id))).scalar() or 0
+    )
+    # The denominator, and the reason it needs a join. ONLY the House annual
+    # form has a Schedule H: Senate annuals are HTML with numbered Parts, and
+    # the House candidate, amendment and new-filer variants print A C D E F J
+    # with no H at all (see D16). Measured against the whole corpus this would
+    # be a ratio nobody could read.
+    house_annuals = (
+        db.query(func.count(Disclosure.id))
+        .join(Member, Member.id == Disclosure.member_id)
+        .filter(
+            Disclosure.parsed.is_(True),
+            Disclosure.is_ptr.is_(False),
+            Member.chamber == Chamber.HOUSE,
+        )
+        .scalar()
+        or 0
+    )
+
     return {
         "filings_parsed": parsed,
         # Never scored, because they were parsed before scoring existed. Not
@@ -328,4 +357,10 @@ def parse_quality_summary(db: Session) -> Dict[str, object]:
         # trade report in eight -- and reading it as a bug count is wrong in
         # both directions: it flatters no one and blames the wrong thing.
         "filings_with_no_text_layer": scanned,
+        # Privately funded travel, from Schedule H. Sampled at ~52% of House
+        # annual reports carrying at least one trip, ~0.9 trips per filing, so
+        # a corpus-wide figure far from that is a finding rather than noise.
+        "travel_rows": travel_rows,
+        "filings_with_travel": filings_with_travel,
+        "house_annuals_parsed": house_annuals,
     }

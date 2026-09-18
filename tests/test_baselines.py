@@ -321,3 +321,98 @@ class TestScansAreNotParserFailures:
 
         assert parse_quality_summary(db_session)["filings_that_yielded_nothing"] == 1
         assert parse_quality_summary(db_session)["filings_with_no_text_layer"] == 0
+
+
+class TestScheduleHCoverageIsReported:
+    """A backfill that stores nothing must not look like a quiet success.
+
+    `travel_payments` has no detector, so `detection_summary` -- which is keyed
+    on anomaly types and their `DETECTOR_SOURCE_TABLES`, and is what `cli stats`
+    and the nightly's job summary print -- cannot mention it by construction.
+    Before this, a re-parse campaign storing 700 trips and one storing zero were
+    indistinguishable from every operator-facing surface.
+    """
+
+    @staticmethod
+    def _member(db, bioguide, chamber):
+        m = Member(
+            bioguide_id=bioguide,
+            first_name="Cov",
+            last_name=bioguide,
+            chamber=chamber,
+            party=Party.DEMOCRAT,
+            state="CA",
+        )
+        db.add(m)
+        db.commit()
+        return m
+
+    @staticmethod
+    def _filing(db, member, doc_id, *, is_ptr=False):
+        d = Disclosure(
+            member_id=member.id,
+            filing_year=2024,
+            filing_type="P" if is_ptr else "O",
+            filing_date=datetime(2025, 5, 1),
+            document_id=doc_id,
+            is_ptr=is_ptr,
+            parsed=True,
+            parse_confidence=1.0,
+            has_text_layer=True,
+        )
+        db.add(d)
+        db.commit()
+        db.refresh(d)
+        return d
+
+    @staticmethod
+    def _trip(db, disclosure, source):
+        from src.db.models import TravelPayment
+
+        db.add(
+            TravelPayment(
+                disclosure_id=disclosure.id,
+                source=source,
+                start_date=datetime(2024, 3, 24),
+                end_date=datetime(2024, 3, 31),
+                itinerary="Los Angeles, CA - Tel Aviv",
+                days_at_own_expense=0,
+            )
+        )
+        db.commit()
+
+    def test_trips_are_counted_and_attributed_to_filings(self, db_session):
+        house = self._member(db_session, "CVH0001", Chamber.HOUSE)
+        one = self._filing(db_session, house, "COV-1")
+        two = self._filing(db_session, house, "COV-2")
+        self._trip(db_session, one, "American Israel Education Foundation")
+        self._trip(db_session, one, "The Aspen Institute")
+        self._trip(db_session, two, "Ripon Society")
+
+        summary = parse_quality_summary(db_session)
+
+        assert summary["travel_rows"] == 3
+        assert summary["filings_with_travel"] == 2, "two filings carry them, not three trips"
+
+    def test_an_empty_backfill_reports_zero_rather_than_nothing(self, db_session):
+        # The case this exists for. A House annual corpus with no travel rows
+        # is a statement, and it has to be a visible one.
+        house = self._member(db_session, "CVH0002", Chamber.HOUSE)
+        self._filing(db_session, house, "COV-3")
+
+        summary = parse_quality_summary(db_session)
+
+        assert summary["travel_rows"] == 0
+        assert summary["house_annuals_parsed"] == 1
+
+    def test_the_denominator_is_house_annuals_only(self, db_session):
+        # Only the House annual form has a Schedule H. Senate annuals are HTML
+        # with numbered Parts, and a PTR has no schedules at all, so counting
+        # either makes the coverage ratio unreadable.
+        house = self._member(db_session, "CVH0003", Chamber.HOUSE)
+        senate = self._member(db_session, "CVS0001", Chamber.SENATE)
+        self._filing(db_session, house, "COV-4")
+        self._filing(db_session, house, "COV-5", is_ptr=True)
+        self._filing(db_session, senate, "COV-6")
+
+        assert parse_quality_summary(db_session)["house_annuals_parsed"] == 1

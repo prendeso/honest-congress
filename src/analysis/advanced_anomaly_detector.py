@@ -720,13 +720,31 @@ def run_advanced_anomaly_detection(db: Session, persist: bool = True) -> Dict:
     logger.info("ADVANCED ANOMALY DETECTION")
     logger.info("=" * 70 + "\n")
 
-    logger.info("1. Detecting wealth vs salary anomalies...")
-    wealth_anomalies = detector.detect_wealth_vs_salary_anomalies(db)
-    logger.info(f"   Found {len(wealth_anomalies)} anomalies\n")
+    # The same gate as stock outperformance below, held back until now because
+    # these two were cheap enough to ignore. They are not any more. Both were
+    # made flat in the number of MEMBERS, but their cost is proportional to the
+    # number of asset and liability ROWS, and the re-parse campaign roughly
+    # doubled those: a House annual now yields about twice the holdings, and 343
+    # Senate annuals yield assets where they yielded none.
+    #
+    # `daily-update.yml` allows the nightly 350 minutes and its own comment
+    # records run 225 spending 234 of them on the contracts feed alone. This is
+    # margin spent computing findings `persist_anomalies` then refuses to store.
+    if detector_is_disabled("wealth_vs_salary"):
+        logger.info("1. Wealth vs salary is disabled; not running it.\n")
+        wealth_anomalies: List[Dict] = []
+    else:
+        logger.info("1. Detecting wealth vs salary anomalies...")
+        wealth_anomalies = detector.detect_wealth_vs_salary_anomalies(db)
+        logger.info(f"   Found {len(wealth_anomalies)} anomalies\n")
 
-    logger.info("2. Detecting rapid asset appreciation...")
-    asset_anomalies = detector.detect_asset_appreciation_anomalies(db)
-    logger.info(f"   Found {len(asset_anomalies)} anomalies\n")
+    if detector_is_disabled("rapid_asset_appreciation"):
+        logger.info("2. Rapid asset appreciation is disabled; not running it.\n")
+        asset_anomalies: List[Dict] = []
+    else:
+        logger.info("2. Detecting rapid asset appreciation...")
+        asset_anomalies = detector.detect_asset_appreciation_anomalies(db)
+        logger.info(f"   Found {len(asset_anomalies)} anomalies\n")
 
     # Not run when disabled, rather than run and discarded. `outperforming_trades`
     # benchmarks against a hardcoded flat 10% and computes "return" as

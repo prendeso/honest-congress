@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     #     branch, so its rate is always exactly 100%.
     # Re-enabling requires real price history; see the plan's "Price data" note.
     #
+    # A type listed here is not merely unpublished, it is NOT COMPUTED: each of
+    # the six is skipped rather than run and its output thrown away. See
+    # `detector_is_disabled` in src/analysis/__init__.py for why that matters to
+    # the nightly's wall clock, and
+    # tests/test_held_detectors_do_no_work.py::TestEveryHeldTypeIsActuallySkipped
+    # for the check that a seventh entry here does not quietly go ungated.
+    #
     # The next two are HELD, NOT CONDEMNED, and the distinction is the whole
     # reason this comment is here. Nothing is known to be wrong with them:
     #   wealth_vs_salary         - both read their roster from
@@ -83,42 +90,46 @@ class Settings(BaseSettings):
     #     can say it is sound. That is a lower bar than the three above, which
     #     need price data that does not exist. Do not conflate the two.
     #
-    #   excessive_wealth_growth - held for the length of one operation, and for
-    #     a different reason again: nothing is wrong with it and its input is
-    #     about to change scale underneath it.
+    #   excessive_wealth_growth - the operation this was held for is finished.
+    #     The reason to keep holding it is not the reason it was held.
     #
-    #     The parsers were just corrected. A House annual now yields roughly
-    #     twice the holdings and 2.7x the disclosed value; Senate annuals yield
-    #     assets where they yielded none; liabilities carry amounts where 85%
-    #     carried none. Re-reading 1,300-1,600 stored filings takes several
-    #     dispatches, and while it runs the corpus is MIXED -- some filings read
-    #     by the new parser, some by the old.
+    #     The original hold was about a MIXED corpus. The parsers had just been
+    #     corrected, re-reading the stored filings took several dispatches, and
+    #     while that ran some filings were read by the new parser and some by the
+    #     old. This detector compares CONSECUTIVE annual filings
+    #     (`wealth_analyzer.py:170-195`) and nothing in the analysis layer reads
+    #     `parse_confidence`, so it would have published the difference between
+    #     two PARSERS as a member's wealth doubling in a year -- against ~450
+    #     members, with a NULL q-value that always passes the FDR filter.
     #
-    #     This detector compares CONSECUTIVE annual filings
-    #     (`wealth_analyzer.py:170-195`). Nothing in the analysis layer reads
-    #     `parse_confidence`, so it cannot tell a corrected filing from a stale
-    #     one; both are just `parsed=True`. The re-parse queue is ordered by
-    #     `updated_at`, so for roughly half the members mid-campaign the LATER
-    #     year is corrected first and their net worth appears to double. Its
-    #     threshold is a floor, `_calculate_severity` escalates above 500%, and
-    #     it is in NO_NULL_MODEL so it carries a NULL q-value and always passes
-    #     the FDR filter. On the ~450 members with two or more annual filings
-    #     that is on the order of a hundred false accusations against named
-    #     people -- the Craig Goldman failure again, at scale.
+    #     That is spent. All 2,174 annual filings have been re-read, zero
+    #     failures; mean parse confidence 0.91, and 11 filings still yield
+    #     nothing where 422 did. There is no mixed corpus left to protect
+    #     against. Two things replace that rationale, and both say keep holding:
     #
-    #     Finishing the re-parse before the nightly is the plan. This is what
-    #     makes an unexpected `analyze` harmless: a delayed cron, a `rebuild`
-    #     dispatch, or the admin dashboard's Analyze / Regenerate / Full Refresh
-    #     buttons, any of which would otherwise publish from the mixed corpus.
+    #     - The bar this detector has to clear gets LOWER as wealth rises. It
+    #       fires on `growth_percent > salary_growth_percent + 200`
+    #       (`wealth_analyzer.py:193-195`), where `salary_growth_percent` is
+    #       salary*years/prev_nw*100 (`:190`) -- a figure that SHRINKS as net
+    #       worth grows. Correcting the parsers raised disclosed value about
+    #       2.7x, so the effective threshold slides toward the flat 200% and the
+    #       detector fires MORE readily on the corrected corpus than on the
+    #       understated one nobody has reviewed it against either.
+    #
+    #     - 343 Senate annual filings enter its population for the first time.
+    #       They stored zero assets until a Senate annual reader existed, so net
+    #       worth was None and every one was skipped (`:444`). They are
+    #       comparable now, and nobody has seen what it says about them.
+    #
+    #     So the release condition is the sentence it always was, pointed at a
+    #     different corpus: somebody reads a sample of what it says about the
+    #     CORRECTED data and can say it is sound. Same bar as the two above.
     #
     #     Disabling does not retract what it already wrote -- serving applies no
     #     type filter -- so `purge-disabled` runs with it. That also empties the
     #     table, so when the hold lifts it re-derives from scratch rather than
     #     inserting corrected findings BESIDE the broken ones, which is what
     #     `anomaly_key` identity-by-title would otherwise do.
-    #
-    #     Remove once the re-parse is complete and somebody has read a sample of
-    #     what it says about the corrected corpus.
     disabled_anomaly_types: str = Field(
         default=(
             "outperforming_trades,perfect_timing,loss_avoidance,"

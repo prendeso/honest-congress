@@ -431,9 +431,9 @@ checklist twice.
 
 ## D15. Two more detectors are held, which is not the same as disabled
 
-`DISABLED_ANOMALY_TYPES` now carries five names for two different reasons, and
-conflating them would be a mistake in either direction — leaving these two off
-for ever, or turning them back on without looking.
+`DISABLED_ANOMALY_TYPES` carries six names for three different reasons (the
+third is D16), and conflating them would be a mistake in either direction —
+leaving these two off for ever, or turning them back on without looking.
 
 The three in D3 are **condemned**: their arithmetic is indefensible and fixing
 them needs share-level price history this project does not have.
@@ -465,3 +465,64 @@ $15,008,502.50 in a year against a real figure of $551,001, and Laura Gillen
 flagged at $476,500.50 when her true figure was below the reporting threshold
 entirely. Every one of them was produced by code that looked reasonable and had
 passing tests. A fifth unread accuser is the same mistake in a new place.
+
+## D16. A held detector is skipped, not run and thrown away
+
+`excessive_wealth_growth` is the sixth name in `DISABLED_ANOMALY_TYPES`, and it
+is held for a third reason: not condemned arithmetic (D3), not an unread
+detector that never ran (D15), but a detector whose **input changed scale
+underneath it**.
+
+It was held first for the length of one operation. The parsers had just been
+corrected and re-reading the stored filings took several dispatches, so the
+corpus was MIXED — some filings read by the new parser, some by the old. This
+detector compares consecutive annual filings and nothing in the analysis layer
+reads `parse_confidence`, so it would have published the difference between two
+PARSERS as a member's wealth doubling in a year, against the ~450 members with
+two or more annual filings, with a NULL q-value that always passes the FDR
+filter.
+
+That operation is finished: 2,174 annual filings re-read, zero failures, mean
+parse confidence 0.91, and 11 filings still yielding nothing where 422 did.
+**The hold stands on new ground.** Two things replace the original rationale:
+
+- **The bar it must clear gets lower as wealth rises.** It fires on
+  `growth_percent > salary_growth_percent + 200`, where `salary_growth_percent`
+  is `salary × years / prev_nw × 100` — a figure that *shrinks* as net worth
+  grows. Correcting the parsers raised disclosed value about 2.7x, so the
+  effective threshold slides toward the flat 200% and it fires **more** readily
+  on the corrected corpus than on the understated one it was never reviewed
+  against either.
+- **343 Senate filings enter its population for the first time.** They stored
+  zero assets until a Senate annual reader existed, so net worth was `None` and
+  every one was skipped. They are comparable now, and nobody has seen what it
+  says about them.
+
+The release condition is D15's, unchanged: read a sample and say it is sound.
+
+### Skipped, not discarded
+
+D3 describes the gate as `persist_anomalies()`, "so no write path can bypass
+it". That is the correctness half. It is not the whole gate, and the difference
+is measured in hours.
+
+A disabled type used to be **computed and then thrown away**. On one production
+rebuild `outperforming_trades` took 17m15s to produce 23 findings that
+`persist_anomalies` dropped, and `loss_avoidance` 17m17s for 18 more — 34
+minutes of a 168-minute analysis step. Those two were gated at their call sites.
+The three that read `Asset` and `Liability` rows were not, and they are the ones
+the re-parse campaign made expensive: roughly twice the holdings per House
+annual, plus 343 Senate annuals that now return data instead of nothing.
+
+So every type in `DISABLED_ANOMALY_TYPES` is now skipped at the site that runs
+it, via `detector_is_disabled` in `src/analysis/__init__.py`. This is
+behaviour-preserving by construction — `persist_anomalies` refused to store
+these types and `detect_red_flag_combinations` refused to count them, so nothing
+downstream can tell the difference.
+
+`tests/test_held_detectors_do_no_work.py` holds both halves. It asserts on the
+SQL the session emitted rather than on a mock not being called, because the
+claim is that **no asset row is read**, which is what costs the time. One test
+there walks `src/analysis` and fails if a disabled type has no gate: adding a
+seventh entry to the list gets you the persist-time gate for free, which is
+exactly why a missing call-site gate goes unnoticed.

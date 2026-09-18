@@ -37,6 +37,19 @@ import pytest
 
 from src.analysis.wealth_analyzer import WealthAnalyzer, is_net_worth_snapshot
 from src.db.models import Asset, AssetType, Chamber, Disclosure, Member, Party
+from tests.conftest import enabling_anomaly_type
+
+
+@pytest.fixture(autouse=True)
+def _wealth_growth_enabled(monkeypatch):
+    """`excessive_wealth_growth` is held, so the analyzer does not run at all.
+
+    Every test in this file is a test of what that analyzer DOES. Without this
+    they would not fail, which is worse: `analyze_member` returns [] while held,
+    so the ones asserting "nothing fires" would pass while proving nothing.
+    """
+    with enabling_anomaly_type("excessive_wealth_growth", monkeypatch):
+        yield
 
 
 @pytest.fixture

@@ -38,6 +38,18 @@ from src.db.models import (
     Transaction,
     TransactionType,
 )
+from tests.conftest import enabling_anomaly_type
+
+
+@pytest.fixture(autouse=True)
+def _wealth_growth_enabled(monkeypatch):
+    """`excessive_wealth_growth` is held, so `WealthAnalyzer` returns before its
+    first query -- which is the answer these tests are looking for, arrived at
+    the wrong way. A scoping test that passes because the analyzer does nothing
+    proves nothing about scoping. `TradeAnalyzer` is unaffected either way.
+    """
+    with enabling_anomaly_type("excessive_wealth_growth", monkeypatch):
+        yield
 
 
 def _count_queries(callable_):

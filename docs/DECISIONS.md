@@ -526,3 +526,71 @@ claim is that **no asset row is read**, which is what costs the time. One test
 there walks `src/analysis` and fails if a disabled type has no gate: adding a
 seventh entry to the list gets you the persist-time gate for free, which is
 exactly why a missing call-site gate goes unnoticed.
+
+## D17. Schedule H is read; C, E, F are deferred; G and I are ruled out
+
+The House annual form has nine schedules. This project read three of them — A
+(assets), B (transactions) and D (liabilities) — and nothing had ever measured
+what was in the other six.
+
+Sampled properly rather than guessed: 70 House annual reports drawn at random
+(seeded) from the Clerk's own 2024–25 index, population 802, of which 67 parsed.
+
+| Schedule | | filings disclosing | rate |
+|---|---|---:|---:|
+| C | Earned income | 41/67 | 61% |
+| E | Positions held | 36/67 | 54% |
+| F | Agreements | 36/67 | 54% |
+| **H** | **Travel payments** | **35/67** | **52%** |
+| G | Gifts | 0/67 | **0%** |
+| I | Payments to charity in lieu of honoraria | 0/67 | **0%** |
+
+**G and I are ruled out on evidence, not on effort.** Both are present in all 67
+filings and read exactly `None disclosed.` in all 67 — checked against the raw
+schedule regions, not inferred from a failed parse. The reporting thresholds are
+high enough that House members effectively never file either. Tables for them
+would be empty tables.
+
+**H is built.** 61 dated trips across the sample, so on the order of 700 across
+the corpus, and the rows name who paid for what:
+
+```
+Norma Torres     American Israel Education Foundation   San Francisco – Tel Aviv
+Pramila Jayapal  Center for Democracy in the Americas   Washington DC – Havana
+Greg Casar       Center for Economic and Policy Research Austin – Bogotá
+Greg Murphy      The Aspen Institute                    Raleigh – Bellagio, Italy
+Andy Barr        Ripon Society                          Lexington – Vienna
+```
+
+47 distinct sponsors in 61 trips. Privately funded congressional travel is the
+highest news value of the six and the most self-contained — the form states the
+sponsor, the dates and the itinerary in a bounded grid, so nothing has to be
+inferred.
+
+**C and E are deferred, not rejected.** They are the natural join partners for
+the committee-conflict detectors in `src/analysis/committee_conflicts.py` —
+outside income and positions held, against the jurisdiction a member sits on —
+but weak on their own, and that join is a detector decision with its own
+evidence bar. F is pension-continuation boilerplate in nearly every filing
+sampled.
+
+### Three columns of Schedule H are deliberately not stored
+
+The form ends with `Lodging?`, `Food?` and `Family?`. Those ticks are **drawn as
+vector curves, not text**: page 6 of document `10074944` carries seven trips and
+**zero characters to the right of x=400**, where all three columns sit.
+
+Storing them would mean inferring a boolean from path geometry and serving it as
+a disclosure — the "inferred rather than read" move that produced every parser
+defect this log records. The reader matches those three headings so that
+`Days at Own Exp.` has a right-hand edge, and drops them.
+
+### Stored, not served
+
+`travel_payments` has no API route, no template and no detector, and
+`tests/test_travel_payments_are_stored.py::TestItIsNotPublishedYet` fails if one
+appears. That is so publishing it is a decision somebody makes rather than
+something that happens: the credentials this project leaked are still live, and
+a detector over travel data would need the sample-reading bar D15 sets for any
+accuser.
+

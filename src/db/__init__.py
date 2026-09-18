@@ -11,6 +11,7 @@ from src.db.models import (
     Party,
     Transaction,
     TransactionType,
+    TravelPayment,
 )
 
 __all__ = [
@@ -20,6 +21,7 @@ __all__ = [
     "Asset",
     "Transaction",
     "Liability",
+    "TravelPayment",
     "Anomaly",
     "Chamber",
     "Party",

@@ -168,6 +168,9 @@ class Disclosure(Base):
     liabilities: Mapped[List["Liability"]] = relationship(
         "Liability", back_populates="disclosure", cascade="all, delete-orphan"
     )
+    travel_payments: Mapped[List["TravelPayment"]] = relationship(
+        "TravelPayment", back_populates="disclosure", cascade="all, delete-orphan"
+    )
 
     __table_args__ = (
         Index("ix_disclosures_member_year", "member_id", "filing_year"),
@@ -267,6 +270,65 @@ class Liability(Base):
 
     def __repr__(self) -> str:
         return f"<Liability {self.creditor}>"
+
+
+class TravelPayment(Base):
+    """A trip somebody else paid for, from Schedule H of a House annual filing.
+
+    52% of House annual reports disclose at least one -- measured over a random
+    sample of 70 drawn from the Clerk's 2024-25 index, 67 of which parsed, and
+    carrying 61 dated trips between them. Read nowhere in this project until
+    now, so a member flying to Tel Aviv, Havana, Bogota or Bellagio on somebody
+    else's money was in the document and in no database.
+
+    What the form calls "Travel Payments and Reimbursements". The row names the
+    sponsor, the dates, the itinerary and how many days the filer paid for
+    themselves.
+
+    THREE COLUMNS OF THE FORM ARE DELIBERATELY ABSENT. Schedule H ends with
+    Lodging?, Food? and Family?, and those ticks are drawn as vector curves, not
+    text: on page 6 of document 10074944 there are zero characters to the right
+    of x=400, where all three columns sit. Storing them would mean inferring a
+    boolean from path geometry and calling it a disclosure. The reader matches
+    those headings so it knows where `Days at Own Exp.` ends, and then drops
+    them.
+
+    Not served anywhere. This stores what the documents say; publishing it, and
+    building any detector over it, is a separate decision.
+    """
+
+    __tablename__ = "travel_payments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    disclosure_id: Mapped[int] = mapped_column(ForeignKey("disclosures.id"), index=True)
+
+    # Who paid. "American Israel Education Foundation, Inc. (AIEF)", "Ripon
+    # Society & Franklin Center for Global Policy Exchange".
+    source: Mapped[str] = mapped_column(String(200))
+
+    # The trip. Both nullable because a row can state one date and not the
+    # other, and a row with no start date at all is rejected by the reader
+    # rather than stored.
+    start_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    end_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # "Washington, DC - Kyiv, Ukraine - Washington, DC". Text, not String(n):
+    # a multi-leg itinerary runs to several hundred characters and wraps across
+    # four or five printed lines.
+    itinerary: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # "Days at Own Exp." -- how much of the trip the filer paid for. Almost
+    # always 0, which is the point of the column.
+    days_at_own_expense: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Metadata
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    # Relationships
+    disclosure: Mapped["Disclosure"] = relationship("Disclosure", back_populates="travel_payments")
+
+    def __repr__(self) -> str:
+        return f"<TravelPayment {self.source}>"
 
 
 # The severity column is free text, and three detector families historically

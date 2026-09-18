@@ -14,7 +14,15 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from src.db import Chamber, Disclosure, Member, Party, get_db
-from src.db.models import Anomaly, Asset, AssetType, Liability, Transaction, TransactionType
+from src.db.models import (
+    Anomaly,
+    Asset,
+    AssetType,
+    Liability,
+    Transaction,
+    TransactionType,
+    TravelPayment,
+)
 from src.ingestion import _helpers
 from src.ingestion.congress_gov import CongressGovClient
 from src.ingestion.date_utils import choose_filing_date, choose_transaction_date
@@ -1138,7 +1146,9 @@ class IngestionOrchestrator:
                 self._clear_parsed_rows(
                     db,
                     disclosure,
-                    (parsed.get("assets") or []) + (parsed.get("liabilities") or []),
+                    (parsed.get("assets") or [])
+                    + (parsed.get("liabilities") or [])
+                    + (parsed.get("travel_payments") or []),
                 )
                 self._store_fd_data(db, disclosure, parsed)
                 text_extracted = _fd_text_extracted(parsed)
@@ -1276,7 +1286,7 @@ class IngestionOrchestrator:
                 dropped,
             )
 
-        for model in (Transaction, Asset, Liability):
+        for model in (Transaction, Asset, Liability, TravelPayment):
             db.query(model).filter(model.disclosure_id == disclosure.id).delete(
                 synchronize_session=False
             )
@@ -1376,6 +1386,20 @@ class IngestionOrchestrator:
                 amount_max=liab_data.get("amount_max"),
             )
             db.add(liability)
+
+        # Store travel paid for by somebody else (Schedule H). Not served
+        # anywhere yet -- this records what the documents say; publishing it is
+        # a separate decision.
+        for trip_data in parsed.get("travel_payments", []):
+            trip = TravelPayment(
+                disclosure_id=disclosure.id,
+                source=trip_data.get("source", ""),
+                start_date=trip_data.get("start_date"),
+                end_date=trip_data.get("end_date"),
+                itinerary=trip_data.get("itinerary"),
+                days_at_own_expense=trip_data.get("days_at_own_expense"),
+            )
+            db.add(trip)
 
     def _disclosures_to_parse(
         self,

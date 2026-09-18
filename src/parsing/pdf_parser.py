@@ -90,13 +90,37 @@ _SCHEDULE_B_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+B\s*:", re.MULTILINE | re
 # instead of a grid, so there are no row bands to find and nothing to store --
 # and that is the document being complete, not the reader failing.
 _NONE_DISCLOSED = re.compile(r"^\s*None\s+disclosed\.?\s*$", re.MULTILINE | re.IGNORECASE)
-_ANY_SCHEDULE_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+[A-I]\s*:", re.MULTILINE | re.IGNORECASE)
+# [A-J], not [A-I]: the candidate, amendment and new-filer forms end with a
+# Schedule J ("Compensation Exceeding $5,000 Paid by One Source") that the
+# annual form does not have. Stopping at I ran every region search past it.
+_ANY_SCHEDULE_HEADING = re.compile(r"^\s*S(?:CHEDULE)?\s+[A-J]\s*:", re.MULTILINE | re.IGNORECASE)
+_FILING_TYPE = re.compile(r"^\s*Filing Type:\s*(.+?)\s*$", re.MULTILINE)
 
 # The three schedules that produce stored rows: holdings, transactions, debts.
 # C (earned income), E (positions), F (agreements), G (gifts), H (travel) and I
 # (compensation) are read by nobody today, so their contents cannot make a
 # filing's stored rows non-empty and they are not consulted here.
 _ROW_BEARING_SCHEDULES = ("A", "B", "D")
+
+# The House FD form comes in variants, and they do not all print the same
+# schedules. Surveyed across 28 real documents:
+#
+#     Annual Report      A B C D E F G H I     22 documents
+#     Candidate Report   A   C D E F       J    2
+#     Amendment Report   A   C D E F       J    2
+#     New Filer Report   A   C D E F       J    2
+#
+# Every variant prints A and D. Only the Annual Report prints B -- the other
+# three cover a period before the filer held office, so the form does not ask
+# for transactions at all. These are real filings that do carry holdings: the
+# New Filer Report sampled here lists 745 of them.
+#
+# Named rather than inferred, and an unrecognised variant falls through to
+# requiring all three. A form shape nobody has looked at should report itself
+# as unread rather than be waved through on a guess.
+_VARIANTS_WITHOUT_SCHEDULE_B = frozenset(
+    {"candidate report", "amendment report", "new filer report"}
+)
 
 
 def _schedule_region(text: str, schedule: str) -> str | None:
@@ -108,6 +132,21 @@ def _schedule_region(text: str, schedule: str) -> str | None:
     rest = text[start.end() :]
     end = _ANY_SCHEDULE_HEADING.search(rest)
     return rest[: end.start()] if end else rest
+
+
+def _row_bearing_schedules(text: str) -> tuple[str, ...]:
+    """Which row-bearing schedules THIS form variant is expected to print.
+
+    Read from the document's own `Filing Type:` line rather than from the
+    Clerk's type letter, for the same reason the rest of this module reads the
+    document: the letter is metadata about the filing and this is a question
+    about the page.
+    """
+    declared = _FILING_TYPE.search(text)
+    variant = declared.group(1).strip().lower() if declared else ""
+    if variant in _VARIANTS_WITHOUT_SCHEDULE_B:
+        return ("A", "D")
+    return _ROW_BEARING_SCHEDULES
 
 
 def discloses_no_rows(text: str) -> bool:
@@ -136,7 +175,7 @@ def discloses_no_rows(text: str) -> bool:
     """
     if not text:
         return False
-    for schedule in _ROW_BEARING_SCHEDULES:
+    for schedule in _row_bearing_schedules(text):
         region = _schedule_region(text, schedule)
         if region is None or not _NONE_DISCLOSED.search(region):
             return False

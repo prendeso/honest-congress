@@ -125,11 +125,20 @@ def score_ptr_parse(
 #      which made them the single largest category of apparent parser failure in
 #      the corpus. They are not annual filings and have nothing to find.
 #   D, W  one-page letters to the Clerk under the same "CNRFDR" heading.
+#   E  a termination / new-employment notification. Six exist across 2024-25,
+#      all from members who left the House -- Schiff, Banks, Blunt Rochester,
+#      Curtis, Slotkin to the Senate, Waltz to the Executive Office. Read two
+#      of them (40004775, 40003709): one page, ~850 characters, NO lettered
+#      schedule of any kind, just "This is to notify you that I have assumed a
+#      new federal government position". The other four are scans and are
+#      caught earlier by the no-text-layer branch.
 #
-# Deliberately NOT here: O, A, H and T. Those are real multi-page FDRs -- Rosa
-# DeLauro's is 4 pages and 4,651 characters -- and the 28 of them that yielded
-# nothing are genuine parser gaps that must keep reporting themselves as such.
-NO_FINANCIAL_SCHEDULE = frozenset({"X", "D", "W"})
+# Deliberately NOT here: O, A, H, T and C. Those are real FDRs with schedules --
+# Rosa DeLauro's annual is 4 pages, Earl Blumenauer's TERMINATION report (T)
+# lists 196 holdings, and a New Filer Report sampled here lists 745 -- so the
+# ones that yield nothing are genuine parser gaps that must keep reporting
+# themselves as such.
+NO_FINANCIAL_SCHEDULE = frozenset({"X", "D", "W", "E"})
 
 
 def score_filing_with_no_schedule(filing_type: str) -> ParseConfidence:

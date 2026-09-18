@@ -54,8 +54,12 @@ class TestTheVerdictItself:
         assert as_an_annual_filing.summary == "no assets or liabilities found in an annual filing"
         assert score_filing_with_no_schedule("X").confidence == 1.0
 
-    def test_the_set_is_exactly_the_three_verified_letters(self):
-        assert NO_FINANCIAL_SCHEDULE == {"X", "D", "W"}
+    def test_the_set_is_exactly_the_verified_letters(self):
+        # Every one of these was added by reading the documents, never by
+        # inferring from the letter. E joined them after reading Waltz
+        # (40004775) and Curtis (40003709): a one-page notification of new
+        # federal employment, ~850 characters, no lettered schedule at all.
+        assert NO_FINANCIAL_SCHEDULE == {"X", "D", "W", "E"}
 
     @pytest.mark.parametrize("filing_type", ["O", "A", "H", "T", "P", "C"])
     def test_a_real_report_is_not_in_it(self, filing_type):

@@ -36,7 +36,7 @@ from src.analysis.trade_analyzer import TradeAnalyzer
 class _Txn:
     """The attributes `_check_trading_frequency` reads. It touches no database."""
 
-    def __init__(self, when, ticker="AAPL"):
+    def __init__(self, when, ticker="AAPL", description="Apple Inc. (AAPL) [ST]"):
         # Grouped by disclosure first, then by month.
         self.disclosure_id = 99
         self.transaction_date = when
@@ -44,6 +44,9 @@ class _Txn:
         self.transaction_type = None
         self.amount_min = Decimal("1001")
         self.amount_max = Decimal("15000")
+        # The asset class the form printed. `asset_class` reads this to decide
+        # what noun the sentence may use.
+        self.description = description
 
 
 def frequency_findings(count, month=datetime(2026, 3, 2)):
@@ -57,7 +60,13 @@ class TestTheTradeCountIsPublishedAsItWasDisclosed:
         finding = frequency_findings(count)[0]
 
         assert f"{count} trades" in finding["title"]
-        assert f"{count} stock trades" in finding["description"]
+        # "stock" used to sit here and was never checked against anything: a
+        # PTR row carries no asset type, so Sen. Rick Scott's eighteen
+        # municipal bonds were published as eighteen stock trades. What this
+        # test is for is the exact COUNT surviving into both strings rather
+        # than a band, and that is unchanged.
+        assert f"{count} transactions" in finding["description"]
+        assert "stock" not in finding["description"].lower()
         assert int(finding["computed_value"]) == count
 
     @pytest.mark.parametrize("count", [11, 40, 701])

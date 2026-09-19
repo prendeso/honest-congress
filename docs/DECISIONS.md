@@ -594,3 +594,108 @@ something that happens: the credentials this project leaked are still live, and
 a detector over travel data would need the sample-reading bar D15 sets for any
 accuser.
 
+
+## D18. An LLM audit measures its own prompt unless a control says otherwise
+
+**Decision:** no number from an adversarial review of this project's findings is
+published without a neutral-prompt control on the same findings, and no defect
+class is acted on until it has been checked against the primary document.
+
+### What was run
+
+1,000 findings were to be audited by one agent per finding, told to disprove it.
+A local corpus was built from the House Clerk with the same code that would
+publish — 539 members, 2,889 filings, 10,594 transactions, 596 findings. 174
+verdicts returned before a session limit:
+
+| verdict | n | share |
+|---|---:|---:|
+| overclaimed | 121 | 69.5% |
+| refuted | 44 | 25.3% |
+| **stands** | **9** | **5.2%** |
+
+Eight of the nine survivors were `late_filing`, which is a subtraction of two
+dates and alleges nothing. Read on its own that says everything requiring
+interpretation is broken.
+
+### The control says otherwise
+
+60 of those findings — stratified by type, so the hostile run's verdicts on this
+exact subset were 3 stands / 41 overclaimed / 16 refuted, matching the whole —
+were re-run with a neutral prompt. Same findings, same corpus, same schema. Only
+the framing differs: the first says "hostile investigative reporter trying to
+DISCREDIT", "find the hole", "write the takedown", and "use `overclaimed`
+freely; it is the most common real defect". The second asks for arithmetic and
+wording to be checked with equal weight and says a finding that checks out
+should be reported as standing as plainly as a flawed one is reported as flawed.
+
+| | stands | overclaimed | refuted |
+|---|---:|---:|---:|
+| hostile | 3 (5%) | 41 (68%) | 16 (27%) |
+| neutral | **42 (70%)** | 12 (20%) | 6 (10%) |
+
+**Exact agreement: 14 of 60 (23%)**, across three categories. Thirty-two
+findings the hostile run called overclaimed, the neutral run called sound; seven
+it refuted outright, the neutral run upheld.
+
+So `5.2% of this project's findings survive scrutiny` is a fact about the
+prompt. It is withdrawn, and nothing like it goes out without the paired control
+beside it.
+
+### What survived both, and what that was worth
+
+Four findings both runs refute. Three were real defects and are fixed:
+
+| finding | defect | fixed by |
+|---|---|---|
+| Chip Roy, sector concentration | every energy trade was his wife's | #98, #99 |
+| Bill Hagerty, volume spikes | four rows stored correctly as `Dependent Child` and counted as his | #99 |
+| Blake Moore, trade clustering | "30 in a row" was the Clerk's alphabetical row order | #99 |
+
+The fourth was false. See below.
+
+The audit's real yield is one defect found four ways — nothing asked whose trade
+it was — plus a noun (`stock trades` over municipal bonds) and a grade
+(`severity` as a literal). All are fixed, and none of them needed the 5.2%.
+
+### The duplicate-row class does not exist
+
+Thirteen of the 24 fatal refutations claimed rows counted two to four times, and
+the neutral run independently made the same claim about David Taylor. **Six
+filings were checked line by line against the Clerk's PDF and the parser is
+right in all six:**
+
+| filing | claim | printed | stored |
+|---|---|---:|---:|
+| Carol Miller 20025203 | "5 sales stored twice" | 10 | 10 |
+| Cleo Fields 20031017 | "6 of 36 are double-reads" | 38 | 36 |
+| David Taylor 20033495 | "11 rows are really 5" | 11 | 11 |
+| Earl Carter 20025499 | duplicate Ameris rows | 4 | 4 |
+| Katherine Clark 20024795 | duplicate NYCB rows | 2 | 2 |
+| Josh Gottheimer 20024612 | duplicate MSFT rows | 15 | 15 |
+
+The House form legitimately prints near-identical lines — the same asset, the
+same day, different amount bands, or a partial sale split across lots. When the
+weak text path reads one of a pair it truncates the description and drops the
+ticker, so a truncated row sits beside a full one and **looks** like a
+photocopy. It is not.
+
+Both prompt framings share that false positive, and so did a prefix-matching
+measurement written here before the documents were opened: it counted 242
+"duplicate" rows across 48% of findings and would have deleted real disclosed
+trades. `restatements.py` refuses to collapse rows within a single filing for
+exactly this reason, and that rule stands.
+
+**A verification wave has to be built to catch this specific error**, or three
+more agents will confirm it three more times. Agreement between independent
+reviewers is not evidence when they share a failure mode.
+
+### Standing rules
+
+- A defect class is checked against the primary document before any code
+  changes. Five of six duplicate claims were refuted by counting lines in a PDF.
+- A number from an adversarial run is published only beside a neutral control on
+  the same items.
+- Corpus re-runs, not the test suite, catch what a fix breaks. The first version
+  of the attribution fix passed its own tests while erasing 85 real late
+  filings; the corpus run found it in one command.

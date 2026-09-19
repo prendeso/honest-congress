@@ -3,11 +3,12 @@
 import logging
 from collections import defaultdict
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Sequence
 
 from sqlalchemy.orm import Session
 
 from src.analysis.anomaly_key import identity_of, stored_by_identity
+from src.analysis.asset_class import all_fixed_income
 from src.analysis.attribution import held_by_member, trades_the_member_holds
 from src.analysis.restatements import drop_restated_pairs, member_transactions
 from src.analysis.sectors import SectorIndex
@@ -32,6 +33,17 @@ _settings = get_settings()
 # "Las Vegas Sands". It also carried a COMMITTEE_SECTORS map with no callers at
 # all. Both are gone; `SectorIndex` classifies on the issuer's own SEC industry
 # code, which covers every registrant rather than a remembered handful.
+
+
+def _what_was_traded(transactions: Sequence[Transaction]) -> str:
+    """The noun phrase for a month's rows, asserting only what the form says.
+
+    Reads as "18 transactions were" or "18 government or municipal securities
+    were", so the caller's sentence works either way.
+    """
+    if all_fixed_income(transactions):
+        return "government or municipal securities were"
+    return "transactions were"
 
 
 class TradeAnalyzer:
@@ -419,15 +431,15 @@ class TradeAnalyzer:
         # Check each disclosure independently
         for disclosure_id, txns in disclosures_map.items():
             # Group transactions by month within this disclosure
-            monthly_counts = defaultdict(int)
+            monthly: dict[str, list] = defaultdict(list)
 
             for txn in txns:
                 if txn.transaction_date:
-                    month_key = txn.transaction_date.strftime("%Y-%m")
-                    monthly_counts[month_key] += 1
+                    monthly[txn.transaction_date.strftime("%Y-%m")].append(txn)
 
             # Check for high-frequency months
-            for month, count in monthly_counts.items():
+            for month, rows in monthly.items():
+                count = len(rows)
                 if count > self.frequency_threshold_per_month:
                     # Format month from YYYY-MM to "Month Year"
                     try:
@@ -484,10 +496,25 @@ class TradeAnalyzer:
                             # on one line what the page denied on the next. D3,
                             # D10 and D14 were all spent removing exactly this
                             # kind of claim; it survived here.
+                            # "stock" was never checked against anything. The
+                            # PTR row carries no asset type, so every
+                            # transaction was described as a stock trade --
+                            # including Sen. Rick Scott's eighteen, which were
+                            # municipal bonds, and Sen. Fetterman's, which were
+                            # bonds in a child's account. The count was right
+                            # and the noun was invented.
+                            #
+                            # The form prints the asset class in brackets and
+                            # the parser keeps it, so where every row in the
+                            # month is debt the sentence says debt. Where the
+                            # classes are mixed or unread it says
+                            # "transactions", which is what a PTR row is
+                            # whatever it holds.
                             "description": (
-                                f"{count} stock trades were disclosed in {formatted_month}, "
-                                f"which exceeds the threshold of "
-                                f"{self.frequency_threshold_per_month} trades per month."
+                                f"{count} {_what_was_traded(rows)} disclosed in "
+                                f"{formatted_month}, which exceeds the threshold of "
+                                f"{self.frequency_threshold_per_month} transactions "
+                                f"per month."
                             ),
                             "computed_value": Decimal(str(count)),
                             "threshold_value": Decimal(str(self.frequency_threshold_per_month)),

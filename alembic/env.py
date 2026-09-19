@@ -17,7 +17,16 @@ from src.db.models import Base
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers=False`, because the default is True and this
+    # runs in-process whenever anything calls `cli init` or drives alembic
+    # programmatically. With the default, applying a migration silently turns
+    # OFF every logger configured before it -- `src.ingestion.orchestrator`
+    # included -- so the next step in the same process runs mute.
+    #
+    # Caught by a test that migrates a SQLite database and an unrelated
+    # orchestrator test that asserts on a warning it emits: the warning was
+    # never recorded, and each test passed alone.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

@@ -15,6 +15,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.analysis.attribution import trades_the_member_holds
 from src.analysis.restatements import member_transactions
 from src.db.models import Asset, Disclosure, Liability, Member, Transaction, TransactionType
 
@@ -612,7 +613,12 @@ class AdvancedAnomalyDetector:
                 try:
                     # Get all trades for this member (joined through Disclosure
                     # because Transaction has no direct member_id column).
-                    trades = member_transactions(db, member.id)
+                    # Only what the member is a party to. A disclosure is a
+                    # household document -- the law makes a member report their
+                    # spouse's and dependent children's trades, which is not the
+                    # same as having made them. 57% of the rows in a real House
+                    # corpus are not the filer's own, and nothing here asked.
+                    trades = trades_the_member_holds(member_transactions(db, member.id))
 
                     if not trades:
                         continue

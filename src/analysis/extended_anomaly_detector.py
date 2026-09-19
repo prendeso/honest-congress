@@ -16,6 +16,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.analysis.attribution import trades_the_member_holds
 from src.analysis.clustering import _days
 from src.analysis.restatements import member_transactions
 from src.db.models import Member, Transaction, TransactionType
@@ -82,7 +83,12 @@ class ExtendedAnomalyDetector:
                     # counted every restated trade once per filing carrying it.
                     # Thom Tillis was published as "14 consecutive trades" for
                     # 7 real ones; Steve Daines "26" for 13.
-                    trades = member_transactions(db, member.id)
+                    # Only what the member is a party to. A disclosure is a
+                    # household document -- the law makes a member report their
+                    # spouse's and dependent children's trades, which is not the
+                    # same as having made them. 57% of the rows in a real House
+                    # corpus are not the filer's own, and nothing here asked.
+                    trades = trades_the_member_holds(member_transactions(db, member.id))
 
                     if not trades:
                         continue
@@ -325,7 +331,12 @@ class ExtendedAnomalyDetector:
                 try:
                     # Restated rows removed: this walks a nested buy x sell
                     # loop, so duplication is quadratic rather than a doubling.
-                    trades = member_transactions(db, member.id)
+                    # Only what the member is a party to. A disclosure is a
+                    # household document -- the law makes a member report their
+                    # spouse's and dependent children's trades, which is not the
+                    # same as having made them. 57% of the rows in a real House
+                    # corpus are not the filer's own, and nothing here asked.
+                    trades = trades_the_member_holds(member_transactions(db, member.id))
 
                     if len(trades) < 10:
                         continue

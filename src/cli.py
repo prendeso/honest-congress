@@ -980,6 +980,18 @@ _SUPERSEDED_WORDING = (
     # never rewritten, so the stale phrase is served for ever. All 169 live
     # findings carry it.
     ("trade_clustering", "description", "within a short period"),
+    # And the title the same detector wrote until it stopped claiming an order
+    # the filing does not record. A PTR carries a date, not a time, so trades
+    # sharing a date have no sequence -- Rep. Blake Moore's "30 in a row" was
+    # 37 trades on ONE date, ordered by the Clerk's alphabetical asset listing,
+    # with his only two purchases falling under S and V so every sale stacked
+    # in front of them. The corrected detector titles a single-date batch
+    # "Same-direction trades on one day (N)", so "in a row" is a phrase it can
+    # no longer produce -- asserted in
+    # `tests/test_the_streak_was_the_alphabet.py` against the module's
+    # emittable string literals rather than its source, because its docstrings
+    # quote the old wording on purpose.
+    ("trade_clustering", "title", " in a row"),
     # `excessive_wealth_growth` compared whichever filing the database happened
     # to return last for the earlier year. `wealth_analyzer` ordered only by
     # `filing_year`, and its growth loop skips same-year pairs, so "last filing

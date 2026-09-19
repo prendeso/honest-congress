@@ -321,7 +321,21 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
 
         assert db_session.query(Anomaly).count() == 0
 
-    def test_a_clustering_finding_stating_its_real_span_survives(self, db_session):
+    def test_the_previous_correction_is_superseded_in_its_turn(self, db_session):
+        """This finding was itself the fix for the one above, and it is now
+        wrong for a different reason.
+
+        Stating the real span ("over 12 days") corrected the missing time
+        window. It left "consecutive ... in a row" in place, which asserts an
+        ORDER -- and a PTR records a date, not a time, so trades sharing a date
+        have none. Rep. Blake Moore's "30 in a row over 10 days" was 37 trades
+        on ONE date, ordered by the Clerk's alphabetical asset listing.
+
+        So the title goes the way the description went, and this test asserts
+        the opposite of what it asserted before. That is the point of keeping
+        it: a correction is not a resting place, and the row that carried the
+        last one has to come down too.
+        """
         from src.db.models import Anomaly
 
         self._anomaly(
@@ -332,6 +346,32 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
                 "Member made 7 consecutive trades in the same direction (all buys "
                 "or all sells) over 12 days. This describes the sequence only; it "
                 "does not measure timing, profitability, or intent."
+            ),
+        )
+
+        self._purge(db_session)
+
+        assert db_session.query(Anomaly).count() == 0
+
+    def test_the_current_clustering_wording_survives(self, db_session):
+        """The other half: the purge must not eat what the detector writes now.
+
+        Without this the rule above degenerates into "delete every
+        trade_clustering finding", which passes every deletion test and breaks
+        the site.
+        """
+        from src.db.models import Anomaly
+
+        self._anomaly(
+            db_session,
+            anomaly_type="trade_clustering",
+            title="Same-direction trades on one day (8)",
+            description=(
+                "Member made 8 trades in the same direction (all buys or all sells) "
+                "on 19 January 2024. The filing records a date but no time of day, "
+                "so this is a batch rather than a sequence: it says what was traded "
+                "that day, not in what order. This describes what was traded only; "
+                "it does not measure timing, profitability, or intent."
             ),
         )
 

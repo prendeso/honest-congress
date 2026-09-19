@@ -10,9 +10,9 @@ Additional detection types:
 """
 
 import logging
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from decimal import Decimal
-from typing import Any, Dict, List
+from typing import Any, Dict, List, NamedTuple
 
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,22 @@ MIN_TRADES_FOR_VOLUME_SPIKE = 8
 # requires filing within 45 days" -- reusing the project's own number beats
 # inventing a rounder one.
 CONSECUTIVE_TRADE_WINDOW_DAYS = 45
+
+
+class Run(NamedTuple):
+    """A same-direction run, described by what the document actually says.
+
+    `days` is the number of distinct DATES it covers, and it is the field that
+    decides the wording: a run on one date is a batch, not a sequence, because
+    the filing records no time of day.
+    """
+
+    length: int
+    span_days: int
+    days: int
+    first: Any
+
+
 MIN_CONSECUTIVE_TRADES = 5
 VOLUME_SPIKE_SIGMAS = 3.0
 VOLUME_SPIKE_FLAT_MULTIPLE = 5.0
@@ -93,10 +109,29 @@ class ExtendedAnomalyDetector:
                     if not trades:
                         continue
 
-                    # Pattern 1: Consecutive same-direction trades (unusual clustering)
-                    run = self._check_consecutive_trades(trades)
+                    # Pattern 1: same-direction trading, worded as what the
+                    # document orders. On a single date a PTR records no time,
+                    # so the count is a fact about the day and never a streak.
+                    run = self._same_direction_run(trades)
                     if run:
-                        consecutive_same_direction, span_days = run
+                        if run.days == 1:
+                            title = f"Same-direction trades on one day ({run.length})"
+                            detail = (
+                                f"Member made {run.length} trades in the same direction "
+                                f"(all buys or all sells) on {run.first:%-d %B %Y}. The filing "
+                                f"records a date but no time of day, so this is a batch rather "
+                                f"than a sequence: it says what was traded that day, not in "
+                                f"what order."
+                            )
+                        else:
+                            title = f"Same-direction trades on {run.days} days ({run.length})"
+                            detail = (
+                                f"Member made {run.length} trades in the same direction "
+                                f"(all buys or all sells) on {run.days} days of trading "
+                                f"spanning {_days(run.span_days)}. Every one of those days is "
+                                f"entirely one direction; within a day the filing records no "
+                                f"order."
+                            )
                         anomalies.append(
                             {
                                 "member_id": member.id,
@@ -104,22 +139,17 @@ class ExtendedAnomalyDetector:
                                 "chamber": member.chamber,
                                 "anomaly_type": "trade_clustering",
                                 "severity": "MEDIUM",
-                                "title": (
-                                    f"Consecutive same-direction trades "
-                                    f"({consecutive_same_direction} in a row)"
-                                ),
+                                "title": title,
                                 "pattern": (
-                                    f"{consecutive_same_direction} consecutive same-direction "
-                                    f"trades within {CONSECUTIVE_TRADE_WINDOW_DAYS} days"
+                                    f"{run.length} same-direction trades on {run.days} "
+                                    f"unanimous day(s) within {CONSECUTIVE_TRADE_WINDOW_DAYS} days"
                                 ),
-                                "count": consecutive_same_direction,
-                                "computed_value": Decimal(str(consecutive_same_direction)),
+                                "count": run.length,
+                                "computed_value": Decimal(str(run.length)),
                                 "threshold_value": Decimal(str(MIN_CONSECUTIVE_TRADES)),
                                 "description": (
-                                    f"Member made {consecutive_same_direction} consecutive trades "
-                                    f"in the same direction (all buys or all sells) over "
-                                    f"{_days(span_days)}. This describes the sequence only; it does "
-                                    f"not measure timing, profitability, or intent."
+                                    f"{detail} This describes what was traded only; it does not "
+                                    f"measure timing, profitability, or intent."
                                 ),
                             }
                         )
@@ -171,27 +201,40 @@ class ExtendedAnomalyDetector:
 
         return anomalies
 
-    def _check_consecutive_trades(self, trades: List[Transaction]) -> tuple[int, int] | None:
-        """The longest same-direction run that fits inside the filing window.
+    def _same_direction_run(self, trades: List[Transaction]) -> "Run | None":
+        """The longest same-direction run the DOCUMENT actually orders.
 
-        This published "within a short period" and applied no time window at
-        all: `transaction_date` was never read. The only temporal input was the
-        caller's ORDER BY, which fixes order and bounds nothing, so a "run"
-        could span years. Sean Casten's "11 consecutive trades" ran from
-        2021-06-25 to 2024-07-30 -- 1,131 days, and his entire disclosed
-        history. Doris Matsui's 18 spanned 866 days.
+        Two corrections, in the order they were found.
 
-        Without a window this does not measure a pattern. It measures which
-        direction a member mostly traded, which for a member who only ever buys
-        is not a finding at all.
+        The first: this published "within a short period" and applied no time
+        window at all -- `transaction_date` was never read. The only temporal
+        input was the caller's ORDER BY, which fixes order and bounds nothing,
+        so a "run" could span years. Sean Casten's "11 consecutive trades" ran
+        1,131 days, his entire disclosed history. The window is
+        `CONSECUTIVE_TRADE_WINDOW_DAYS`, the STOCK Act PTR deadline this
+        project already quotes to readers.
 
-        The window is `CONSECUTIVE_TRADE_WINDOW_DAYS`, set to the STOCK Act PTR
-        deadline this project already asserts in `TradeAnalyzer` and quotes to
-        readers. A run inside one reporting window is a defensible unit and the
-        number is one the site already explains, which is worth more than a
-        rounder invented constant.
+        The second, and the reason this is no longer called "consecutive": a
+        PTR records a DATE, not a time of day. Trades sharing a date have no
+        order in the document, so any sequence among them is manufactured by
+        whatever the query sorted on -- here `Transaction.id`, which is PDF row
+        order, which is the Clerk's alphabetical listing by asset name.
 
-        Returns (run length, span in days), or None.
+        Rep. Blake Moore was published as "30 consecutive trades in the same
+        direction over 10 days". 37 of his 39 disclosed trades share one date,
+        2024-01-19, and that date contains BOTH sales and purchases: his only
+        buys that day were SPY and VUG, so the alphabet pushed every purchase
+        to the end and stacked the sales in front. The streak was the alphabet.
+        The underlying event was a single-day liquidation of individual
+        positions into two index funds -- the divestment pattern ethics
+        reformers recommend.
+
+        So a date contributes to a run only if it is UNANIMOUS: every trade on
+        it goes the same way. A mixed date orders nothing and breaks the run.
+        Within a unanimous date the count is a fact about the day, not a
+        sequence, and the caller words it that way.
+
+        Returns the run, or None.
         """
         if len(trades) < MIN_CONSECUTIVE_TRADES:
             return None
@@ -200,26 +243,43 @@ class ExtendedAnomalyDetector:
         if len(dated) < MIN_CONSECUTIVE_TRADES:
             return None
 
-        best: tuple[int, int] | None = None
-        start = 0
-        for end in range(len(dated)):
-            if dated[end].transaction_type != dated[start].transaction_type:
-                start = end
+        # date -> the directions traded on it, in the order the rows arrived.
+        by_date: OrderedDict[Any, List[Any]] = OrderedDict()
+        for trade in sorted(dated, key=lambda t: t.transaction_date):
+            by_date.setdefault(trade.transaction_date, []).append(trade.transaction_type)
+
+        # (date, direction, count) for the unanimous days; a mixed day becomes
+        # None, which breaks any run that would otherwise span it.
+        days: List[tuple | None] = []
+        for when, directions in by_date.items():
+            unique = set(directions)
+            days.append((when, directions[0], len(directions)) if len(unique) == 1 else None)
+
+        best: Run | None = None
+        run: List[tuple] = []
+        for entry in days:
+            if entry is None:
+                run = []
                 continue
-            # Shrink from the left until the run fits inside the window. The
-            # dates are ordered, so this is a sliding window rather than a
-            # rescan.
-            while (
-                start < end
-                and (dated[end].transaction_date - dated[start].transaction_date).days
-                > CONSECUTIVE_TRADE_WINDOW_DAYS
+            when, direction, count = entry
+            if run and run[-1][1] != direction:
+                run = []
+            run.append(entry)
+            # Shrink from the left until the run fits inside the window.
+            while len(run) > 1 and (when - run[0][0]).days > CONSECUTIVE_TRADE_WINDOW_DAYS:
+                run.pop(0)
+
+            length = sum(day[2] for day in run)
+            if length < MIN_CONSECUTIVE_TRADES:
+                continue
+            span = (run[-1][0] - run[0][0]).days
+            candidate = Run(length=length, span_days=span, days=len(run), first=run[0][0])
+            if (
+                best is None
+                or length > best.length
+                or (length == best.length and span < best.span_days)
             ):
-                start += 1
-            length = end - start + 1
-            if length >= MIN_CONSECUTIVE_TRADES:
-                span = (dated[end].transaction_date - dated[start].transaction_date).days
-                if best is None or length > best[0] or (length == best[0] and span < best[1]):
-                    best = (length, span)
+                best = candidate
 
         return best
 

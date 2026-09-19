@@ -235,6 +235,17 @@ class Transaction(Base):
     # Owner
     owner: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
+    # "New" or "Amended", as the House PTR prints it in the footnote under each
+    # row. NULL means the form did not say, or the row came from a source that
+    # does not carry it (the Senate's eFD HTML does not).
+    #
+    # An amended row restates one already disclosed, so scoring it against the
+    # STOCK Act's 45-day clock re-accuses a filing that was on time. Rep.
+    # Keating disclosed a 13 September 2023 sale on 28 September, 15 days; the
+    # amendment carrying that row again was filed 2024-01-16, and the site
+    # published "filed significantly late (1-3 months)", 125 days.
+    filing_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

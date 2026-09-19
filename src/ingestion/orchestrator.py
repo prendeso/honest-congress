@@ -1340,6 +1340,7 @@ class IngestionOrchestrator:
                 amount_min=txn_data.get("amount_min"),
                 amount_max=txn_data.get("amount_max"),
                 owner=txn_data.get("owner", "Self"),
+                filing_status=txn_data.get("filing_status"),
             )
             db.add(transaction)
 
@@ -1396,6 +1397,7 @@ class IngestionOrchestrator:
                 amount_min=txn_data.get("amount_min"),
                 amount_max=txn_data.get("amount_max"),
                 owner=txn_data.get("owner"),
+                filing_status=txn_data.get("filing_status"),
             )
             db.add(transaction)
 

@@ -164,18 +164,27 @@ def _finding(description, count=18):
 
 
 class TestTheSentenceThatGoesOut:
+    """The noun is what this file is for. The verb moved later, and why is
+    worth recording: "disclosed in <month>" was replaced by "attributed to this
+    member in <month>" once a neutral audit pointed out that the count is the
+    member's OWN rows while the filing prints the whole household -- Rep.
+    Donalds' March 2025 filing shows 48 transactions against a published 23.
+    Right number, unverifiable sentence. The assertions below track that
+    change; what they exist to pin, that no bond is called a stock, is
+    untouched."""
+
     def test_rick_scotts_eighteen_are_not_called_stock_trades(self):
         finding = _finding("Chicago Ill O'Hare 4.00% 01/01/36 [GS]")
 
         assert "stock" not in finding["description"].lower()
-        assert "18 government or municipal securities were disclosed" in finding["description"]
+        assert "18 government or municipal securities were attributed" in finding["description"]
 
     def test_a_month_of_shares_says_transactions_not_stock(self):
         # "stock" is not restored for equities either. The detector counts PTR
         # rows; what it can say honestly is how many there were.
         finding = _finding("Albemarle Corporation (ALB) [ST]")
 
-        assert "18 transactions were disclosed" in finding["description"]
+        assert "18 transactions were attributed" in finding["description"]
         assert "stock" not in finding["description"].lower()
 
     def test_a_mixed_month_claims_nothing_about_the_instruments(self):
@@ -189,7 +198,7 @@ class TestTheSentenceThatGoesOut:
 
         finding = TradeAnalyzer()._check_trading_frequency(rows, member_id=1, member=None)[0]
 
-        assert "18 transactions were disclosed" in finding["description"]
+        assert "18 transactions were attributed" in finding["description"]
         assert "securities" not in finding["description"]
 
     def test_the_count_is_still_exact(self):

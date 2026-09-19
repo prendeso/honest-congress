@@ -1,7 +1,7 @@
 """Trade anomaly analyzer for congressional stock transactions."""
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from decimal import Decimal
 from typing import Any, Dict, List, Sequence
 
@@ -9,7 +9,11 @@ from sqlalchemy.orm import Session
 
 from src.analysis.anomaly_key import identity_of, stored_by_identity
 from src.analysis.asset_class import all_fixed_income
-from src.analysis.attribution import held_by_member, trades_the_member_holds
+from src.analysis.attribution import (
+    held_by_member,
+    owner_breakdown,
+    trades_the_member_holds,
+)
 from src.analysis.restatements import drop_restated_pairs, member_transactions
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
@@ -34,6 +38,35 @@ _settings = get_settings()
 # "Las Vegas Sands". It also carried a COMMITTEE_SECTORS map with no callers at
 # all. Both are gone; `SectorIndex` classifies on the issuer's own SEC industry
 # code, which covers every registrant rather than a remembered handful.
+
+
+def _excluded_clause(household_rows) -> str:
+    """Say what the count left out, so a reader can reconcile it with the filing.
+
+    Without this the number is right and unverifiable: Rep. Donalds' March 2025
+    filing prints 48 transactions and the finding says 23, because 25 are his
+    spouse's. A reader who checks sees a site that cannot count.
+    """
+    if not household_rows:
+        return ""
+    owners = owner_breakdown(household_rows)
+    n = sum(owners.values())
+    return (
+        f" The filings covering that month also report {n} transaction(s) "
+        f"belonging to {_whose_they_are(owners)}, which this count excludes."
+    )
+
+
+def _whose_they_are(owners: Dict[str, int]) -> str:
+    """Name the household members whose rows a count leaves out."""
+    words = {
+        "Spouse": "their spouse",
+        "Dependent Child": "a dependent child",
+    }
+    named = [words[o] for o in ("Spouse", "Dependent Child") if owners.get(o)]
+    if not named:
+        return "someone other than the member"
+    return " and ".join(named)
 
 
 def _what_was_traded(transactions: Sequence[Transaction]) -> str:
@@ -236,7 +269,7 @@ class TradeAnalyzer:
                 transactions, member_id, member, self._sector_index(db)
             )
         )
-        anomalies.extend(self._check_trading_frequency(transactions, member_id, member))
+        anomalies.extend(self._check_trading_frequency(transactions, member_id, member, disclosed))
         anomalies.extend(self._check_large_trades(transactions, member_id, member))
 
         return anomalies
@@ -433,33 +466,70 @@ class TradeAnalyzer:
         return anomalies
 
     def _check_trading_frequency(
-        self, transactions: List[Transaction], member_id: int, member: Member
+        self,
+        transactions: List[Transaction],
+        member_id: int,
+        member: Member,
+        disclosed: List[Transaction] | None = None,
     ) -> List[Dict[str, Any]]:
-        """Check for unusually high trading frequency, per disclosure year."""
+        """How many trades the member made in a month, said so it can be checked.
+
+        Two corrections, both found by auditing what this publishes against the
+        filings it publishes about.
+
+        **A month is a month.** This grouped by DISCLOSURE first and month
+        second, so a member who reports one month across two PTRs produced two
+        findings, each counting part of it, each titled "in <Month Year>". Sen.
+        Boozman filed 17 August 2025 trades and 21 more on the same day: two
+        findings saying 17 and 21 about a month containing 38. Measured on a
+        10,594-row corpus, 128 member-months are split across more than one
+        filing and they carry 2,668 rows -- a quarter of the corpus, not an
+        edge case. The grouping is now by month across every filing that
+        reports it.
+
+        **The count is the member's own, and the sentence has to say so.**
+        #99 stopped this counting a spouse's trades, which was right, and left
+        the wording alone, which was not. Rep. Byron Donalds' filing prints 48
+        transactions; 23 are his and 25 his spouse's. Publishing "23
+        transactions were disclosed in March 2025" against a document showing
+        48 reads as a site that cannot count -- the same "right number, wrong
+        noun" defect this file already carries a fix for, committed by the fix
+        for the one above it.
+
+        `disclosed` is the whole household for the member, which
+        `analyze_member` holds anyway. The rows this count leaves out are named
+        rather than dropped silently.
+        """
         anomalies = []
 
         if len(transactions) < 2:
             return []
 
-        # Group transactions by disclosure first (by year), then by month
-        disclosures_map = defaultdict(list)
-
+        # Every filing that reports the month, not one at a time.
+        monthly: dict[str, list] = defaultdict(list)
         for txn in transactions:
-            if txn.disclosure_id:
-                disclosures_map[txn.disclosure_id].append(txn)
+            if txn.transaction_date:
+                monthly[txn.transaction_date.strftime("%Y-%m")].append(txn)
 
-        # Check each disclosure independently
-        for disclosure_id, txns in disclosures_map.items():
-            # Group transactions by month within this disclosure
-            monthly: dict[str, list] = defaultdict(list)
+        # The household rows for the same month, for the sentence below. These
+        # are NOT counted; they are disclosed so a reader comparing against the
+        # filing can see why the numbers differ.
+        household: dict[str, list] = defaultdict(list)
+        own_ids = {id(t) for t in transactions}
+        for txn in disclosed or []:
+            if txn.transaction_date and id(txn) not in own_ids:
+                household[txn.transaction_date.strftime("%Y-%m")].append(txn)
 
-            for txn in txns:
-                if txn.transaction_date:
-                    monthly[txn.transaction_date.strftime("%Y-%m")].append(txn)
-
+        if True:
             # Check for high-frequency months
             for month, rows in monthly.items():
                 count = len(rows)
+                # The filing that reported most of the month, so the finding
+                # links somewhere real when the month spans several.
+                by_filing = Counter(t.disclosure_id for t in rows if t.disclosure_id)
+                disclosure_id = (
+                    min(by_filing, key=lambda d: (-by_filing[d], d)) if by_filing else None
+                )
                 if count > self.frequency_threshold_per_month:
                     # Format month from YYYY-MM to "Month Year"
                     try:
@@ -531,10 +601,10 @@ class TradeAnalyzer:
                             # "transactions", which is what a PTR row is
                             # whatever it holds.
                             "description": (
-                                f"{count} {_what_was_traded(rows)} disclosed in "
-                                f"{formatted_month}, which exceeds the threshold of "
-                                f"{self.frequency_threshold_per_month} transactions "
-                                f"per month."
+                                f"{count} {_what_was_traded(rows)} attributed to this "
+                                f"member in {formatted_month}, which exceeds the "
+                                f"threshold of {self.frequency_threshold_per_month} "
+                                f"per month.{_excluded_clause(household.get(month))}"
                             ),
                             "computed_value": Decimal(str(count)),
                             "threshold_value": Decimal(str(self.frequency_threshold_per_month)),

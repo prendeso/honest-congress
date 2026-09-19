@@ -33,13 +33,30 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "campaign_donations",
-        "transaction_type",
-        existing_type=sa.String(length=50),
-        type_=sa.String(length=255),
-        existing_nullable=True,
-    )
+    # `batch_alter_table`, not a bare `alter_column`, because SQLite has no
+    # `ALTER COLUMN ... TYPE` at all. The bare form emitted
+    #
+    #     ALTER TABLE campaign_donations ALTER COLUMN transaction_type TYPE VARCHAR(255)
+    #
+    # which PostgreSQL runs and SQLite rejects with `near "ALTER": syntax
+    # error`. So `cli init` -- the first command in the README, and the only
+    # zero-setup path a contributor has -- died here with 15 of the 16 tables
+    # created and `travel_payments` missing, after which every House annual
+    # parse errors. It left `alembic_version` stamped at the revision BEFORE
+    # this one, so re-running reproduced it exactly.
+    #
+    # `recreate="auto"` leaves PostgreSQL on the same single `ALTER` it always
+    # issued and has SQLite rebuild the table and copy the rows, which is the
+    # only way that dialect changes a column type. One migration history for
+    # both backends, which is what the downgrade below already assumed when it
+    # branched on the dialect for its data fix-up.
+    with op.batch_alter_table("campaign_donations", recreate="auto") as batch_op:
+        batch_op.alter_column(
+            "transaction_type",
+            existing_type=sa.String(length=50),
+            type_=sa.String(length=255),
+            existing_nullable=True,
+        )
 
 
 def downgrade() -> None:
@@ -52,10 +69,10 @@ def downgrade() -> None:
             "WHERE transaction_type IS NOT NULL AND LENGTH(transaction_type) > 50"
         )
 
-    op.alter_column(
-        "campaign_donations",
-        "transaction_type",
-        existing_type=sa.String(length=255),
-        type_=sa.String(length=50),
-        existing_nullable=True,
-    )
+    with op.batch_alter_table("campaign_donations", recreate="auto") as batch_op:
+        batch_op.alter_column(
+            "transaction_type",
+            existing_type=sa.String(length=255),
+            type_=sa.String(length=50),
+            existing_nullable=True,
+        )

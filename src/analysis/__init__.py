@@ -70,8 +70,18 @@ def _build_title(a: Dict[str, Any]) -> str:
         year = a.get("year", "")
         return f"Trading returns outperformed market benchmark ({year})"
     if atype == "trade_clustering":
+        # "in a row" asserts an order a PTR does not record -- see
+        # `_same_direction_run`. This is the fallback for a finding dict that
+        # arrived without a title, so it is a live path back to the exact
+        # wording that detector stopped writing, and it is pinned by
+        # `tests/test_the_streak_was_the_alphabet.py`.
         count = a.get("count", "")
-        return f"Consecutive same-direction trades ({count} in a row)"
+        days = a.get("days")
+        if days == 1:
+            return f"Same-direction trades on one day ({count})"
+        if days:
+            return f"Same-direction trades on {days} days ({count})"
+        return f"Same-direction trades ({count})"
     if atype == "perfect_timing":
         rate = a.get("success_rate", 0)
         return f"Suspiciously high trade success rate ({rate:.0f}%)"

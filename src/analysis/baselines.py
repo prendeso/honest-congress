@@ -98,6 +98,40 @@ def percentile_rank(value: float, population: Sequence[float]) -> float:
     return round(at_or_below / len(population) * 100, 2)
 
 
+# Where a finding has to sit among others of its own type to be graded high or
+# medium. Chosen so the words mean what a reader takes them to mean: "high" is
+# the top tenth, "medium" is the upper half, and everything else is low.
+HIGH_PERCENTILE = 90.0
+MEDIUM_PERCENTILE = 50.0
+
+
+def severity_from_percentile(rank: float) -> str:
+    """How severe a finding is, given how extreme it is.
+
+    Severity was a literal in the detector -- `"severity": "MEDIUM"` -- and so
+    said nothing about the finding it graded. Measured on a real corpus,
+    finding 567 sat at EXACTLY its threshold (5 of 5) at the 9th percentile of
+    its own type and was published `medium`, in the same words as a run of 229.
+    A hostile audit raised the framing in 146 of 174 findings it examined; this
+    is the part of it that is a defect rather than an opinion.
+
+    `percentile_rank` is the number to grade on, and this module's own comment
+    says why: thresholds here "are asserted rather than calibrated, so 'top 2%
+    of findings of this type' is a far more defensible statement than 'exceeded
+    threshold 100'". It is computed here, in the pass that already holds the
+    population, which is the only place that knows it.
+
+    A finding in a population too small to rank keeps whatever the detector
+    said. An unrankable finding is not evidence of a mild one, and overwriting
+    it with a grade nothing supports would be the invention this replaces.
+    """
+    if rank >= HIGH_PERCENTILE:
+        return "high"
+    if rank >= MEDIUM_PERCENTILE:
+        return "medium"
+    return "low"
+
+
 def annotate_percentile_ranks(db: Session) -> Dict[str, int]:
     """Rank every anomaly against others of its own type.
 
@@ -108,6 +142,7 @@ def annotate_percentile_ranks(db: Session) -> Dict[str, int]:
     are left unranked rather than given a misleading number.
     """
     ranked = 0
+    regraded = 0
     skipped_small = 0
     skipped_no_value = 0
 
@@ -141,19 +176,23 @@ def annotate_percentile_ranks(db: Session) -> Dict[str, int]:
         population = [value for _, value in valued]
         for row, value in valued:
             row.percentile_rank = percentile_rank(value, population)
+            row.severity = severity_from_percentile(row.percentile_rank)
+            regraded += 1
             ranked += 1
 
     db.commit()
 
     logger.info(
-        "Percentile ranks: %d ranked, %d in populations too small to rank, "
-        "%d types with no computed_value",
+        "Percentile ranks: %d ranked, %d regraded by extremity, %d in "
+        "populations too small to rank, %d types with no computed_value",
         ranked,
+        regraded,
         skipped_small,
         skipped_no_value,
     )
     return {
         "ranked": ranked,
+        "regraded": regraded,
         "skipped_small_population": skipped_small,
         "skipped_no_computed_value": skipped_no_value,
     }

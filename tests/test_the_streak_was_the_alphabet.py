@@ -227,9 +227,14 @@ def test_the_old_wording_is_unwritable(phrase):
     import ast
     import inspect
 
+    import src.analysis as analysis
     import src.analysis.extended_anomaly_detector as ext
 
-    tree = ast.parse(inspect.getsource(ext))
+    # Both modules: `_build_title` in `src.analysis` is the fallback for a
+    # finding dict that arrives without a title, and it carried the old
+    # wording verbatim -- a live path straight back to the sentence the
+    # detector stopped writing.
+    tree = ast.parse(inspect.getsource(ext) + "\n" + inspect.getsource(analysis._build_title))
     docstrings = set()
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):

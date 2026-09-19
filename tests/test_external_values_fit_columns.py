@@ -152,6 +152,7 @@ class TestEveryExternallyFedTextColumnHasRoom:
         ("transactions", "transaction_type"): "an enum",
         ("transactions", "ticker"): "a ticker symbol",
         ("transactions", "owner"): "Self / Spouse / Joint / Dependent Child",
+        ("transactions", "filing_status"): "New / Amended, normalised on read",
         ("assets", "asset_type"): "an enum",
         ("assets", "ticker"): "a ticker symbol",
         ("assets", "income_type"): "a short income category",

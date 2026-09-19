@@ -14,6 +14,7 @@ from src.analysis.restatements import drop_restated_pairs, member_transactions
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
 from src.db.models import Anomaly, Disclosure, Member, Transaction
+from src.parsing.ptr_parser import AMENDED
 
 logger = logging.getLogger(__name__)
 
@@ -282,6 +283,25 @@ class TradeAnalyzer:
 
         for txn, disclosure in rows:
             if not (txn.transaction_date and disclosure.filing_date):
+                continue
+
+            # The form's own answer, and it outranks the content match above.
+            # A row the filer marked "Amended" restates one already disclosed,
+            # so the 45-day clock belongs to the filing that first reported the
+            # trade, not to this one.
+            #
+            # `drop_restated_pairs` catches this when the two rows agree on
+            # content, and they need not: Rep. Laurel Lee's re-filing writes
+            # "2000114315 SP Alibaba Group Holding Limited" where the original
+            # wrote "SP Alibaba Group Holding Limited S (partial)", so the keys
+            # miss and a trade reported six days after it happened was
+            # published as 591 days late.
+            #
+            # When the original is in the corpus it is scored on its own merits,
+            # timely or not. When it is not, this stays silent rather than
+            # accuse -- a missed late filing is the cheaper error, and the only
+            # one that is not about a named person.
+            if txn.filing_status == AMENDED:
                 continue
 
             days_to_file = (disclosure.filing_date - txn.transaction_date).days

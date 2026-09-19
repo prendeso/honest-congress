@@ -280,10 +280,13 @@ def test_every_real_filing_scores_well(path):
 
 
 def test_the_corpus_holds_more_than_twice_what_it_used_to():
-    # 16 transactions before the collapsed-row recovery, 34 after. Pinned so a
+    # 16 transactions before the collapsed-row recovery, 34 after, and 40 once
+    # Rep. Keating's original filing (20023752) and the amendment restating two
+    # of its rows (20023767) joined the corpus -- three transactions each,
+    # checked line by line against the printed documents. Pinned so a
     # regression in the recovery shows up as a number rather than as silence.
     parser = PTRParser()
     total = sum(
         len(parser._parse_tables(json.loads(path.read_text())["tables"])) for path in FIXTURES
     )
-    assert total == 34
+    assert total == 40

@@ -44,6 +44,46 @@ _DATE_PATTERN = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}")
 # "D:", "L:" -- Filing Status, Subholding Of, Description, Location.
 _FOOTNOTE_PREFIX = re.compile(r"^\s*(?:F\s+S\s*:|S\s+O\s*:|D\s*:|L\s*:)")
 
+# The value of that first footnote. The House PTR marks EVERY row "New" or
+# "Amended", and the parser read the label and threw the answer away.
+#
+# It is the difference between a late filing and a false accusation. Rep.
+# Keating disclosed a 13 September 2023 sale on PTR 20023752, signed 28
+# September -- 15 days, comfortably inside the STOCK Act's 45. Document
+# 20023767, filed 2024-01-16, restates that row and one other, and its own text
+# says so:
+#
+#     2000111429 SIMON PPTY GROUP LP NOTE S 09/13/2023 ...
+#     F     S    : Amended
+#     ...
+#     UNITED STATES TREAS BILLS      P 12/29/2023 ...
+#     F     S    : New
+#
+# Scoring the amended copy against the original trade date published "filed
+# significantly late (1-3 months)", 125 days, about a member who filed in 15.
+# `restatements.py` catches this when the two rows match on content, and here
+# they do not: the re-filing writes "2000114315 SP Alibaba Group Holding
+# Limited" where the original wrote "SP Alibaba Group Holding Limited S
+# (partial)". The form saying "Amended" needs no matching at all.
+_FILING_STATUS = re.compile(r"^\s*F\s+S\s*:\s*([A-Za-z]+)", re.MULTILINE)
+
+AMENDED = "Amended"
+NEW = "New"
+
+
+def _filing_status_in(text: str) -> str | None:
+    """The row's own "Filing Status", read from the footnote under it."""
+    match = _FILING_STATUS.search((text or "").replace("\x00", ""))
+    if not match:
+        return None
+    value = match.group(1).strip().lower()
+    if value.startswith("amend"):
+        return AMENDED
+    if value == "new":
+        return NEW
+    return None
+
+
 # Common ticker pattern
 TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
 
@@ -281,7 +321,7 @@ class PTRParser:
     ) -> List[Dict[str, Any]]:
         """Parse transactions from extracted tables."""
         quality = quality if quality is not None else ParseQuality()
-        transactions = []
+        transactions: List[Dict[str, Any]] = []
 
         for table in tables:
             if not table or len(table) < 2:
@@ -307,11 +347,21 @@ class PTRParser:
 
             # Parse each data row
             for row in table[1:]:
+                joined = " ".join(str(cell) for cell in row if cell)
                 if not self._is_candidate_row(row):
                     # Blank spacers, and the footnote rows PTR tables interleave
                     # after each record ("Filing Status: New", "Location: ...").
                     # Those legitimately yield no transaction, so counting them
                     # as dropped would mark a clean filing as a bad one.
+                    #
+                    # They do carry one thing worth keeping. The footnote block
+                    # sits UNDER its record, so a status found here belongs to
+                    # the transaction just appended -- and only if that one has
+                    # not already been given one, so a record whose own parse
+                    # failed cannot hand its status to the row above it.
+                    status = _filing_status_in(joined)
+                    if status and transactions and transactions[-1].get("filing_status") is None:
+                        transactions[-1]["filing_status"] = status
                     continue
                 quality.rows_detected += 1
                 txn = self._parse_table_row(row, col_indices)
@@ -319,6 +369,10 @@ class PTRParser:
                     quality.rows_parsed += 1
                     if txn.get("recovered_from_collapsed_row"):
                         quality.rows_recovered += 1
+                    # A wrapped record can carry its own footnote in the same
+                    # cell, in which case it never reaches the branch above.
+                    if txn.get("filing_status") is None:
+                        txn["filing_status"] = _filing_status_in(joined)
                     transactions.append(txn)
 
         return transactions
@@ -528,6 +582,9 @@ class PTRParser:
             # Flagged because it arrived through the weaker text path, which the
             # confidence score reports rather than hides.
             txn["recovered_from_collapsed_row"] = True
+            # The collapsed cell holds the record's own footnotes below it, so
+            # the row's "Filing Status" is right here.
+            txn["filing_status"] = _filing_status_in(str(cell))
             return txn
 
         return None

@@ -251,7 +251,7 @@ def type_has_null_model(anomaly_type: str) -> bool:
     """Whether a q-value can exist for this kind of finding at all.
 
     A property of the detector, not of any one finding. Six detectors ask about
-    a coincidence in timing and have a null to shuffle; the other ten measure a
+    a coincidence in timing and have a null to shuffle; the other eleven measure a
     magnitude and have none.
 
     The distinction matters because a missing q-value means different things on

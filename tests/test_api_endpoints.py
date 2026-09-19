@@ -515,7 +515,7 @@ class TestPercentileFilter:
 class TestFdrFiltering:
     """The default list must hide weak coincidences without hiding whole detectors.
 
-    Ten of the sixteen detectors measure a magnitude and have no null model, so
+    Eleven of the seventeen detectors measure a magnitude and have no null model, so
     a bare `q_value <= alpha` filter would drop them from every default
     response. A null q_value means untested, never failed.
     """

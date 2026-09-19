@@ -1075,6 +1075,148 @@ def cmd_purge_stale_wording(args):
         print(f"\nDeleted {len(doomed)}. The next `analyze` re-derives them.")
 
 
+# The member-level finding types that name a member for what THEY traded, and
+# so are re-derived entirely from the rows the filing attributes to them. Each
+# is produced by a detector this retraction re-runs; a type produced by a
+# detector that is NOT re-run here must never be added, or its findings would
+# be deleted for being absent from a set that never contained them.
+_ATTRIBUTED_TO_THE_MEMBER = (
+    "high_trading_frequency",
+    "trade_clustering",
+    "volume_spikes",
+    "large_trade",
+    "sector_concentration",
+    "committee_jurisdiction_conflict",
+)
+
+
+def cmd_retract_withdrawn_findings(args):
+    """Delete findings the corrected detectors no longer derive.
+
+    Correcting a detector does not correct the site. `persist_anomalies` only
+    ever inserts, and nothing anywhere deletes a finding that stopped being
+    true. `purge-stale-wording` covers the case where the SENTENCE changed and
+    can be matched on; it cannot cover this one, where the wording is identical
+    and the finding simply should never have existed.
+
+    That is the shape the attribution fix leaves behind. A detector that
+    counted a spouse's trades as the member's now counts only the member's, so
+    it stops producing the finding -- and the published one stays up for ever,
+    naming a real person for trades the filing says are not theirs. On a
+    10,594-row corpus that is 121 of 592 findings, including every
+    trade-derived finding about eight of the nine members a hostile audit
+    named.
+
+    So this re-derives instead of matching text: run the detectors that own
+    these types, take the identity of everything they now produce, and delete
+    persisted rows of those types whose identity is not in it. `identity_of`
+    and `identity_of_row` are the same key the writers use, so "no longer
+    produced" means exactly what it says.
+
+    Two guards, because the failure mode is deleting real findings:
+
+    * a type held by `DISABLED_ANOMALY_TYPES` is skipped entirely -- a held
+      detector does not run, so it produces nothing, and treating that as
+      "withdrawn" would delete every finding it ever wrote;
+    * if the re-run produces NOTHING AT ALL, this aborts. An empty result is
+      indistinguishable from a broken run, and the safe reading of a detector
+      suite that found nothing is that something is wrong with the suite.
+
+    A finding wrongly deleted is re-derived by the next `analyze` from the same
+    data, which is what makes this recoverable in the one direction that
+    matters.
+    """
+    from src.analysis import (
+        ExtendedAnomalyDetector,
+        detector_is_disabled,
+        run_committee_conflict_detection,
+    )
+    from src.analysis.anomaly_key import identity_of, identity_of_row
+    from src.analysis.trade_analyzer import TradeAnalyzer
+    from src.db.models import Anomaly, Member
+
+    covered = [t for t in _ATTRIBUTED_TO_THE_MEMBER if not detector_is_disabled(t)]
+    held = sorted(set(_ATTRIBUTED_TO_THE_MEMBER) - set(covered))
+    if held:
+        print(f"Held, so left alone: {', '.join(held)}")
+    if not covered:
+        print("Every covered type is held; nothing to do.")
+        return
+
+    with get_db() as db:
+        print("Re-deriving findings with the current detectors...")
+        produced: set = set()
+        found = 0
+
+        analyzer = TradeAnalyzer()
+        # `analyze_member` would otherwise call `_sync_large_trade_anomalies`,
+        # which WRITES -- it backfills `transaction_id` and rewrites titles on
+        # stored rows. This is a read until it decides what to delete, and
+        # `--dry-run` has to mean it.
+        analyzer._large_trades_synced = True
+        for member in db.query(Member).all():
+            try:
+                for finding in analyzer.analyze_member(db, member.id):
+                    key = identity_of(finding)
+                    if key:
+                        produced.add(key)
+                        found += 1
+            except Exception as exc:  # pragma: no cover - defensive
+                print(f"  member {member.id}: {str(exc)[:80]}")
+
+        # `AdvancedAnomalyDetector` is deliberately absent: none of the covered
+        # types come from it, and re-running a detector whose types are not
+        # covered buys nothing while costing a full roster walk.
+        for finding in ExtendedAnomalyDetector().detect_trade_timing_anomalies(db):
+            key = identity_of(finding)
+            if key:
+                produced.add(key)
+                found += 1
+
+        # persist=False: this is deciding what to REMOVE, and a detector that
+        # inserted while it ran would hide its own withdrawals.
+        conflicts = run_committee_conflict_detection(db, persist=False)
+        for finding in conflicts.get("anomalies") or []:
+            key = identity_of(finding)
+            if key:
+                produced.add(key)
+                found += 1
+
+        print(f"  {found} finding(s) derived, {len(produced)} distinct.")
+        if not produced:
+            print("\nThe detectors produced nothing at all. Refusing to delete anything:")
+            print("an empty run is indistinguishable from a broken one.")
+            return
+
+        stored = db.query(Anomaly).filter(Anomaly.anomaly_type.in_(covered)).all()
+        doomed = [row for row in stored if identity_of_row(row) not in produced]
+
+        if not doomed:
+            print("\nEvery stored finding is still derived; nothing to delete.")
+            return
+
+        by_type: dict[str, int] = {}
+        for finding in doomed:
+            by_type[finding.anomaly_type] = by_type.get(finding.anomaly_type, 0) + 1
+
+        print(f"\nNo longer derived: {len(doomed)} of {len(stored)} stored")
+        for kind, count in sorted(by_type.items()):
+            print(f"  {kind}: {count}")
+        print("\nExamples:")
+        for finding in doomed[:5]:
+            print(f"  [{finding.anomaly_type}] {finding.title}")
+
+        if args.dry_run:
+            print("\n--dry-run: nothing deleted.")
+            return
+
+        for finding in doomed:
+            db.delete(finding)
+        db.commit()
+        recalculate_member_counts(db)
+        print(f"\nDeleted {len(doomed)}.")
+
+
 def cmd_purge_non_awards(args):
     """Delete contract front-run findings no award in the table supports.
 
@@ -1842,6 +1984,16 @@ def main():
         "--dry-run", action="store_true", help="Preview deletions without applying them"
     )
     stale_wording_parser.set_defaults(func=cmd_purge_stale_wording)
+
+    # Findings the corrected detectors no longer derive at all
+    withdrawn_parser = subparsers.add_parser(
+        "retract-withdrawn-findings",
+        help="Delete findings the current detectors no longer produce",
+    )
+    withdrawn_parser.add_argument(
+        "--dry-run", action="store_true", help="Preview deletions without applying them"
+    )
+    withdrawn_parser.set_defaults(func=cmd_retract_withdrawn_findings)
 
     # Filings stored against the wrong member by the old `.first()` matcher
     attribution_parser = subparsers.add_parser(

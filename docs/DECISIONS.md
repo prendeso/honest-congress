@@ -699,3 +699,61 @@ reviewers is not evidence when they share a failure mode.
 - Corpus re-runs, not the test suite, catch what a fix breaks. The first version
   of the attribution fix passed its own tests while erasing 85 real late
   filings; the corpus run found it in one command.
+
+## D19. The unread-owner default stays, because it is not unread
+
+**Decision:** `_normalize_owner`'s final `return "Self"` is kept. "self" is
+matched explicitly above it so the catch-all no longer carries a value the
+parsers produce, and that is the whole change.
+
+### Why it looked like a defect
+
+D18's audit turned on one shape: the parser turning *"could not read this"* into
+the affirmative claim that the member owns it. #98 fixed that for the House
+owner codes and deliberately left one branch alone — an owner string nobody
+recognises still becomes `"Self"`. Same shape, obviously next.
+
+### What the measurement said
+
+Instrumented over **114 real House PTRs, 1,556 owner cells**:
+
+| value | count |
+|---|---:|
+| `SP` | 706 |
+| *(blank)* | 705 |
+| `JT` | 123 |
+| `DC` | 22 |
+
+The unrecognised branch fires **zero times**. Blank is not unread — the House
+form leaves the column empty for the filer, so blank is the document saying
+"mine".
+
+### Why changing it would have been a serious regression
+
+`SenateHtmlParser` subclasses `PTRParser`, and the Senate's eFD spells the words
+out: `Self`, `Spouse`. **`"Self"` matches none of the tests above the
+catch-all** — not "spouse", not "joint", not "child" — so that `else` was the
+only thing reading it.
+
+Returning `None` there, the change that looked obviously right, would have made
+every Senate member's own trade unattributed. `attribution.held_by_member` would
+then drop each one from every count-based detector: not counting somebody else's
+trades as the member's, but failing to count the member's own at all, **for an
+entire chamber**. A worse version of the bug #98 and #99 fixed.
+
+### What was actually done
+
+`"self"` gets its own branch, so nothing the parsers emit depends on the
+catch-all. No behaviour changes — every observed value resolves exactly as
+before. `tests/test_who_the_filing_says_it_is.py` reads the function with `ast`
+and fails if any observed value stops being named by a branch.
+
+That test was wrong first: it reimplemented the branch logic and asked its own
+copy whether a value fell through, which passed with the explicit `self` branch
+deleted. A test that checks a replica checks nothing.
+
+### The standing rule this earns
+
+**Measure the branch before removing it.** A defect's *shape* recurring is a
+reason to look, not a reason to act — the same three lines were a real bug in
+one parser and load-bearing in the other, and only counting told them apart.

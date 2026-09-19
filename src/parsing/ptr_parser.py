@@ -939,13 +939,44 @@ class PTRParser:
             return "other"
 
     def _normalize_owner(self, owner: str) -> str:
-        """Normalize owner field."""
+        """Whose holding the filing says this is.
+
+        Two chambers write it two different ways, and both are handled here
+        because `SenateHtmlParser` subclasses this one:
+
+            House PTR    SP / JT / DC, and BLANK for the filer
+            Senate eFD   the words Self / Spouse, spelled out
+
+        Measured over 114 real House PTRs and 1,556 owner cells, the column
+        holds exactly four values -- `SP` (706), blank (705), `JT` (123),
+        `DC` (22) -- and over the vendored Senate filing, `Self` and `Spouse`.
+
+        **The final `return "Self"` is load-bearing, and it is the only thing
+        that reads the Senate's literal "Self".** That word matches none of the
+        tests above it: it is not "spouse", not "joint", not "child". So a
+        tempting cleanup -- returning None for an owner nobody recognised, the
+        way #98 stopped an unread House owner being asserted as the member's --
+        would make every Senate member's own trade unattributed, and
+        `attribution.held_by_member` would then drop it from every count-based
+        detector. That is a worse version of the bug #98 and #99 fixed: not
+        counting somebody else's trades as the member's, but not counting the
+        member's own at all, for a whole chamber.
+
+        So "self" is matched explicitly, and the catch-all no longer carries a
+        value the parsers actually produce. Measured: nothing in either corpus
+        reaches it. `tests/test_who_the_filing_says_it_is.py` fails if that
+        stops being true.
+        """
         if not owner:
+            # The House form leaves the column empty for the filer. Blank is
+            # the document saying "mine", not a value nobody could read.
             return "Self"
 
         owner_lower = owner.lower().strip()
 
-        if "spouse" in owner_lower or owner_lower == "sp":
+        if owner_lower == "self":
+            return "Self"
+        elif "spouse" in owner_lower or owner_lower == "sp":
             return "Spouse"
         elif "joint" in owner_lower or owner_lower == "jt":
             return "Joint"

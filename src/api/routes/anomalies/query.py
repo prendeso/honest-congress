@@ -101,7 +101,7 @@ async def list_anomalies(
     if min_percentile is not None:
         query = query.filter(Anomaly.percentile_rank >= min_percentile)
     if not include_below_fdr:
-        # NOT `q_value <= alpha`. Ten of the sixteen detectors measure a
+        # NOT `q_value <= alpha`. Eleven of the seventeen detectors measure a
         # magnitude rather than a coincidence and have no null model at all, so
         # a bare threshold would silently drop them from every default response.
         # A null q_value means "untested", never "failed".

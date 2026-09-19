@@ -136,6 +136,28 @@ def _days(value: datetime) -> float:
     return value.toordinal()
 
 
+def fdr_is_resolvable(n_tests: int, permutations: int, alpha: float) -> bool:
+    """Can ANY test clear `alpha` at this permutation count, whatever the data?
+
+    A permutation p-value cannot fall below the Phipson-Smyth floor of
+    1/(permutations+1), and Benjamini-Hochberg gives the most extreme test
+    `q = p * n / 1`. So the entire run is incapable of producing a single pass
+    unless `floor * n <= alpha`. No property of the data can rescue it.
+
+    Production run 228 reported "2539 tests, 0 passing FDR at alpha=0.050" with
+    permutations=1000. The floor was 1/1001 = 0.000999, so the best q any test
+    could earn was 0.000999 * 2539 = 2.54, clamped to 1.0. The most extreme
+    timing alignment in the corpus would have been reported at q = 1.0 and
+    hidden. That zero was arithmetic, not evidence.
+
+    A run with no tests is resolvable: there is nothing it failed to resolve,
+    and reporting otherwise would cry wolf on every empty database.
+    """
+    if n_tests <= 0:
+        return True
+    return (1.0 / (permutations + 1)) * n_tests <= alpha
+
+
 def benjamini_hochberg(p_values: Sequence[float]) -> List[float]:
     """Benjamini-Hochberg q-values, in the input's order.
 
@@ -596,7 +618,7 @@ def _cluster_p_values(
     db: Session, permutations: int, rng: np.random.Generator
 ) -> Dict[Tuple[str, str], float]:
     """A p-value per (ticker, direction) the cluster detector flagged."""
-    from src.analysis.clustering import CLUSTER_WINDOW_DAYS
+    from src.analysis.clustering import CLUSTER_WINDOW_DAYS, MIN_MEMBERS_IN_CLUSTER
 
     rows = drop_restated_records(
         db.query(
@@ -631,6 +653,23 @@ def _cluster_p_values(
     for key, member_dates in grouped.items():
         marks = [(when, mid) for mid, dates in member_dates.items() for when in dates]
         observed = _max_members_in_window(marks, CLUSTER_WINDOW_DAYS)
+        # Only what the detector would actually flag, which is what this
+        # function's own docstring has always claimed to return.
+        #
+        # Without this it grouped EVERY ticker with a >=30-day span and tested
+        # all of them -- including tickers one member traded alone, where
+        # `observed` is 1, every shuffle trivially matches, and the p-value is
+        # 1.0 by construction. Verified: a lone member's twelve trades over a
+        # year, and two members on unrelated calendars, both return exactly 1.0
+        # at any permutation count.
+        #
+        # Those tests can never pass and can never help anyone's rank. All they
+        # do is raise `n`, and BH multiplies every other q-value by n/rank. In
+        # the module whose docstring calls this "the number this project asks
+        # readers to trust most", that is padding the denominator of the
+        # headline statistic with rows that are incapable of carrying evidence.
+        if observed < MIN_MEMBERS_IN_CLUSTER:
+            continue
         p_value = cluster_p_value(
             member_dates, CLUSTER_WINDOW_DAYS, observed, permutations=permutations, rng=rng
         )
@@ -714,6 +753,42 @@ def annotate_significance(
     passing = sum(1 for _, q in by_member.values() if q <= alpha) + sum(
         1 for _, q in by_ticker.values() if q <= alpha
     )
+
+    # Can ANY test pass, at this permutation count against this many tests?
+    #
+    # A permutation p-value cannot go below 1/(permutations+1) -- that is the
+    # Phipson-Smyth floor enforced at the end of `permutation_p_value`. BH gives
+    # the most significant test q = p * n / 1, so the whole run is incapable of
+    # producing a single pass unless floor * n <= alpha.
+    #
+    # Measured against production run 228: floor = 1/1001 = 0.000999 and
+    # n = 2539, so the best q any test could earn was 2.54, clamped to 1.0. A
+    # member with the most extreme timing alignment in the corpus would have
+    # been reported at q = 1.0 and hidden. "0 passing FDR" was a fact about this
+    # arithmetic, not about Congress.
+    #
+    # Said out loud rather than fixed silently, because the fix is a choice
+    # between raising `permutations` (~51x here), correcting within detector
+    # families instead of one pooled family, or approximating the tail -- and
+    # each changes what gets published about named people.
+    floor = 1.0 / (permutations + 1)
+    resolvable = fdr_is_resolvable(len(tests), permutations, alpha)
+    if not resolvable:
+        needed = int(len(tests) / alpha) + 1
+        logger.warning(
+            "Significance CANNOT RESOLVE at this configuration: %d permutations puts the "
+            "p-value floor at %.6f, and Benjamini-Hochberg over %d tests needs p <= %.6f "
+            "for even the single most extreme test to pass. NO test can pass regardless of "
+            "the data; '%d passing' below is a property of the configuration, not a finding. "
+            "It would take ~%d permutations, or a smaller correction family.",
+            permutations,
+            floor,
+            len(tests),
+            alpha / len(tests),
+            passing,
+            needed,
+        )
+
     logger.info(
         "Significance: %d tests, %d passing FDR at alpha=%.3f; "
         "%d findings annotated, %d left without a null model",
@@ -730,6 +805,11 @@ def annotate_significance(
         "permutations": permutations,
         "findings_annotated": annotated,
         "findings_without_a_null_model": without_null_model,
+        # False when the permutation floor cannot clear alpha at this many
+        # tests, i.e. when "0 passing" says nothing about the data. A caller
+        # that publishes the pass count needs to know which of the two it has.
+        "fdr_is_resolvable": resolvable,
+        "p_value_floor": round(floor, 6),
         # What an alpha-level FDR says you should expect to be wrong among the
         # findings that passed. Reported rather than left for the reader to work
         # out, because that is the number the caveat is actually about.

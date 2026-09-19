@@ -57,6 +57,7 @@ CONVENTIONS = {
     "purge-stale-wording": {"previews": "--dry-run"},
     "purge-disabled": {"previews": "--dry-run"},
     "purge-non-awards": {"previews": "--dry-run"},
+    "retract-withdrawn-findings": {"previews": "--dry-run"},
     "repair-house-attribution": {"writes": "--apply", "extra": ("--years",)},
     "move-filing": {"writes": "--apply", "extra": ("--document-id", "--to-bioguide")},
     "reparse-annuals": {
@@ -121,6 +122,37 @@ class TestTheCatalogueOfPurgesIsComplete:
         assert defined == set(PURGES), (
             f"the CLI defines {sorted(defined)} but this test guards {sorted(PURGES)}; "
             "an unguarded purge is one nothing makes run"
+        )
+
+    def test_a_command_that_deletes_findings_cannot_dodge_this_by_its_name(self):
+        """The check above keys on the `cmd_purge_` prefix, so a deleting
+        command named anything else is invisible to it -- which is the same
+        shape as the omission this whole file exists for, one rename away.
+
+        `retract-withdrawn-findings` is exactly that command: it deletes
+        published findings and is not called a purge. So the rule is stated by
+        BEHAVIOUR. Every CLI command that deletes an `Anomaly` must either run
+        in both pipelines (PURGES) or be dispatchable on its own (CONVENTIONS).
+        A command in neither is one nothing makes run.
+        """
+        import inspect
+
+        import src.cli as cli
+
+        deleting = set()
+        for name in dir(cli):
+            if not name.startswith("cmd_"):
+                continue
+            try:
+                source = inspect.getsource(getattr(cli, name))
+            except (TypeError, OSError):  # pragma: no cover - defensive
+                continue
+            if "Anomaly" in source and ("db.delete(" in source or ".delete(" in source):
+                deleting.add(name.replace("cmd_", "").replace("_", "-"))
+
+        runnable = set(PURGES) | set(CONVENTIONS)
+        assert deleting <= runnable, (
+            f"{sorted(deleting - runnable)} delete published findings and no workflow runs them"
         )
 
 

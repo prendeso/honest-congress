@@ -8,6 +8,7 @@ from typing import Any, Dict, List
 from sqlalchemy.orm import Session
 
 from src.analysis.anomaly_key import identity_of, stored_by_identity
+from src.analysis.attribution import held_by_member, trades_the_member_holds
 from src.analysis.restatements import drop_restated_pairs, member_transactions
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
@@ -121,7 +122,11 @@ class TradeAnalyzer:
         # second `transaction_id`, and `identity_of` keys trade findings on
         # exactly that, so the duplicate finding is NOT collapsed downstream --
         # the same $1m+ trade would be published twice under one name.
-        rows = drop_restated_pairs(query.all())
+        # Same rule as the finding this reconciles: a $1m+ purchase the
+        # filing marks `SP` is the spouse's, and syncing a title for it
+        # would re-assert an attribution `_check_large_trades` no longer
+        # makes.
+        rows = [row for row in drop_restated_pairs(query.all()) if held_by_member(row[0])]
         if not rows:
             return
 
@@ -184,10 +189,26 @@ class TradeAnalyzer:
 
         anomalies = []
 
-        # Get all transactions for this member
-        transactions = member_transactions(db, member_id)
+        # Two lists, and the difference between them is the point.
+        #
+        # `disclosed` is everything the member had to report -- their spouse's
+        # and dependent children's trades included. It gates the early return
+        # and it is what `_check_late_filings` scores, because the STOCK Act
+        # deadline is the MEMBER's duty for the whole household.
+        #
+        # `transactions` is the subset the member is a party to. Sector
+        # concentration, trading frequency and large trades all publish a
+        # sentence of the form "this member did X", so they may only count
+        # rows the filing attributes to them.
+        #
+        # Collapsing these into one filtered list silently erased 85 real late
+        # filings from a 596-finding corpus -- every member whose disclosed
+        # rows were all their spouse's returned at the guard above before
+        # `_check_late_filings` ever ran.
+        disclosed = member_transactions(db, member_id)
+        transactions = trades_the_member_holds(disclosed)
 
-        if not transactions:
+        if not disclosed:
             return []
 
         # Skipped when `analyze_all_members` has already reconciled every large

@@ -25,6 +25,7 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
+from src.analysis.attribution import trades_the_member_holds
 from src.analysis.restatements import member_transactions
 from src.analysis.sectors import SectorIndex, committee_sectors
 from src.db.models import CommitteeAssignment, Member, Transaction
@@ -64,7 +65,9 @@ def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]
         if not sector_to_committees:
             continue
 
-        transactions = member_transactions(db, member.id)
+        # A conflict is between the member's committee and the member's own
+        # holdings. A spouse's trade is not the member's position.
+        transactions = trades_the_member_holds(member_transactions(db, member.id))
         if not transactions:
             continue
 

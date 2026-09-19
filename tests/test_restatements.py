@@ -387,7 +387,7 @@ class TestConsecutiveTradesNeedsATimeWindow:
                 when=datetime(2024, 1, 1) + timedelta(days=i * days_apart),
                 kind=kind,
             )
-        return self._detector()._check_consecutive_trades(member_transactions(db, who.id))
+        return self._detector()._same_direction_run(member_transactions(db, who.id))
 
     def test_castens_three_year_run_does_not_fire(self, db):
         """1,131 days over 11 purchases is ~113 days between trades."""
@@ -397,12 +397,12 @@ class TestConsecutiveTradesNeedsATimeWindow:
         result = self._run(db, days_apart=2)
 
         assert result is not None
-        length, span = result
-        assert length == 11
-        assert span == 20
+        assert result.length == 11
+        assert result.span_days == 20
+        assert result.days == 11, "eleven trades on eleven distinct dates"
 
     def test_the_span_is_reported_not_the_phrase(self, db):
-        length, span = self._run(db, days_apart=2)
+        span = self._run(db, days_apart=2).span_days
 
         assert span == 20, "the published sentence states this, not 'a short period'"
 
@@ -413,7 +413,7 @@ class TestConsecutiveTradesNeedsATimeWindow:
         result = self._run(db, days_apart=CONSECUTIVE_TRADE_WINDOW_DAYS // 4, count=5)
 
         assert result is not None
-        assert result[1] <= CONSECUTIVE_TRADE_WINDOW_DAYS
+        assert result.span_days <= CONSECUTIVE_TRADE_WINDOW_DAYS
 
     def test_fewer_than_the_threshold_never_fires(self, db):
         assert self._run(db, days_apart=1, count=4) is None
@@ -439,11 +439,11 @@ class TestConsecutiveTradesNeedsATimeWindow:
                 when=datetime(2024, 6, 1) + timedelta(days=i * 200),
             )
 
-        result = self._detector()._check_consecutive_trades(member_transactions(db, who.id))
+        result = self._detector()._same_direction_run(member_transactions(db, who.id))
 
         assert result is not None
-        assert result[0] == 6
-        assert result[1] == 5
+        assert result.length == 6
+        assert result.span_days == 5
 
     def test_a_direction_change_breaks_the_run(self, db):
         who = member(db, bioguide="D000009", last="Direction")
@@ -464,7 +464,7 @@ class TestConsecutiveTradesNeedsATimeWindow:
             kind=TransactionType.SALE,
         )
 
-        assert self._detector()._check_consecutive_trades(member_transactions(db, who.id)) is None
+        assert self._detector()._same_direction_run(member_transactions(db, who.id)) is None
 
 
 class TestTheEvidenceBarProtectsRealTrades:

@@ -34,6 +34,7 @@ on:
           - purge-stale-wording
           - purge-disabled
           - purge-non-awards
+          - retract-withdrawn-findings
           - repair-house-attribution
           - move-filing
           - reparse-annuals
@@ -168,7 +169,7 @@ jobs:
                 FLAGS="$FLAGS --apply"
               fi
               ;;
-            purge-stale-wording|purge-disabled|purge-non-awards)
+            purge-stale-wording|purge-disabled|purge-non-awards|retract-withdrawn-findings)
               if [ "${{ inputs.dry_run }}" = "true" ]; then
                 FLAGS="--dry-run"
               fi

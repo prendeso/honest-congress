@@ -1191,6 +1191,29 @@ class IngestionOrchestrator:
                 # already looks.
                 disclosure.parse_error = score.summary or "Parser extracted nothing"
 
+            # Say out loud that this filing was read, even when nothing about
+            # it changed. `updated_at` carries `onupdate=datetime.utcnow`, and
+            # `onupdate` only fires when SQLAlchemy actually emits an UPDATE --
+            # which it does not when every assignment above lands the same
+            # value that was already there.
+            #
+            # `_disclosures_to_parse` orders the re-parse queue by `updated_at`
+            # ascending, so a filing whose re-read changes none of its own
+            # columns stays at the FRONT of that queue for ever, and every
+            # subsequent dispatch takes the same 400 rows.
+            #
+            # Measured: four `reparse-annuals` dispatches in a row reported
+            # "Trips stored: 303 across 157 filings" without moving, because
+            # they re-read one identical batch four times. The earlier campaign
+            # never hit this only because it was CHANGING parse_confidence on
+            # nearly every filing, which dirtied the row as a side effect.
+            #
+            # That is the exact shape this bug hides in: a parser change that
+            # only affects ANOTHER table -- Schedule H travel here -- leaves
+            # every `Disclosure` column identical, so the queue silently stops
+            # advancing and the campaign looks like it is running.
+            disclosure.updated_at = datetime.utcnow()
+
             db.commit()
             logger.info(
                 "Parsed disclosure %s (confidence %.2f)",

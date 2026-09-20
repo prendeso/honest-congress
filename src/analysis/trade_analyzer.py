@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Sequence
 from sqlalchemy.orm import Session
 
 from src.analysis.anomaly_key import identity_of, stored_by_identity
-from src.analysis.asset_class import all_fixed_income
+from src.analysis.asset_class import all_fixed_income, is_option
 from src.analysis.attribution import (
     excluded_clause,
     held_by_member,
@@ -248,14 +248,35 @@ class TradeAnalyzer:
         return _asset_name(txn)
 
     def _build_large_trade_text(self, txn: Transaction) -> Dict[str, str]:
+        """What was bought, named as the form names it.
+
+        The asset name on an option row is the UNDERLYING. "Microsoft
+        Corporation - Common Stock (MSFT) [OP]" is a Microsoft call, not
+        Microsoft stock, and the form says which on its own Description line:
+        "D: Call options; Strike price $240; Expires 9/19/2025". 13 of the
+        corpus's 80 large-trade findings sit on such a row and read "A purchase
+        of MSFT worth more than $1,000,000 was reported" -- a stock purchase
+        that did not happen.
+
+        The amount needs saying too. On an option row the disclosed band is the
+        transaction's own value, not the value of the shares it controls, and
+        those differ by roughly the leverage. Publishing "more than $1,000,000"
+        beside a company name invites the second reading.
+        """
         asset_name = self._large_trade_asset_name(txn)
-        title = (
-            f"Large transaction: {asset_name} {txn.transaction_type.value} (more than $1,000,000)"
-        )
+        noun = f"{asset_name} options" if is_option(txn) else asset_name
+        title = f"Large transaction: {noun} {txn.transaction_type.value} (more than $1,000,000)"
         description = (
-            f"A {txn.transaction_type.value} of {asset_name} worth more than $1,000,000 was reported. "
-            "Large transactions warrant additional scrutiny."
+            f"A {txn.transaction_type.value} of {noun} worth more than $1,000,000 was reported."
         )
+        if is_option(txn):
+            description += (
+                " The form marks this row `[OP]`, so the asset named is the "
+                "underlying and the trade is in options on it. The amount is the "
+                "value the filing reports for the transaction, not the value of "
+                "the underlying shares."
+            )
+        description += " Large transactions warrant additional scrutiny."
         return {"title": title, "description": description}
 
     def _sync_large_trade_anomalies(self, db: Session, member_id: int | None = None) -> None:

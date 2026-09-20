@@ -1087,3 +1087,65 @@ arithmetic; what changes is every sentence, and one of them gains the excluded
 clause. Two needles go into `_SUPERSEDED_WORDING` so the published rows come
 down rather than serving the old text for ever; the changed titles are orphans
 that `retract-withdrawn-findings` already removes.
+
+---
+
+## D25. A name cut in half, and a sentence that did not say whose trade it was
+
+Two blind slices published unreadable text about named people. `late_filing`
+ended every description with `description[:30]`; `large_trade` titled itself
+with `description[:20]`. Both cut wherever the character fell:
+
+    Trade: purchase Cleveland-Cliffs Inc. Common S
+    Trade: sale American Funds Income Fund of\n
+    Large transaction: US Treasury Bill [GS purchase (more than $1,000,000)
+    Large transaction: Garden of Eden LLC,  sale (more than $1,000,000)
+
+Measured on the corpus: **72 of 174** late-filing findings truncate mid-word
+and **11** carry an embedded newline into the published sentence; **59 of 80**
+large-trade titles truncate, and three different Treasury bills produce the
+*same* title — saved from colliding only because that finding is keyed on
+`transaction_id`.
+
+So `_asset_name` replaces both: the ticker when the filing gave one, otherwise
+the description with its whitespace collapsed, its `[XX]` asset-type tag
+removed (D21 — it is the form's code, not part of the name; "US Treasury Bill
+[GS" is the shape that makes the case) and a cut at a word boundary. Longest
+resulting title over the corpus: 112 characters, inside `String(200)` and
+`anomaly_key.TITLE_LIMIT`.
+
+### The second defect is in the same sentence
+
+**93 of the 174 late-filing findings sit on a row the form attributes to
+somebody else** — 91 a spouse, 2 a dependent child — under a sentence naming
+the member and nothing else.
+
+Those rows are scored **on purpose and must stay scored**: the STOCK Act duty
+is the member's for every transaction their household must report, which is
+why `attribution.py` exempts this detector by name and
+`test_a_spouses_trade_is_not_the_members.py` pins it. What was missing is the
+fact, not the finding. The sentence now carries both:
+
+    Trade reported: purchase of Cleveland-Cliffs Inc. Common Stock, which the
+    filing reports for their spouse. The STOCK Act deadline is the member's
+    for every transaction their household must report, so this row is scored
+    against them.
+
+**Joint gains no clause**, per #99: the member is a party to a joint holding.
+81 of the 174 are the member's own and read without the addition.
+
+`catalog.py`'s caveat says the same thing on the card, beside the amendment
+confounder #101 added.
+
+**Coverage is unchanged and asserted structurally.** A test reads
+`_check_late_filings` with `ast` and fails if `held_by_member` or
+`trades_the_member_holds` ever appears in it — naming the owner must not
+quietly become filtering on it, which would erase real late filings, as it did
+once already in #99.
+
+**Corpus effect: none on any count.** 174 late filings and 80 large trades
+before and after; every sentence changes. `("late_filing", "description",
+"Trade: ")` joins `_SUPERSEDED_WORDING` because these findings keep their
+identity across the rewording and `persist_anomalies` only inserts; large-trade
+titles are rewritten in place by `_sync_large_trade_anomalies`, which already
+does exactly this.

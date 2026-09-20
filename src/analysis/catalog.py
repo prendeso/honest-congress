@@ -203,7 +203,9 @@ DETECTORS: List[Detector] = [
         "The trade was reported more than the 45 days the STOCK Act allows.",
         "The only item here that is a rule violation on its face. The filing "
         "date is the Clerk's, and an amended filing can make a timely report "
-        "look late.",
+        "look late. Over half of these sit on a trade the form attributes to "
+        "the member's spouse or a dependent child -- the deadline is still the "
+        "member's, and each finding now says whose trade it was.",
         PTR,
         value_unit="days",
     ),

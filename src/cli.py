@@ -1023,6 +1023,18 @@ _SUPERSEDED_WORDING = (
     # removes; this needle takes the sentence down without waiting for it.
     ("sector_concentration", "description", "This unusual concentration"),
     ("sector_concentration", "description", "A significant portion of trades"),
+    # `late_filing` ended every description with a blind 30-character slice of
+    # the asset description: "Trade: purchase Cleveland-Cliffs Inc. Common S",
+    # and 11 of the corpus's 174 carried an embedded newline into the published
+    # sentence. 93 of them sit on a row the form attributes to a spouse or a
+    # dependent child, under a sentence naming the member and nothing else.
+    #
+    # The corrected sentence reads "Trade reported: purchase of <name>", so the
+    # old lead-in is one this detector can no longer write. These findings are
+    # keyed on `transaction_id`, so the identity holds across the change and
+    # `persist_anomalies`, which only inserts, would otherwise serve the old
+    # text for ever.
+    ("late_filing", "description", "Trade: "),
     # `excessive_wealth_growth` compared whichever filing the database happened
     # to return last for the earlier year. `wealth_analyzer` ordered only by
     # `filing_year`, and its growth loop skips same-year pairs, so "last filing

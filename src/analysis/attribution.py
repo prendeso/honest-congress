@@ -103,3 +103,38 @@ def owner_breakdown(transactions: Sequence) -> Dict[str, int]:
         owner = owner_of(transaction)
         counts[owner] = counts.get(owner, 0) + 1
     return counts
+
+
+def whose_they_are(owners: Dict[str, int]) -> str:
+    """Name the household members whose rows a count leaves out."""
+    words = {
+        "Spouse": "their spouse",
+        "Dependent Child": "a dependent child",
+    }
+    named = [words[o] for o in ("Spouse", "Dependent Child") if owners.get(o)]
+    if not named:
+        return "someone other than the member"
+    return " and ".join(named)
+
+
+def excluded_clause(rows: Sequence, lead: str) -> str:
+    """Say what a count left out, so a reader can reconcile it with the filing.
+
+    Without this the number is right and unverifiable: Rep. Donalds' March 2025
+    filing prints 48 transactions and the finding says 23, because 25 are his
+    spouse's. A reader who checks sees a site that cannot count.
+
+    `lead` is the scope, which differs per detector and is the only thing that
+    does -- "The filings covering that month also report", "The same filing
+    also reports", "This member's filings also report". The clause itself lives
+    here so `trade_analyzer` and `committee_conflicts` cannot drift apart while
+    saying the same thing about the same rows.
+    """
+    if not rows:
+        return ""
+    owners = owner_breakdown(rows)
+    n = sum(owners.values())
+    return (
+        f" {lead} {n} transaction(s) belonging to {whose_they_are(owners)}, "
+        f"which this count excludes."
+    )

@@ -25,13 +25,18 @@ from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
 
-from src.analysis.attribution import trades_the_member_holds
+from src.analysis.attribution import (
+    excluded_clause,
+    held_by_member,
+    trades_the_member_holds,
+)
 from src.analysis.restatements import member_transactions
 from src.analysis.sectors import SectorIndex, committee_sectors
 from src.db.models import CommitteeAssignment, Member, Transaction
 
 logger = logging.getLogger(__name__)
 
+_ALSO_REPORT = "This member's filings also report"
 ANOMALY_TYPE = "committee_jurisdiction_conflict"
 
 # A member on a broad committee will always touch its sectors somewhere. Require
@@ -67,9 +72,18 @@ def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]
 
         # A conflict is between the member's committee and the member's own
         # holdings. A spouse's trade is not the member's position.
-        transactions = trades_the_member_holds(member_transactions(db, member.id))
+        household = member_transactions(db, member.id)
+        transactions = trades_the_member_holds(household)
         if not transactions:
             continue
+
+        # The rows the filing reports that are not the member's. Not counted --
+        # that is the #99 rule and it is right -- but named, because the
+        # denominator is load-bearing here: one member's 3 of 13 is 23.1% and
+        # fires, while 3 of the 16 rows their filings actually print is 18.8%
+        # and does not. A reader holding the filing has to be able to get from
+        # 16 to 13.
+        excluded = [t for t in household if not held_by_member(t)]
 
         by_sector: Dict[str, List[Transaction]] = defaultdict(list)
         for txn in transactions:
@@ -100,14 +114,16 @@ def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]
                     "committees": committee_names,
                     "matched_trades": len(matched),
                     "total_trades": total_trades,
+                    "household_trades": len(household),
                     "share_of_trades": round(share * 100, 2),
                     "tickers": tickers,
                     "computed_value": Decimal(str(round(share * 100, 2))),
                     "threshold_value": Decimal(str(round(MIN_SHARE_OF_TRADES * 100, 2))),
                     "description": (
-                        f"{len(matched)} of {total_trades} disclosed trades "
-                        f"({share * 100:.0f}%) are in the {sector} sector, while the member "
-                        f"serves on {', '.join(committee_names)}. "
+                        f"{len(matched)} of {total_trades} trades attributed to this "
+                        f"member ({share * 100:.0f}%) are in the {sector} sector, while "
+                        f"the member serves on {', '.join(committee_names)}."
+                        f"{excluded_clause(excluded, _ALSO_REPORT)} "
                         f"Tickers: {', '.join(tickers) if tickers else 'n/a'}. "
                         f"This is a disclosed overlap between committee remit and trading "
                         f"activity; it does not establish that the seat influenced the "

@@ -1149,3 +1149,56 @@ before and after; every sentence changes. `("late_filing", "description",
 identity across the rewording and `persist_anomalies` only inserts; large-trade
 titles are rewritten in place by `_sync_large_trade_anomalies`, which already
 does exactly this.
+
+---
+
+## D26. What the count covers, said on the card
+
+Three counts that did not say what they were counts of, and one sentence that
+existed three times.
+
+### `committee_jurisdiction_conflict` called its denominator "disclosed trades"
+
+It counts only the member's own rows — correctly, per #99 — and then labelled
+the result with a word meaning everything the filing discloses. Rep. Hill's
+filings disclose 16 transactions; the finding said 13.
+
+**The denominator is load-bearing here, not cosmetic:** 3 of 13 is 23.1% and
+clears the 20% gate; 3 of 16 is 18.8% and does not. A reader holding the filing
+had no way to get from 16 to 13. The sentence now names what it counted and
+what it left out, and `household_trades` is carried in the emitted dict so the
+API has the reconcilable figure.
+
+### `high_trading_frequency` did not say how concentrated the month was
+
+**19 of the corpus's 132 findings describe a month whose every row shares one
+date** — Rep. Keating's fifteen are all 11 September 2024, Sen. Tuberville's
+sixteen all 15 April 2025. That is one reallocation. The argument is #103's,
+applied to the sibling detector: a PTR records a date and no time of day, so a
+single date is a batch, not a month of decisions.
+
+    15 transactions were attributed to this member in September 2024, above
+    the threshold of 10 per month. All of them are dated 11 September 2024; a
+    PTR records a date but no time of day, so this is one day's batch rather
+    than trading spread through the month.
+
+The multi-day form is one short sentence — "They fall on 12 days of trading."
+— because it is the common case and the count already carries the claim.
+
+**"which exceeds the threshold of" became "above the threshold of" on purpose.**
+The title is unchanged and these findings are keyed by title, so
+`persist_anomalies` would never rewrite the description; the old phrase is the
+needle that takes the stale text down.
+
+### The excluded clause existed three times
+
+#104 wrote it for a month, D24 copied it for a filing, and
+`committee_conflicts` needed a third for a member's whole record. Three copies
+of one sentence about the same rows is three chances to drift, so
+`excluded_clause(rows, lead)` and `whose_they_are` live in `attribution.py`,
+where `owner_breakdown`'s docstring already states the rule, and each detector
+supplies only its scope. A test reads both modules and fails if either writes
+the clause itself again.
+
+**Corpus effect: none on any count.** 132 frequency findings, 2 committee
+findings, before and after.

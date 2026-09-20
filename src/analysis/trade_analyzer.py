@@ -10,8 +10,8 @@ from sqlalchemy.orm import Session
 from src.analysis.anomaly_key import identity_of, stored_by_identity
 from src.analysis.asset_class import all_fixed_income
 from src.analysis.attribution import (
+    excluded_clause,
     held_by_member,
-    owner_breakdown,
     owner_of,
     trades_the_member_holds,
 )
@@ -42,20 +42,8 @@ _settings = get_settings()
 
 
 def _excluded_clause(household_rows) -> str:
-    """Say what the count left out, so a reader can reconcile it with the filing.
-
-    Without this the number is right and unverifiable: Rep. Donalds' March 2025
-    filing prints 48 transactions and the finding says 23, because 25 are his
-    spouse's. A reader who checks sees a site that cannot count.
-    """
-    if not household_rows:
-        return ""
-    owners = owner_breakdown(household_rows)
-    n = sum(owners.values())
-    return (
-        f" The filings covering that month also report {n} transaction(s) "
-        f"belonging to {_whose_they_are(owners)}, which this count excludes."
-    )
+    """The month's scope. The clause itself lives in `attribution`."""
+    return excluded_clause(household_rows or [], "The filings covering that month also report")
 
 
 def _corporate_actions(rows) -> tuple:
@@ -159,6 +147,32 @@ def _whose_trade(txn) -> str:
     )
 
 
+def _over_how_many_days(rows) -> str:
+    """How concentrated the month was, because "activity" implies spread.
+
+    19 of the corpus's 132 "High trading activity" findings describe a month
+    whose every row shares ONE date -- Rep. Keating's fifteen are all 11
+    September 2024, Sen. Tuberville's sixteen all 15 April 2025. That is one
+    reallocation, and calling it a month of trading activity without saying so
+    is the same defect #103 fixed in `trade_clustering`: a PTR records a date
+    and no time of day, so a single date is a batch, not a sequence and not a
+    month's worth of decisions.
+
+    The multi-day form stays to one short sentence, because it is the common
+    case and the count already carries the claim.
+    """
+    days = sorted({t.transaction_date.date() for t in rows if t.transaction_date})
+    if not days:
+        return ""
+    if len(days) == 1:
+        return (
+            f" All of them are dated {days[0]:%-d %B %Y}; a PTR records a date but no "
+            f"time of day, so this is one day's batch rather than trading spread "
+            f"through the month."
+        )
+    return f" They fall on {len(days)} days of trading."
+
+
 def _percent(value: float) -> str:
     """The exact share, not a band it happens to fall in.
 
@@ -170,27 +184,8 @@ def _percent(value: float) -> str:
 
 
 def _excluded_from_filing(household_rows) -> str:
-    """`_excluded_clause` for a scope of one filing rather than one month."""
-    if not household_rows:
-        return ""
-    owners = owner_breakdown(household_rows)
-    n = sum(owners.values())
-    return (
-        f" The same filing also reports {n} transaction(s) belonging to "
-        f"{_whose_they_are(owners)}, which this count excludes."
-    )
-
-
-def _whose_they_are(owners: Dict[str, int]) -> str:
-    """Name the household members whose rows a count leaves out."""
-    words = {
-        "Spouse": "their spouse",
-        "Dependent Child": "a dependent child",
-    }
-    named = [words[o] for o in ("Spouse", "Dependent Child") if owners.get(o)]
-    if not named:
-        return "someone other than the member"
-    return " and ".join(named)
+    """The same clause for a scope of one filing rather than one month."""
+    return excluded_clause(household_rows or [], "The same filing also reports")
 
 
 def _what_was_traded(transactions: Sequence[Transaction]) -> str:
@@ -759,9 +754,10 @@ class TradeAnalyzer:
                             # whatever it holds.
                             "description": (
                                 f"{count} {_what_was_traded(rows)} attributed to this "
-                                f"member in {formatted_month}, which exceeds the "
-                                f"threshold of {self.frequency_threshold_per_month} "
-                                f"per month.{_excluded_clause(household.get(month))}"
+                                f"member in {formatted_month}, above the threshold of "
+                                f"{self.frequency_threshold_per_month} per month."
+                                f"{_over_how_many_days(rows)}"
+                                f"{_excluded_clause(household.get(month))}"
                                 f"{_exchange_clause(exchanged)}"
                             ),
                             "computed_value": Decimal(str(count)),

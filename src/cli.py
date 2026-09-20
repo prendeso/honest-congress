@@ -1035,6 +1035,20 @@ _SUPERSEDED_WORDING = (
     # `persist_anomalies`, which only inserts, would otherwise serve the old
     # text for ever.
     ("late_filing", "description", "Trade: "),
+    # `high_trading_frequency` called a month "High trading activity" without
+    # saying how concentrated it was. 19 of the corpus's 132 findings describe
+    # a month whose every row shares ONE date -- Rep. Keating's fifteen are all
+    # 11 September 2024 -- which is one reallocation, not a month of trading.
+    # The corrected sentence says so, and says "above the threshold" where the
+    # old one said "which exceeds the threshold"; that phrase is the needle,
+    # because the title is unchanged and these findings are keyed by title, so
+    # `persist_anomalies` would never rewrite the description.
+    ("high_trading_frequency", "description", "which exceeds the threshold of"),
+    # `committee_jurisdiction_conflict` called its denominator "disclosed
+    # trades" while counting only the member's own -- Rep. Hill's filings
+    # disclose 16 and the finding said 13. The denominator is load-bearing:
+    # 3 of 13 is 23.1% and fires, 3 of 16 is 18.8% and does not.
+    ("committee_jurisdiction_conflict", "description", "disclosed trades"),
     # `excessive_wealth_growth` compared whichever filing the database happened
     # to return last for the earlier year. `wealth_analyzer` ordered only by
     # `filing_year`, and its growth loop skips same-year pairs, so "last filing

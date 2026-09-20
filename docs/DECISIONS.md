@@ -866,3 +866,47 @@ sides of the comparison now run through the same `_row_key`, which is the only
 arrangement that cannot drift. Inventing a trade about a named person is worse
 than missing one, so this direction is asserted explicitly, not just the
 shortfall.
+
+---
+
+## D21. The asset-type tag is read by shape, because the list is not ours
+
+The House PTR prints an asset-type abbreviation in square brackets after each
+asset name, and the form says where the list of them lives:
+
+    * For the complete list of asset type abbreviations, please visit
+      https://fd.house.gov/reference/asset-type-codes.aspx.
+
+This repository kept a copy of that list, `ASSET_CLASS_CODES`, and
+`_extract_ticker` used it to decide whether a bracketed code was a symbol. A
+copy of a list published elsewhere drifts, and it had: `[VA]`, variable
+annuity, was never in it, so two Prudential annuities were recorded as trades
+in a company called **VA**.
+
+The second hole was quieter. The bracket loop `continue`d on a code it *did*
+recognise and left the code in the string, and the keyword pass underneath then
+searched the same untouched text for capitals:
+
+    OnSolve LLC Shares [PS]                        ->  PS
+    IShares Core S&P Small Cap E [OT]              ->  OT
+    Ternium S.A. ... Depositary Shares (TX) [ST]   ->  ST
+
+The Ternium row shows the cost. Its real symbol is printed on the same line, in
+parentheses, and the row was filed under `ST` anyway.
+
+**So the tag is removed from the text before any branch reads it, and the rule
+is the shape the form prints rather than a list of values.** Every one of the
+5,102 bracketed codes in the 10,594-row corpus is two characters and every one
+is an asset class; not one is a symbol.
+
+**Parentheses are deliberately untouched.** `(BA)`, `(GS)`, `(PM)`, `(IR)` are
+Boeing, Goldman Sachs, Philip Morris and Ingersoll Rand — real symbols that
+collide with asset-class codes, and 78 corpus rows carry one. The bracket is
+the only thing distinguishing them, so widening the rule past two characters,
+or applying it to parentheses, would lose a symbol the filing actually printed.
+A mutation covering each is in the test.
+
+**What changed, measured:** five of 10,594 descriptions. Every one moves from a
+wrong symbol to none; no correct symbol is lost. Answering nothing is the
+conservative direction here — a ticker is what a sector, a company and
+eventually a published sentence about a named person are attached to.

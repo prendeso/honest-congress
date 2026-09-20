@@ -70,6 +70,13 @@ _FILING_STATUS = re.compile(r"^\s*F\s+S\s*:\s*([A-Za-z]+)", re.MULTILINE)
 
 AMENDED = "Amended"
 NEW = "New"
+# The third word the form prints, and the one nothing here had read. A filer
+# who withdraws an entry re-files the report with that row marked "Deleted";
+# the row is still printed, so it is still stored, but it is not a trade. A
+# scan of all 2,399 local PDFs finds new 9,531, amended 11, deleted 3 -- the
+# three being one Berkshire sale Del. Norton withdrew (20025053) and two
+# Minnesota municipal purchases (20030475).
+DELETED = "Deleted"
 
 
 def _filing_status_in(text: str) -> str | None:
@@ -80,6 +87,8 @@ def _filing_status_in(text: str) -> str | None:
     value = match.group(1).strip().lower()
     if value.startswith("amend"):
         return AMENDED
+    if value.startswith("delet"):
+        return DELETED
     if value == "new":
         return NEW
     return None

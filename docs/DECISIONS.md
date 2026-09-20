@@ -910,3 +910,63 @@ A mutation covering each is in the test.
 wrong symbol to none; no correct symbol is lost. Answering nothing is the
 conservative direction here — a ticker is what a sector, a company and
 eventually a published sentence about a named person are attached to.
+
+---
+
+## D22. The form prints three filing statuses and we had read two
+
+Under every row, a House PTR prints a **Filing Status**:
+
+    F S: New        the disclosure as first reported
+    F S: Amended    a correction -- D-less, but this is what #101 acted on
+    F S: Deleted    the filer struck the entry out
+
+`_filing_status_in` mapped the first two and returned `None` for the third, so
+a disclosure the filer had **withdrawn** was counted as a trade like any other.
+
+Measured over all 2,399 local filings:
+
+    new       9,531
+    amended      11
+    deleted       3
+
+The three are Del. Eleanor Holmes Norton's withdrawn Berkshire Hathaway sale
+(20025053, a filing that consists of nothing but the withdrawal) and two
+Minnesota municipal purchases in 20030475.
+
+**What the one that reached a reader did:**
+
+    Run(length=5, span_days=39, days=3, first=2024-04-04)   with the withdrawn row
+    None                                                     without it
+
+A published "Same-direction trades on 3 days (5)" about a named member, one
+fifth of which the filer had told the Clerk to disregard. Corpus effect,
+measured with the real detectors: **460 findings -> 459**, the single loss being
+that finding. Nothing else moves.
+
+**The row is still stored.** It is printed on the form, and
+`test_every_printed_trade_is_stored.py` balances printed lines against stored
+rows, so dropping it at the parser would break the reconciliation that proves
+no trade is lost. It is excluded where trades are *counted* instead, inside
+`drop_restatements` — the one funnel `member_transactions`,
+`transactions_by_member`, `drop_restated_pairs` and `drop_restated_records` all
+already share, so every detector gets the rule without knowing it exists.
+
+**NULL still means "not read yet", never "withdrawn"** — every row stored before
+#101, and every Senate row, where the column does not exist.
+
+**The row the deletion withdraws is deliberately left alone.** Pairing them
+would have to be content-based, and this is precisely the shape where content
+matching fails: the withdrawal carries the House record id at the head of its
+description (`2000119685 Berkshire Hathaway Inc. New`) where the original
+carries none (`Berkshire Hathaway Inc. New S (partial)`) — the Laurel Lee case
+`content_key` already documents. Taking down the withdrawal alone is the
+conservative direction, and it is enough: it leaves Norton with the four sales
+her other filings print.
+
+**The silent-omission risk is guarded structurally.** `withdrawn()` reads the
+column with `getattr`, because `significance` and `tier2_detectors` hand-build
+narrow row projections; a projection that forgot `filing_status` would keep the
+struck-out rows and say nothing. So the four call sites are read with `ast` and
+the test fails if one omits the column, rather than leaving the default to be
+relied on.

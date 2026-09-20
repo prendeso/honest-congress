@@ -316,6 +316,10 @@ def _member_trades(db: Session) -> Dict[int, List[Tuple[str, float, bool]]]:
             Transaction.amount_min.label("amount_min"),
             Transaction.amount_max.label("amount_max"),
             Transaction.owner.label("owner"),
+            # Carried because `drop_restatements` drops rows the filer
+            # struck out, and a projection that omits the column keeps
+            # them silently.
+            Transaction.filing_status.label("filing_status"),
             Disclosure.filing_date.label("filing_date"),
         )
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
@@ -428,6 +432,10 @@ def _sector_trades(db: Session) -> Dict[int, Dict[str, List[float]]]:
             Transaction.amount_min.label("amount_min"),
             Transaction.amount_max.label("amount_max"),
             Transaction.owner.label("owner"),
+            # Carried because `drop_restatements` drops rows the filer
+            # struck out, and a projection that omits the column keeps
+            # them silently.
+            Transaction.filing_status.label("filing_status"),
             Disclosure.filing_date.label("filing_date"),
         )
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
@@ -632,6 +640,10 @@ def _cluster_p_values(
             Transaction.amount_min.label("amount_min"),
             Transaction.amount_max.label("amount_max"),
             Transaction.owner.label("owner"),
+            # Carried because `drop_restatements` drops rows the filer
+            # struck out, and a projection that omits the column keeps
+            # them silently.
+            Transaction.filing_status.label("filing_status"),
             Disclosure.filing_date.label("filing_date"),
         )
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)

@@ -114,7 +114,7 @@ def _assign(db, member, committee_id, name="Senate Committee on Armed Services")
     db.commit()
 
 
-def _trade(db, disclosure, ticker, description="holding"):
+def _trade(db, disclosure, ticker, description="holding", owner="Self"):
     db.add(
         Transaction(
             disclosure_id=disclosure.id,
@@ -124,6 +124,7 @@ def _trade(db, disclosure, ticker, description="holding"):
             ticker=ticker,
             amount_min=Decimal("1001"),
             amount_max=Decimal("15000"),
+            owner=owner,
         )
     )
     db.commit()

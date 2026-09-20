@@ -116,6 +116,38 @@ def content_key(transaction: Transaction) -> tuple:
     )
 
 
+WITHDRAWN = "Deleted"
+
+
+def withdrawn(transaction) -> bool:
+    """The filer struck this row out, so it is a printed line and not a trade.
+
+    The House PTR prints a "Filing Status" under every row, and it takes three
+    values, not two. `New` and `Amended` were read; `Deleted` was not, so a
+    disclosure the filer had withdrawn was counted as a trade like any other.
+    Three rows across the local corpus of 2,399 filings carry it -- one
+    Berkshire Hathaway sale withdrawn by Del. Norton, and two Minnesota
+    municipal purchases -- and the one that reached a reader's screen turned
+    four same-direction sales into a run of five.
+
+    `getattr` rather than attribute access because the narrow projections in
+    `tier2_detectors` and `significance` build row tuples by hand. A projection
+    that forgets the column would silently keep the row, so
+    `tests/test_a_withdrawn_row_is_not_a_trade.py` reads those call sites and
+    fails if one omits it, rather than leaving the default to be relied on.
+
+    **The row the deletion withdraws is deliberately left alone.** Dropping
+    only the struck-out entry is the conservative direction: the withdrawn copy
+    carries the House record id at the head of its description
+    ("2000119685 Berkshire Hathaway Inc. New") where the original carries none
+    ("Berkshire Hathaway Inc. New S (partial)"), so pairing them would need the
+    content matching that is exactly what fails on this shape -- the Laurel Lee
+    case `content_key` already documents. Taking down the withdrawal alone
+    leaves Norton with the four sales her later filings print.
+    """
+    return getattr(transaction, "filing_status", None) == WITHDRAWN
+
+
 def drop_restatements(
     transactions: Sequence[Transaction],
     filed_on: Mapping[int, object],
@@ -150,6 +182,15 @@ def drop_restatements(
     filing type and may be omitted, in which case only the shared-row test
     applies.
     """
+    if not transactions:
+        return []
+
+    # A struck-out row never enters the comparison. Doing it here rather than
+    # in each detector is the point: `member_transactions`,
+    # `transactions_by_member`, `drop_restated_pairs` and
+    # `drop_restated_records` all funnel through this function, so every
+    # detector gets the rule without knowing it exists.
+    transactions = [t for t in transactions if not withdrawn(t)]
     if not transactions:
         return []
 

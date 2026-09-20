@@ -388,6 +388,71 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
 
         assert db_session.query(Anomaly).count() == 1
 
+    def test_todays_six_needles_spare_what_the_detectors_now_write(self, db_session):
+        """The other half of six rules added in one day.
+
+        Two of them are short and generic -- `("late_filing", "description",
+        "Trade: ")` and `("high_trading_frequency", "description", "which
+        exceeds the threshold of")`. A rule that also matched the CORRECTED
+        sentence would delete every finding of its type every night and let the
+        next `analyze` re-derive it, for ever. So each corrected sentence is
+        seeded here verbatim, as the detectors emit it today, and must survive.
+
+        Checked once against a real corpus as well: 460 of 1,617 stored
+        findings carry text the current detectors cannot write, and none of the
+        460 findings they DO produce matches any needle.
+        """
+        from src.db.models import Anomaly
+
+        corrected = [
+            (
+                "late_filing",
+                "Late PTR filing: significantly late (1-3 months)",
+                "Transaction on 2024-04-08 was filed significantly late (1-3 months) "
+                "on 2024-09-01. The STOCK Act requires filing within 45 days. Trade "
+                "reported: purchase of Cleveland-Cliffs Inc. Common Stock, which the "
+                "filing reports for their spouse.",
+            ),
+            (
+                "high_trading_frequency",
+                "High trading activity: 15 trades in September 2024",
+                "15 transactions were attributed to this member in September 2024, "
+                "above the threshold of 10 per month. All of them are dated 11 "
+                "September 2024; a PTR records a date but no time of day.",
+            ),
+            (
+                "sector_concentration",
+                "High concentration in finance sector (3 of 5)",
+                "3 of the 5 transactions attributed to this member in this filing "
+                "are in the finance sector (60%), above the 50% threshold.",
+            ),
+            (
+                "trade_clustering",
+                "Exchanges on one day (12)",
+                "The filing reports 12 exchanges on 30 September 2024. The form "
+                "marks these `E`: holdings converted in kind rather than bought or "
+                "sold.",
+            ),
+            (
+                "committee_jurisdiction_conflict",
+                "Traded finance while serving on overseeing committee",
+                "3 of 13 trades attributed to this member (23%) are in the finance "
+                "sector, while the member serves on House Committee on Financial "
+                "Services.",
+            ),
+        ]
+        for anomaly_type, title, description in corrected:
+            self._anomaly(
+                db_session, anomaly_type=anomaly_type, title=title, description=description
+            )
+
+        self._purge(db_session)
+
+        assert db_session.query(Anomaly).count() == len(corrected), (
+            "a purge needle added today also matches the corrected sentence, so "
+            "the rule deletes and re-derives that finding every night"
+        )
+
     def test_a_corrected_finding_is_left_alone(self, db_session):
         from src.db.models import Anomaly
 

@@ -830,4 +830,39 @@ under-reads. Every published count may therefore be low.
 Under-counting is the safe direction for an accusation, and it is still wrong:
 it breaks the one property this project has been building all along — that a
 reader can check a published number against the document and have it
-reconcile. **Not yet fixed. It is the next parser change.**
+reconcile.
+
+**Fixed.** Three mechanisms, all present in one 41-page filing (`20030387`,
+vendored as `tests/fixtures/ptr_reconciliation/`):
+
+1. **The header was assumed to be row 0.** pdfplumber emits a blank leading row
+   when a page's ruling lines start fractionally above the header text. The
+   blank row failed the "is this a transaction table" test and the table was
+   skipped **whole** — two pages, sixteen disclosed trades, no error, no
+   warning. The header is now located, requiring two of its words together so a
+   fund called "Asset Management" cannot be mistaken for one.
+2. **`extract_tables` drops the last record on a page.** Those rows are printed
+   in the text layer and absent from every table. They are now recovered by
+   reconciling the printed lines against what the tables yielded, flagged as a
+   weaker read so the confidence score reports them.
+3. **A bond prints its maturity inside its own name.** `Wells Fargo 6.491
+   10/23/34 '33 MTN S 05/13/2025` was stored as a trade on **2034-10-23**. The
+   date is now read after the transaction-type token, which the parser already
+   used to locate the type. That single row is why a "same-direction trades on
+   3 days" finding had a third day forty days from the other two.
+
+Measured over 114 local filings after the fix:
+
+    printed   2,380
+    stored    2,380
+    missing       0     filings short: 0     filings over: 0
+
+**The reconciliation can over-count, and nearly did.** Three separate key
+mismatches each stored a trade twice: a CUSIP (`097023DC6`) whose leading
+digits were eaten by an ID-strip that did not require a separator; a House ID
+left at the head of a stored description but stripped from the printed line;
+and a `S (partial)` marker the collapsed path leaves in the description. Both
+sides of the comparison now run through the same `_row_key`, which is the only
+arrangement that cannot drift. Inventing a trade about a named person is worse
+than missing one, so this direction is asserted explicitly, not just the
+shortfall.

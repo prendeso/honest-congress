@@ -376,11 +376,11 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
             anomaly_type="trade_clustering",
             title="Same-direction trades on one day (8)",
             description=(
-                "Member made 8 trades in the same direction (all buys or all sells) "
-                "on 19 January 2024. The filing records a date but no time of day, "
-                "so this is a batch rather than a sequence: it says what was traded "
-                "that day, not in what order. This describes what was traded only; "
-                "it does not measure timing, profitability, or intent."
+                "Member made 8 sales on 19 January 2024. The filing records a date "
+                "but no time of day, so this is a batch rather than a sequence: it "
+                "says what was traded that day, not in what order. This describes "
+                "what was traded only; it does not measure timing, profitability, "
+                "or intent."
             ),
         )
 

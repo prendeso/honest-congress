@@ -47,6 +47,31 @@ class Run(NamedTuple):
     span_days: int
     days: int
     first: Any
+    # What the rows actually are. The published sentence used to say "in the
+    # same direction (all buys or all sells)" as a fixed parenthetical, and the
+    # direction was in hand the whole time -- the run is built from it. Rep.
+    # Kean's twelve were neither: all twelve are type `E`, the form's mark for
+    # holdings converted in kind, printed with the note "Holdings in J exchanged
+    # out for receipt of new holdings in J and AMTM through a corporate action".
+    direction: Any = None
+
+
+def _is_exchange(run: "Run") -> bool:
+    return getattr(run.direction, "value", run.direction) == "exchange"
+
+
+def _direction_noun(run: "Run") -> str:
+    """What the rows are, taken from the rows.
+
+    "in the same direction (all buys or all sells)" was a constant. It was
+    published about twelve rows that were neither, and about every purchase run
+    and every sale run as though the filing had not said which.
+    """
+    kind = getattr(run.direction, "value", run.direction)
+    word = {"purchase": "purchases", "sale": "sales", "exchange": "exchanges"}.get(kind)
+    if word is None:
+        return "trades in the same direction"
+    return word
 
 
 MIN_CONSECUTIVE_TRADES = 5
@@ -114,23 +139,44 @@ class ExtendedAnomalyDetector:
                     # so the count is a fact about the day and never a streak.
                     run = self._same_direction_run(trades)
                     if run:
-                        if run.days == 1:
+                        noun = _direction_noun(run)
+                        if _is_exchange(run):
+                            # Not a direction at all, so neither the title nor
+                            # the sentence may presuppose one.
+                            if run.days == 1:
+                                title = f"Exchanges on one day ({run.length})"
+                                detail = (
+                                    f"The filing reports {run.length} {noun} on "
+                                    f"{run.first:%-d %B %Y}."
+                                )
+                            else:
+                                title = f"Exchanges on {run.days} days ({run.length})"
+                                detail = (
+                                    f"The filing reports {run.length} {noun} on {run.days} "
+                                    f"days spanning {_days(run.span_days)}."
+                                )
+                            detail += (
+                                " The form marks these `E`: holdings converted in kind rather "
+                                "than bought or sold, which on this record is a corporate "
+                                "action -- a merger, a spin-off or a bond refunding. It is "
+                                "not a purchase and not a sale, and the member need not have "
+                                "chosen it."
+                            )
+                        elif run.days == 1:
                             title = f"Same-direction trades on one day ({run.length})"
                             detail = (
-                                f"Member made {run.length} trades in the same direction "
-                                f"(all buys or all sells) on {run.first:%-d %B %Y}. The filing "
-                                f"records a date but no time of day, so this is a batch rather "
-                                f"than a sequence: it says what was traded that day, not in "
-                                f"what order."
+                                f"Member made {run.length} {noun} on {run.first:%-d %B %Y}. "
+                                f"The filing records a date but no time of day, so this is a "
+                                f"batch rather than a sequence: it says what was traded that "
+                                f"day, not in what order."
                             )
                         else:
                             title = f"Same-direction trades on {run.days} days ({run.length})"
                             detail = (
-                                f"Member made {run.length} trades in the same direction "
-                                f"(all buys or all sells) on {run.days} days of trading "
-                                f"spanning {_days(run.span_days)}. Every one of those days is "
-                                f"entirely one direction; within a day the filing records no "
-                                f"order."
+                                f"Member made {run.length} {noun} on {run.days} days of "
+                                f"trading spanning {_days(run.span_days)}. Every one of those "
+                                f"days is entirely one direction; within a day the filing "
+                                f"records no order."
                             )
                         anomalies.append(
                             {
@@ -273,7 +319,13 @@ class ExtendedAnomalyDetector:
             if length < MIN_CONSECUTIVE_TRADES:
                 continue
             span = (run[-1][0] - run[0][0]).days
-            candidate = Run(length=length, span_days=span, days=len(run), first=run[0][0])
+            candidate = Run(
+                length=length,
+                span_days=span,
+                days=len(run),
+                first=run[0][0],
+                direction=run[-1][1],
+            )
             if (
                 best is None
                 or length > best.length

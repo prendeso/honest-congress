@@ -17,7 +17,7 @@ from src.analysis.attribution import (
 from src.analysis.restatements import drop_restated_pairs, member_transactions
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
-from src.db.models import Anomaly, Disclosure, Member, Transaction
+from src.db.models import Anomaly, Disclosure, Member, Transaction, TransactionType
 from src.parsing.ptr_parser import AMENDED
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,43 @@ def _excluded_clause(household_rows) -> str:
     return (
         f" The filings covering that month also report {n} transaction(s) "
         f"belonging to {_whose_they_are(owners)}, which this count excludes."
+    )
+
+
+def _corporate_actions(rows) -> tuple:
+    """Split a month's rows into trades and the exchanges that are not trades.
+
+    The House form's transaction type is `P`, `S` or `E`, and `E` is not a
+    third direction -- it is a holding converted in kind. All 46 exchange rows
+    in the corpus are corporate actions and not one is a discretionary trade:
+    Exxon/Pioneer, Jacobs/Amentum, Liberty Media/SiriusXM, Synopsys/Ansys,
+    Capital One/Discover, Chevron/Hess, the Sandisk and Qnity and Solstice
+    spin-offs, and a run of municipal refundings. Several print the reason on
+    the row -- "Holdings in J exchanged out for receipt of new holdings in J
+    and AMTM through a corporate action."
+
+    A detector whose subject is how often a member traded must not count them.
+    Rep. Kean was published as "High trading activity: 15 trades in September
+    2024". He made one. The other fourteen were Jacobs Solutions becoming
+    Amentum.
+
+    They are named rather than dropped silently, the same rule `_excluded_clause`
+    applies to a spouse's rows, so a reader checking against the PDF still gets
+    back to the printed total.
+    """
+    traded = [t for t in rows if t.transaction_type != TransactionType.EXCHANGE]
+    exchanged = [t for t in rows if t.transaction_type == TransactionType.EXCHANGE]
+    return traded, exchanged
+
+
+def _exchange_clause(exchanged) -> str:
+    if not exchanged:
+        return ""
+    n = len(exchanged)
+    return (
+        f" The filings covering that month also report {n} exchange(s) -- "
+        f"holdings converted in kind, which the form marks `E` and which this "
+        f"count excludes because they are not trades the member placed."
     )
 
 
@@ -523,6 +560,7 @@ class TradeAnalyzer:
         if True:
             # Check for high-frequency months
             for month, rows in monthly.items():
+                rows, exchanged = _corporate_actions(rows)
                 count = len(rows)
                 # The filing that reported most of the month, so the finding
                 # links somewhere real when the month spans several.
@@ -605,6 +643,7 @@ class TradeAnalyzer:
                                 f"member in {formatted_month}, which exceeds the "
                                 f"threshold of {self.frequency_threshold_per_month} "
                                 f"per month.{_excluded_clause(household.get(month))}"
+                                f"{_exchange_clause(exchanged)}"
                             ),
                             "computed_value": Decimal(str(count)),
                             "threshold_value": Decimal(str(self.frequency_threshold_per_month)),

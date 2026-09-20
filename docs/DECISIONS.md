@@ -757,3 +757,77 @@ deleted. A test that checks a replica checks nothing.
 **Measure the branch before removing it.** A defect's *shape* recurring is a
 reason to look, not a reason to act — the same three lines were a real bug in
 one parser and load-bearing in the other, and only counting told them apart.
+
+## D20. What the corrected pipeline actually publishes, checked against the filings
+
+**Decision:** the number this project may quote about its own reliability is
+**90% of findings stand under neutral review**, measured over every finding the
+corrected detectors produce, with each reviewer required to check the primary
+document. The 5.2% figure D18 withdrew is not comparable to it and must not be
+cited beside it.
+
+### The run
+
+All **460** findings the current detectors produce over the local House corpus,
+one reviewer each, neutral prompt, no sampling.
+
+| verdict | n | share |
+|---|---:|---:|
+| stands | 414 | **90.0%** |
+| overclaimed | 33 | 7.2% |
+| refuted | 13 | 2.8% |
+| cannot_tell | 0 | 0% |
+
+Severity: 2 fatal, 22 serious, 242 minor, 194 none.
+
+| detector | audited | stands |
+|---|---:|---:|
+| volume_spikes | 22 | 100% |
+| late_filing | 174 | 94% |
+| large_trade | 80 | 94% |
+| trade_clustering | 41 | 88% |
+| high_trading_frequency | 131 | 83% |
+| sector_concentration | 10 | 70% |
+| committee_jurisdiction_conflict | 2 | 50% |
+
+**406 of the 460 reviewers (88%) downloaded a filing and counted its printed
+transaction lines**, because the prompt made that mandatory before any claim of
+duplicated rows. Not one duplicate-row claim survived it. D18's false class did
+not recur.
+
+### The like-for-like comparison
+
+The only honest comparison holds the prompt constant. Both figures below are
+from the *same* neutral prompt:
+
+    old corpus, pre-fix     70% stand   (n=60)
+    fixed corpus            90% stand   (n=460)
+
+### What it found, and one was ours
+
+* **A month was not a month.** Grouping ran by filing then month, so a member
+  reporting one month across two PTRs produced two partial findings both
+  titled "in <Month>". 128 member-months are split across filings, carrying
+  2,668 rows. Fixed.
+* **The count did not say whose it was.** #99 stopped counting a spouse's
+  trades and left the wording; Rep. Donalds' filing prints 48 transactions
+  against a published 23. Right number, unverifiable sentence — the same
+  defect #100 fixed in that exact sentence, reintroduced one commit earlier by
+  the fix for #99. Fixed.
+
+### The open defect it surfaced: the parser drops printed rows
+
+Comparing printed transaction lines against stored rows over 79 local filings:
+
+    printed   2,062
+    stored    1,941
+    missing     121   (5.9%), in 13 of the 79 filings
+
+Worst cases lose 29, 27 and 21 rows from single filings. It is the *mirror
+image* of the class D18 refuted: the parser does not double-read, it
+under-reads. Every published count may therefore be low.
+
+Under-counting is the safe direction for an accusation, and it is still wrong:
+it breaks the one property this project has been building all along — that a
+reader can check a published number against the document and have it
+reconcile. **Not yet fixed. It is the next parser change.**

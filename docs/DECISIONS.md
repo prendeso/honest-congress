@@ -1252,3 +1252,79 @@ that sync stops doing it.
 
 **Corpus effect: none on the count.** 80 large trades before and after; 13 of
 them stop naming a share the member did not buy.
+
+---
+
+## D28. Two columns the forms print, stored at last, and acted on by nothing
+
+Both chambers print something this project read and threw away, and in both
+cases the temptation is to let it **cancel a finding**. It does not.
+
+### The House prints a Notification Date
+
+Beside the transaction date, every House PTR prints the date the filer says
+they were notified of the trade. `ptr_parser` has parsed it since the golden
+tests were written; `Transaction` had no column and both `_store_ptr_data` call
+sites dropped it. `compliance.py`'s own docstring said *"awareness dates are
+not disclosed"* — about a column printed on every form this project parses.
+
+**It does not move the deadline, and a proposal to let it was rejected.** One
+of the audit's fatal findings asked for a guard skipping any row notified
+within 30 days of filing. 5 U.S.C. 13104(l) requires a report within 30 days of
+notification *"but in no case later than 45 days after such transaction"*, so a
+late notification can only **shorten** a filer's window, never extend it. The
+guard would have suppressed real violations — the one direction this project
+will not move. D7's clock stands.
+
+What the column can do is say **why** a filing was late, which is often the
+broker's lag rather than the filer's. Measured across every local PTR:
+
+    rows with both dates                                 9,263
+    median notification lag                                 16 days
+    notification more than 45 days after the trade       1,433  (15.5%)
+
+Where the notification itself lands past the cap, no filing could have met the
+deadline whatever the filer did, and the finding now says so.
+
+**38 rows (0.4%) carry a notification date BEFORE the transaction**, across 13
+filings — and every one was read back off the PDF: **the parser is right and
+the document is wrong.** Rep. Jefferson Shreve's PTR 20029038 prints
+`03/28/1935` on 15 rows whose siblings on the same page read `03/28/2025`.
+Without a guard the card would have read "notified 32,858 days before the
+trade" beside his name. The clause states what the form says and infers nothing
+from it, the same direction #105 took on the reconciliation.
+
+### The Senate prints a filer Comment
+
+`senate_html_parser._COLUMN_ALIASES` has always mapped eFD's Comment column;
+`_rows_to_transactions` read the cell and left it out of the dict. 1,517
+comment cells across 244 local filings, 188 substantive, 1,338 the placeholder
+"n/a" — which is why the placeholder is stored as NULL rather than put on a
+card.
+
+Two of the substantive ones matter:
+
+    While no immediate PTR required, provided to clearly denote basis for the
+    renamed asset on the 2023 annual report that was previously named CEQP.
+
+Both are Sen. Hagerty's — the Crestwood/Energy Transfer and Equitrans/EQT
+corporate actions — and this project publishes **both** as late STOCK Act
+filings. He wrote on the form that he believed no report was due and filed
+anyway, for clarity.
+
+**Stored and published; never acted on.** An audit finding asked for a
+predicate suppressing late-filing findings on rows like these. Two rows is not
+evidence enough to build a rule that withdraws accusations, and the rule's
+shape is one to refuse on principle: **an accusation is not cancelled by the
+accused's own unverifiable note.** #101 acted on "Amended" because that is the
+FORM's answer in a fixed vocabulary the Clerk defines; this is free text the
+filer writes. Publishing what they wrote lets a reader weigh it.
+
+Both are asserted structurally: a test fails if `filer_comment` ever appears in
+`trade_analyzer` or `compliance`, and another fails if either
+`_store_*_data` call site stops passing these columns — the original defect in
+both cases was a value read and silently not stored.
+
+**Corpus effect: none.** No finding appears or disappears; `late_filing` stays
+at 174. Both columns are NULL on every stored row until a re-parse fills them,
+and NULL means "not read yet", never "no notification" or "no comment".

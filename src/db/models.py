@@ -246,6 +246,35 @@ class Transaction(Base):
     # published "filed significantly late (1-3 months)", 125 days.
     filing_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # The date the filer says they were NOTIFIED of the transaction, printed in
+    # its own column on every House PTR beside the transaction date, parsed
+    # since the golden tests were written, and discarded at persistence until
+    # now.
+    #
+    # It does NOT move the deadline. 5 U.S.C. 13104(l) requires a report within
+    # 30 days of notification "but in no case later than 45 days after such
+    # transaction", so a late notification can only SHORTEN a filer's window,
+    # never extend it past 45 days. It is published as context, never as an
+    # excuse -- see D28.
+    #
+    # NULL means "not read yet": every row stored before this, and every Senate
+    # row, where eFD's HTML has no such column. It must never be read as "no
+    # notification".
+    notification_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # The filer's own free-text note on the row. The Senate's eFD prints a
+    # Comment column and `senate_html_parser._COLUMN_ALIASES` has always mapped
+    # it; the value was read and dropped. House PTRs have no such column, so
+    # NULL there is the source, not a gap.
+    #
+    # Published, never acted on. Two rows in the local corpus say "While no
+    # immediate PTR required, provided to clearly denote basis for the renamed
+    # asset" -- Sen. Hagerty's Crestwood/Energy Transfer and Equitrans/EQT
+    # corporate actions -- and both are published as late STOCK Act filings. A
+    # reader deserves to see what the filer wrote; an accusation is not
+    # withdrawn on the strength of the accused's own note. See D28.
+    filer_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Metadata
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

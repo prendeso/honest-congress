@@ -2,9 +2,14 @@
 
 The STOCK Act requires a Periodic Transaction Report within 30 days of a member
 becoming aware of a covered transaction, and no later than 45 days after the
-transaction itself. The 45-day figure is the one that can be checked from the
-filings alone: awareness dates are not disclosed, so 45 days is the only
-deadline the public record supports.
+transaction itself. **45 days is the deadline this measures, and the reason is
+the statute rather than the record.** House PTRs DO print a Notification Date
+-- this module's own docstring used to say they did not -- but 5 U.S.C.
+13104(l) makes the 45-day prong an absolute cap: a report is due within 30 days
+of notification "but in no case later than 45 days after such transaction". A
+notification date can only shorten a filer's window, never extend it, so it
+never excuses a filing past 45 days. `trade_analyzer` publishes it as context
+on the finding; nothing here scores against it.
 
 This is deliberately the least interpretive thing the project computes. It
 makes no claim about intent, timing, profit or conflict -- it is subtraction

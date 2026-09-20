@@ -147,6 +147,66 @@ def _whose_trade(txn) -> str:
     )
 
 
+PTR_HARD_CAP_DAYS = 45
+
+
+def _when_they_were_told(txn, disclosure) -> str:
+    """The Notification Date the form prints, published as context and never as an excuse.
+
+    Every House PTR prints, beside the transaction date, the date the filer says
+    they were notified of the trade. `ptr_parser` has read it since the golden
+    tests were written and nothing stored it, so `compliance.py`'s docstring
+    said "awareness dates are not disclosed" about a column printed on every
+    form this project parses.
+
+    **It does not move the deadline.** 5 U.S.C. 13104(l) requires a report
+    within 30 days of notification "but in no case later than 45 days after
+    such transaction". A late notification can only SHORTEN a filer's window,
+    never extend it past 45 days, so a finding is never suppressed on this
+    evidence -- D7's clock stands and D28 records why a proposal to suppress
+    was rejected.
+
+    What it can do is say why a filing was late, which is often the broker's
+    lag rather than the filer's: where the notification itself lands past the
+    45-day cap, the filer could not have reported in time whatever they did.
+    That is material to a reader judging a named person, and it was sitting on
+    the document unread.
+
+    NULL is "not read yet" -- every row stored before the column existed, and
+    every Senate row -- so it produces no clause at all rather than a claim
+    that no notification happened.
+    """
+    told = getattr(txn, "notification_date", None)
+    if told is None or txn.transaction_date is None:
+        return ""
+    learned_after = (told - txn.transaction_date).days
+    if learned_after < 0:
+        # The form prints an impossible value and this says so rather than
+        # computing from it. Rep. Shreve's PTR 20029038 prints "03/28/1935" on
+        # 15 rows whose siblings on the same page read "03/28/2025", which
+        # would have published "notified 32,858 days before the trade" beside
+        # his name. 38 of the corpus's 9,263 dated rows (0.4%) are like this,
+        # across 13 filings, and every one was checked against the PDF: the
+        # parser reads them correctly and the DOCUMENT is wrong.
+        return (
+            f" The form gives a notification date of {told:%Y-%m-%d}, before the "
+            f"transaction it reports; nothing is inferred from it here."
+        )
+    clause = f" The filer reports being notified of it on {told:%Y-%m-%d}"
+    if learned_after > PTR_HARD_CAP_DAYS:
+        clause += (
+            f", {learned_after} days after the trade -- itself past the "
+            f"{PTR_HARD_CAP_DAYS}-day cap, so no filing could have met the deadline"
+        )
+    elif disclosure.filing_date is not None:
+        clause += f", and filed {(disclosure.filing_date - told).days} days after that"
+    return (
+        clause + ". The deadline runs from the transaction regardless: the statute allows "
+        "30 days from notification but in no case more than "
+        f"{PTR_HARD_CAP_DAYS} days from the trade."
+    )
+
+
 def _over_how_many_days(rows) -> str:
     """How concentrated the month was, because "activity" implies spread.
 
@@ -513,6 +573,7 @@ class TradeAnalyzer:
                         f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
                         f"Trade reported: {txn.transaction_type.value} of "
                         f"{_asset_name(txn)}{_whose_trade(txn)}."
+                        f"{_when_they_were_told(txn, disclosure)}"
                     ),
                     "computed_value": Decimal(str(days_to_file)),
                     "threshold_value": Decimal(str(self.ptr_deadline_days)),

@@ -94,6 +94,28 @@ def _exchange_clause(exchanged) -> str:
     )
 
 
+def _percent(value: float) -> str:
+    """The exact share, not a band it happens to fall in.
+
+    `computed_value` already carries this number and the card renders it two
+    lines below the title, so publishing "60-75%" beside "60 percent" hid a
+    fact the filing states exactly. One decimal only where there is one.
+    """
+    return f"{value:.0f}%" if abs(value - round(value)) < 0.05 else f"{value:.1f}%"
+
+
+def _excluded_from_filing(household_rows) -> str:
+    """`_excluded_clause` for a scope of one filing rather than one month."""
+    if not household_rows:
+        return ""
+    owners = owner_breakdown(household_rows)
+    n = sum(owners.values())
+    return (
+        f" The same filing also reports {n} transaction(s) belonging to "
+        f"{_whose_they_are(owners)}, which this count excludes."
+    )
+
+
 def _whose_they_are(owners: Dict[str, int]) -> str:
     """Name the household members whose rows a count leaves out."""
     words = {
@@ -303,7 +325,7 @@ class TradeAnalyzer:
         anomalies.extend(self._check_late_filings(db, member_id, member))
         anomalies.extend(
             self._check_sector_concentration(
-                transactions, member_id, member, self._sector_index(db)
+                transactions, member_id, member, self._sector_index(db), disclosed
             )
         )
         anomalies.extend(self._check_trading_frequency(transactions, member_id, member, disclosed))
@@ -433,8 +455,36 @@ class TradeAnalyzer:
         member_id: int,
         member: Member,
         index: SectorIndex,
+        disclosed: List[Transaction] | None = None,
     ) -> List[Dict[str, Any]]:
-        """Check if trades are unusually concentrated in a specific sector, per disclosure year."""
+        """How much of ONE filing was in one sector, said so it can be checked.
+
+        The number was right and the sentence was not, the same pairing #104
+        fixed in `_check_trading_frequency` and #100 in its noun. Three faults
+        in one f-string:
+
+        * "A significant portion of trades" named no denominator and no scope.
+          The scope is a single PTR -- five rows over three weeks, in the case
+          that surfaced this -- and a reader with the filing open could not
+          reconcile "a significant portion" against anything.
+        * "This unusual concentration may warrant further review" asserts
+          unusualness, and nothing measures it. `sector_concentration` is in
+          `significance.NO_NULL_MODEL`, so no null distribution exists for it,
+          and since #100 the only thing entitled to grade extremity is
+          `percentile_rank` -- which put that finding at the 40th percentile of
+          its own type while the sentence called it unusual. D3, D10 and D14
+          were each spent removing a claim of exactly this shape.
+        * The band hid a number already on the card. `computed_value` is the
+          exact percentage and renders as the "Value" chip two lines below, so
+          "60-75%" sat beside "60 percent". D5 does not reach this: it governs
+          figures DERIVED from disclosed amount ranges, and a count of rows in
+          a sector is disclosed exactly.
+
+        `disclosed` carries the filing's household rows so the sentence can name
+        what it left out, exactly as the frequency check does -- the denominator
+        is the member's own rows, per #99, and a filing printing more lines than
+        the finding counts is otherwise unreconcilable.
+        """
         anomalies = []
 
         # Group transactions by disclosure (by year)
@@ -443,6 +493,15 @@ class TradeAnalyzer:
         for txn in transactions:
             if txn.disclosure_id:
                 disclosures_map[txn.disclosure_id].append(txn)
+
+        # The rows in the same filings that are NOT the member's. Not counted;
+        # named, so a reader comparing against the PDF can see why the numbers
+        # differ.
+        household: Dict[Any, list] = defaultdict(list)
+        own_ids = {id(t) for t in transactions}
+        for txn in disclosed or []:
+            if txn.disclosure_id and id(txn) not in own_ids:
+                household[txn.disclosure_id].append(txn)
 
         # Check each disclosure independently
         for disclosure_id, txns in disclosures_map.items():
@@ -473,27 +532,21 @@ class TradeAnalyzer:
                 concentration_percent = (count / total_trades) * 100
 
                 if concentration_percent > self.concentration_threshold_percent:
-                    # Use vague ranges instead of exact percentages
-                    if concentration_percent < 60:
-                        concentration_range = "over 50%"
-                    elif concentration_percent < 75:
-                        concentration_range = "60-75%"
-                    elif concentration_percent < 90:
-                        concentration_range = "75-90%"
-                    else:
-                        concentration_range = "over 90%"
-
                     anomalies.append(
                         {
                             "member_id": member_id,
                             "disclosure_id": disclosure_id,
                             "anomaly_type": "sector_concentration",
                             "severity": min(10, 5 + int((concentration_percent - 50) / 10)),
-                            "title": f"High concentration in {sector} sector ({concentration_range})",
+                            "title": (
+                                f"High concentration in {sector} sector ({count} of {total_trades})"
+                            ),
                             "description": (
-                                f"A significant portion of trades ({concentration_range}) "
-                                f"are concentrated in the {sector} sector. This unusual concentration "
-                                f"may warrant further review."
+                                f"{count} of the {total_trades} transactions attributed to "
+                                f"this member in this filing are in the {sector} sector "
+                                f"({_percent(concentration_percent)}), above the "
+                                f"{self.concentration_threshold_percent:.0f}% threshold."
+                                f"{_excluded_from_filing(household.get(disclosure_id))}"
                             ),
                             "computed_value": Decimal(str(concentration_percent)),
                             "threshold_value": Decimal(str(self.concentration_threshold_percent)),

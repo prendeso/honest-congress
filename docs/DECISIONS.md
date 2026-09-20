@@ -1032,3 +1032,58 @@ ever. The frequency findings whose **counts** changed need no new mechanism —
 
 **`Run.direction` defaults to `None`** and the sentence then falls back to the
 neutral phrasing, rather than asserting a direction nothing supplied.
+
+---
+
+## D24. A share is a share of something, and "unusual" is measured by nothing
+
+`sector_concentration` published, about a named member:
+
+    High concentration in finance sector (60-75%)
+    A significant portion of trades (60-75%) are concentrated in the finance
+    sector. This unusual concentration may warrant further review.
+
+The arithmetic was right — three of her five rows are finance. Everything
+around it was not, in three separate ways.
+
+**No denominator and no scope.** "A significant portion of trades" is a share
+of nothing a reader can name, and the scope is **one PTR** — five rows over
+three weeks, not a career. With the filing open, nothing reconciles.
+
+**"Unusual" is measured by nothing.** The detector is in
+`significance.NO_NULL_MODEL`, so no null distribution exists for it, and since
+#100 the only thing entitled to grade extremity is `percentile_rank` — which
+put that finding at the **40th percentile of its own type** while the sentence
+called it unusual. D3, D10 and D14 were each spent deleting a claim of exactly
+this shape.
+
+**The band hid a number already on the card.** `computed_value` is the exact
+percentage and renders as the "Value" chip two lines below the title, so
+"60-75%" went out beside "60 percent". **D5 does not reach this**: D5 governs
+figures *derived from disclosed amount ranges* — "any point estimate derived
+from them is fabricated precision" — and a count of rows in a sector is
+disclosed exactly. Same argument #104 used to take the band out of the
+frequency title.
+
+So the sentence now names the count, the total and the scope:
+
+    High concentration in energy sector (3 of 5)
+    3 of the 5 transactions attributed to this member in this filing are in
+    the energy sector (60%), above the 50% threshold. The same filing also
+    reports 7 transaction(s) belonging to their spouse, which this count
+    excludes.
+
+**The title carries `(3 of 5)` rather than a percentage**, because the count
+over the total is the fact the filing states exactly; the percentage follows
+in the sentence and remains `computed_value`.
+
+**The excluded clause is required here for the same reason as in #104.** The
+denominator is the member's own rows, per #99, so a filing printing more lines
+than the finding counts is otherwise unreconcilable — Rep. Landsman's filing
+prints twelve and the finding counts five.
+
+**Corpus effect: none on the count.** All 10 findings survive with identical
+arithmetic; what changes is every sentence, and one of them gains the excluded
+clause. Two needles go into `_SUPERSEDED_WORDING` so the published rows come
+down rather than serving the old text for ever; the changed titles are orphans
+that `retract-withdrawn-findings` already removes.

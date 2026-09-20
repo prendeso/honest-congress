@@ -57,6 +57,14 @@ _CLASS_CODE = re.compile(r"\[([A-Z]{2})\]")
 
 GOVERNMENT_SECURITY = "GS"
 STOCK = "ST"
+# The third code given a meaning here, on the same evidence standard as the
+# other two: every row carrying it names the derivative on its own Description
+# sub-line. All 28 `[OP]` rows across the corpus's ten filings that print one
+# read like "D: Call options; Strike price $240; Expires 9/19/2025", and in
+# every one the PRINTED ASSET NAME IS THE UNDERLYING -- "Microsoft Corporation
+# - Common Stock (MSFT) [OP]". So a finding built from the asset name says the
+# member bought Microsoft when they bought calls on it.
+OPTION = "OP"
 
 # Read only when the description carries no bracket code. Deliberately narrow:
 # each of these names the instrument outright.
@@ -94,3 +102,19 @@ def all_fixed_income(transactions: Sequence) -> bool:
 
 def fixed_income_count(transactions: Sequence) -> int:
     return sum(1 for t in transactions if is_fixed_income(t))
+
+
+def is_option(transaction) -> bool:
+    """Whether the form marked this row an option.
+
+    Code only, with no wording fallback, and deliberately: "call" and "put" are
+    far too common in free text to carry a positive claim about a named
+    person's trade -- "Call of the Wild Fund", "Putnam Investments". A row the
+    form did not label stays unlabelled, which is the same direction
+    `is_fixed_income` takes when a code is absent and the wording is weak.
+    """
+    return class_code(transaction) == OPTION
+
+
+def option_count(transactions: Sequence) -> int:
+    return sum(1 for t in transactions if is_option(t))

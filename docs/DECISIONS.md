@@ -1202,3 +1202,53 @@ the clause itself again.
 
 **Corpus effect: none on any count.** 132 frequency findings, 2 committee
 findings, before and after.
+
+---
+
+## D27. An option is not the share, and the amount is not the shares' value
+
+A House PTR names the **underlying** on an option row and marks the row `[OP]`:
+
+    Microsoft Corporation - Common Stock (MSFT) [OP]   $1,000,001 - $5,000,000
+    D: Call options; Strike price $240; Expires 9/19/2025
+
+`large_trade` built its sentence from the asset name alone and published
+
+    Large transaction: MSFT purchase (more than $1,000,000)
+    A purchase of MSFT worth more than $1,000,000 was reported.
+
+which describes a stock purchase that did not happen. **13 of the corpus's 80
+large-trade findings sit on such a row.**
+
+The amount needs saying too: on an option row the disclosed band is the
+transaction's own value, not the value of the shares it controls, and the two
+differ by roughly the leverage. "More than $1,000,000" beside a company name
+invites the second reading.
+
+    Large transaction: MSFT options purchase (more than $1,000,000)
+    A purchase of MSFT options worth more than $1,000,000 was reported. The
+    form marks this row `[OP]`, so the asset named is the underlying and the
+    trade is in options on it. The amount is the value the filing reports for
+    the transaction, not the value of the underlying shares.
+
+**Grounded the way #100 grounded `[GS]` and `[ST]`.** All 28 `[OP]` rows in the
+corpus, across ten filings, print a Description sub-line naming the derivative
+— "Call options; Strike price $240", "Put option, strike price $215",
+"Purchased 50 call options with a strike price of $200" — and in every one the
+printed asset name is the underlying.
+
+**No wording fallback, deliberately.** `is_option` reads the code and nothing
+else: "call" and "put" are far too common in free text to carry a positive
+claim about a named person's trade — "Call of the Wild Growth Fund", "Putnam
+Investments", "shares purchased under a call provision". A row the form did not
+label stays unlabelled, the same direction `is_fixed_income` takes.
+
+**No purge needle, and the reason is pinned by a test.** `large_trade` is a
+trade-level finding keyed on `transaction_id`, and
+`_sync_large_trade_anomalies` already rewrites the title and description of a
+stored row whose text no longer matches what the detector produces — the one
+detector where a reworded sentence corrects itself. A structural test fails if
+that sync stops doing it.
+
+**Corpus effect: none on the count.** 80 large trades before and after; 13 of
+them stop naming a share the member did not buy.

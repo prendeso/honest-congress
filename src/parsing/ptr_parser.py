@@ -130,6 +130,11 @@ ASSET_CLASS_CODES = {
     "WU",
 }
 
+# A two-character code in square brackets is the House form's asset-type tag.
+# The form points at fd.house.gov for the list, so this matches the shape the
+# form prints rather than a copy of a list that lives somewhere else.
+ASSET_CLASS_TAG = re.compile(r"\[[A-Z0-9]{2}\]")
+
 NON_TICKERS = {
     "THE",
     "AND",
@@ -1066,9 +1071,29 @@ class PTRParser:
         if not text:
             return None
 
-        # Explicit ticker notation like (AAPL) or [MSFT]. Parenthesised codes are
-        # tickers; square-bracketed ones are usually the filing's asset-class
-        # tag, so those are checked against ASSET_CLASS_CODES as well.
+        # The form's own footnote says what a bracketed code is: "For the
+        # complete list of asset type abbreviations, please visit
+        # fd.house.gov/reference/asset-type-codes.aspx". It is a closed list the
+        # Clerk maintains elsewhere, so enumerating it here drifts -- and it
+        # did: `[VA]` (variable annuity) was never in ASSET_CLASS_CODES, so two
+        # Prudential annuities were filed under a company called "VA".
+        #
+        # Decide by shape instead. Every one of the 5,102 bracketed codes in the
+        # corpus is two characters and an asset class, none is a symbol, so a
+        # two-character code in square brackets is removed before anything looks
+        # for a ticker. Removing it up front also closes the second hole: the
+        # keyword pass below re-harvested the very codes this loop rejected,
+        # because nothing had taken them out of the text ("OnSolve LLC Shares
+        # [PS]" -> "PS"; "Ternium S.A. ... Depositary Shares (TX) [ST]" -> "ST").
+        #
+        # Parenthesised codes are untouched: (BA), (GS), (PM), (IR) are Boeing,
+        # Goldman Sachs, Philip Morris and Ingersoll Rand, and they collide with
+        # asset-class codes on purpose. The bracket is what distinguishes them.
+        text = ASSET_CLASS_TAG.sub(" ", text)
+
+        # Explicit ticker notation like (AAPL) or [MSFT]. A bracketed code wider
+        # than two characters is still checked against ASSET_CLASS_CODES, which
+        # also names three-letter classes such as ETF.
         for match in re.finditer(r"([\(\[])([A-Z]{1,5})([\)\]])", text):
             opener, ticker, _ = match.groups()
             if ticker in NON_TICKERS:

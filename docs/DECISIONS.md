@@ -970,3 +970,65 @@ narrow row projections; a projection that forgot `filing_status` would keep the
 struck-out rows and say nothing. So the four call sites are read with `ast` and
 the test fails if one omits the column, rather than leaving the default to be
 relied on.
+
+---
+
+## D23. An exchange is not a direction, and not a trade the member placed
+
+The House form's transaction type is `P`, `S` or `E`. `E` is not a third
+direction — it is a holding converted in kind.
+
+**What `E` means on this record, measured.** All 46 exchange rows in the
+10,594-row corpus are corporate actions and not one is a discretionary trade:
+Exxon/Pioneer, Jacobs/Amentum, Liberty Media/SiriusXM, Synopsys/Ansys, Capital
+One/Discover, Chevron/Hess, the Sandisk, Qnity and Solstice spin-offs, and a
+run of municipal refundings. Several print the reason on the row — *"Holdings
+in J exchanged out for receipt of new holdings in J and AMTM through a
+corporate action."*
+
+Two detectors were wrong about them, in different ways.
+
+### `trade_clustering` printed a direction it had in hand
+
+The sentence read `trades in the same direction (all buys or all sells)` as a
+**constant**, while `_same_direction_run` groups by direction to build the run
+in the first place. Rep. Thomas Kean's twelve rows of 30 September 2024 are all
+`E`, and were published as buying or selling.
+
+`Run` now carries `direction`, the sentence is built from it — "12 purchases",
+"12 sales", "12 exchanges" — and the exchange case is **retitled**: "Exchanges
+on one day (12)", because "same-direction" presupposes a direction. It adds
+what the form says: holdings converted in kind, a corporate action, not a
+purchase and not a sale, and not necessarily the member's choice.
+
+### `high_trading_frequency` counted them as trading
+
+That detector's subject is how often the member *traded*. Rep. Kean was
+published as **"High trading activity: 15 trades in September 2024"**. He made
+one. The other fourteen were Jacobs Solutions becoming Amentum.
+
+Exchanges are excluded from the count and **named rather than dropped
+silently**, the rule #99 set for a spouse's rows, so a reader checking against
+the PDF still reaches the printed total:
+
+    26 transactions were attributed to this member in July 2025, which exceeds
+    the threshold of 10 per month. The filings covering that month also report
+    1 exchange(s) -- holdings converted in kind, which the form marks `E` and
+    which this count excludes because they are not trades the member placed.
+
+**Corpus effect, measured with the real detectors: 459 findings -> 458.** Kean's
+frequency finding is withdrawn; his clustering finding is retitled; five other
+frequency findings lose between one and two from their counts and gain the
+clause.
+
+**Taking the published rows down.** The corrected sentence goes into
+`_SUPERSEDED_WORDING` as `("trade_clustering", "description", "all buys or all
+sells")`, because `anomaly_key` identifies a member-level finding by title and
+`persist_anomalies` only ever inserts: a run whose length and day count are
+unchanged keeps its identity, so the old parenthetical would be served for
+ever. The frequency findings whose **counts** changed need no new mechanism —
+`retract-withdrawn-findings` already covers `high_trading_frequency` and
+`trade_clustering`, and a title nothing re-derives is exactly what it deletes.
+
+**`Run.direction` defaults to `None`** and the sentence then falls back to the
+neutral phrasing, rather than asserting a direction nothing supplied.

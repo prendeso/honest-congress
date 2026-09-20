@@ -992,6 +992,21 @@ _SUPERSEDED_WORDING = (
     # emittable string literals rather than its source, because its docstrings
     # quote the old wording on purpose.
     ("trade_clustering", "title", " in a row"),
+    # The parenthetical the same detector printed as a constant: "trades in the
+    # same direction (all buys or all sells)". The direction was in hand the
+    # whole time -- the run is built from it -- and the sentence said it anyway,
+    # including about twelve rows that were neither. Rep. Kean's twelve are all
+    # type `E`, the form's mark for holdings converted in kind, printed with the
+    # note "Holdings in J exchanged out for receipt of new holdings in J and
+    # AMTM through a corporate action". The corrected detector says "12
+    # purchases", "12 sales" or, for `E`, retitles the finding "Exchanges on one
+    # day (12)" and says so.
+    #
+    # The purge is needed for the same reason as the two above: `anomaly_key`
+    # identifies a member-level finding BY TITLE, and for a run whose length and
+    # day count are unchanged the identity holds, so `persist_anomalies` -- which
+    # only ever inserts -- would serve the old sentence for ever.
+    ("trade_clustering", "description", "all buys or all sells"),
     # `excessive_wealth_growth` compared whichever filing the database happened
     # to return last for the earlier year. `wealth_analyzer` ordered only by
     # `filing_year`, and its growth loop skips same-year pairs, so "last filing

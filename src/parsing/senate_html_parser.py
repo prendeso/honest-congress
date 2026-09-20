@@ -86,6 +86,18 @@ def _is_empty(value: str) -> bool:
     return _clean(value).lower() in _EMPTY
 
 
+def _comment(value: str | None) -> str | None:
+    """The filer's own note, or None when eFD printed a placeholder.
+
+    1,338 of the 1,517 comment cells in the local corpus read "n/a"; 188 carry
+    something. Storing the placeholder would put "n/a" on a published card.
+    """
+    text = (value or "").strip()
+    if not text or text.lower() in {"n/a", "n.a.", "na", "--", "-", "none"}:
+        return None
+    return text
+
+
 class SenateHtmlParser(PTRParser):
     """Parse the HTML a Senate eFD filing is served as."""
 
@@ -444,6 +456,15 @@ class SenateHtmlParser(PTRParser):
                     "amount_min": amount_min,
                     "amount_max": amount_max,
                     "owner": self._normalize_owner(column("owner")),
+                    # eFD gives the filer a free-text Comment column and
+                    # `_COLUMN_ALIASES` has always mapped it -- the value was
+                    # read and then dropped here. It is what Sen. Hagerty used
+                    # to write "While no immediate PTR required, provided to
+                    # clearly denote basis for the renamed asset", on the two
+                    # corporate-action rows this project published as late
+                    # STOCK Act filings. Stored and published; never acted on.
+                    # See D28.
+                    "filer_comment": _comment(column("comment")),
                 }
             )
 

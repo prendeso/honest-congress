@@ -205,7 +205,9 @@ DETECTORS: List[Detector] = [
         "date is the Clerk's, and an amended filing can make a timely report "
         "look late. Over half of these sit on a trade the form attributes to "
         "the member's spouse or a dependent child -- the deadline is still the "
-        "member's, and each finding now says whose trade it was.",
+        "member's, and each finding now says whose trade it was. Where the form "
+        "prints a notification date the finding gives it too: the lag is often "
+        "the broker's, though the 45-day cap is absolute either way.",
         PTR,
         value_unit="days",
     ),

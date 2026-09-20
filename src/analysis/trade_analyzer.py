@@ -12,13 +12,14 @@ from src.analysis.asset_class import all_fixed_income
 from src.analysis.attribution import (
     held_by_member,
     owner_breakdown,
+    owner_of,
     trades_the_member_holds,
 )
 from src.analysis.restatements import drop_restated_pairs, member_transactions
 from src.analysis.sectors import SectorIndex
 from src.config import get_settings
 from src.db.models import Anomaly, Disclosure, Member, Transaction, TransactionType
-from src.parsing.ptr_parser import AMENDED
+from src.parsing.ptr_parser import AMENDED, ASSET_CLASS_TAG
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,70 @@ def _exchange_clause(exchanged) -> str:
         f" The filings covering that month also report {n} exchange(s) -- "
         f"holdings converted in kind, which the form marks `E` and which this "
         f"count excludes because they are not trades the member placed."
+    )
+
+
+ASSET_NAME_LIMIT = 60
+
+
+def _asset_name(txn, limit: int = ASSET_NAME_LIMIT) -> str:
+    """What was traded, named so the name is readable and reconcilable.
+
+    Two blind slices published unreadable text about named people. `late_filing`
+    took `description[:30]` and `large_trade` took `[:20]`, both cutting
+    wherever the character fell:
+
+        Trade: purchase Cleveland-Cliffs Inc. Common S
+        Trade: sale American Funds Income Fund of\n
+        Large transaction: US Treasury Bill [GS purchase (more than $1,000,000)
+        Large transaction: Garden of Eden LLC,  sale (more than $1,000,000)
+
+    72 of the corpus's 174 late-filing findings truncate mid-word and 11 carry
+    an embedded newline into the published sentence; 59 of 80 large-trade
+    titles do, and three different Treasury bills produce the SAME title --
+    saved from colliding only because that finding is keyed on
+    `transaction_id`.
+
+    So: the ticker when the filing gave one; otherwise the description with its
+    whitespace collapsed (the weak text path leaves newlines in it) and its
+    asset-class tag removed, cut at a word boundary. `[XX]` goes because it is
+    the form's asset-type code, not part of the name -- D21 -- and "US Treasury
+    Bill [GS" is the shape that makes the case.
+    """
+    if getattr(txn, "ticker", None):
+        return txn.ticker
+    text = ASSET_CLASS_TAG.sub(" ", getattr(txn, "description", None) or "")
+    text = " ".join(text.split())
+    if not text:
+        return "unknown"
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-")
+    return f"{cut or text[:limit]}..."
+
+
+def _whose_trade(txn) -> str:
+    """Name the owner when the filing says the row is not the member's own.
+
+    93 of 174 late-filing findings sit on a row the form attributes to somebody
+    else -- 91 a spouse, 2 a dependent child -- under a sentence naming the
+    member and nothing else. The rows are scored on purpose and must stay
+    scored: the STOCK Act duty is the MEMBER's for the whole household, which
+    is why `attribution` explicitly exempts this detector. What was missing is
+    the fact, not the finding.
+    """
+    owner = owner_of(txn)
+    words = {
+        "Spouse": "their spouse",
+        "Dependent Child": "a dependent child",
+    }
+    whose = words.get(owner)
+    if whose is None:
+        return ""
+    return (
+        f", which the filing reports for {whose}. The STOCK Act deadline is the "
+        f"member's for every transaction their household must report, so this "
+        f"row is scored against them"
     )
 
 
@@ -185,7 +250,7 @@ class TradeAnalyzer:
         )
 
     def _large_trade_asset_name(self, txn: Transaction) -> str:
-        return txn.ticker or (txn.description[:20] if txn.description else "unknown")
+        return _asset_name(txn)
 
     def _build_large_trade_text(self, txn: Transaction) -> Dict[str, str]:
         asset_name = self._large_trade_asset_name(txn)
@@ -430,7 +495,8 @@ class TradeAnalyzer:
                         f"was filed {late_range} on "
                         f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
                         f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
-                        f"Trade: {txn.transaction_type.value} {txn.ticker or txn.description[:30]}"
+                        f"Trade reported: {txn.transaction_type.value} of "
+                        f"{_asset_name(txn)}{_whose_trade(txn)}."
                     ),
                     "computed_value": Decimal(str(days_to_file)),
                     "threshold_value": Decimal(str(self.ptr_deadline_days)),

@@ -1007,6 +1007,22 @@ _SUPERSEDED_WORDING = (
     # day count are unchanged the identity holds, so `persist_anomalies` -- which
     # only ever inserts -- would serve the old sentence for ever.
     ("trade_clustering", "description", "all buys or all sells"),
+    # `sector_concentration` published "A significant portion of trades
+    # (60-75%) are concentrated in the finance sector. This unusual
+    # concentration may warrant further review." over a five-row, three-week
+    # PTR. Three faults: no denominator and no scope, so nothing reconciles
+    # against the filing; an "unusual" claim nothing measures, the detector
+    # being in `significance.NO_NULL_MODEL` and that finding sitting at the
+    # 40th percentile of its own type; and a band hiding the exact percentage
+    # already rendered as the Value chip two lines below it.
+    #
+    # The corrected sentence names the count, the total and the scope, so
+    # neither phrase is one this detector can write again. The title changed
+    # too -- "(60-75%)" became "(3 of 5)" -- and `anomaly_key` keys these by
+    # title, so the stale rows are orphans that `retract-withdrawn-findings`
+    # removes; this needle takes the sentence down without waiting for it.
+    ("sector_concentration", "description", "This unusual concentration"),
+    ("sector_concentration", "description", "A significant portion of trades"),
     # `excessive_wealth_growth` compared whichever filing the database happened
     # to return last for the earlier year. `wealth_analyzer` ordered only by
     # `filing_year`, and its growth loop skips same-year pairs, so "last filing

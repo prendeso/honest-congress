@@ -56,6 +56,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from typing import Any, Callable, Dict, List, Sequence, Tuple
 
 import numpy as np
@@ -725,11 +726,22 @@ def _cluster_p_values(
         if p_value is not None:
             results[key] = (
                 p_value,
-                lambda n, member_dates=member_dates, observed=observed: cluster_p_value(
-                    member_dates, CLUSTER_WINDOW_DAYS, observed, permutations=n, rng=rng
-                ),
+                partial(cluster_p_value, member_dates, CLUSTER_WINDOW_DAYS, observed, rng=rng),
             )
     return results
+
+
+def _member_rerun(
+    streams: Streams, spec: NullSpec, rng: np.random.Generator
+) -> Callable[[int], float | None]:
+    """Draw `n` more shuffles of one member's null, for refinement."""
+
+    def again(n: int) -> float | None:
+        return permutation_p_value(
+            streams, spec.window_days, spec.direction, permutations=n, rng=rng
+        )[0]
+
+    return again
 
 
 def annotate_significance(
@@ -763,11 +775,7 @@ def annotate_significance(
             )
             if p_value is not None and observed > 0:
                 tests.append((spec.anomaly_type, member_id, None, p_value))
-                rerun.append(
-                    lambda n, streams=streams, spec=spec: permutation_p_value(
-                        streams, spec.window_days, spec.direction, permutations=n, rng=rng
-                    )[0]
-                )
+                rerun.append(_member_rerun(streams, spec, rng))
 
     for (cluster_ticker, _direction), (cluster_p, again) in _cluster_p_values(
         db, permutations, rng

@@ -79,7 +79,8 @@ secret**:
 |---|---|---|
 | `DISABLED_ANOMALY_TYPES` | `outperforming_trades,perfect_timing,loss_avoidance` | Detectors that are never written or served. Leave it alone unless you have real price history — see D3 and D10 in `docs/DECISIONS.md` |
 | `FDR_ALPHA` | `0.05` | False-discovery rate the API filters findings at |
-| `SIGNIFICANCE_PERMUTATIONS` | `1000` | Shifted calendars per test; the p-value floor is 1/(n+1) |
+| `SIGNIFICANCE_PERMUTATIONS` | `1000` | Shifted calendars per test. Read by `cli analyze`, which runs in GitHub Actions, so setting it here does nothing. Tests with p ≤ alpha are re-run automatically with enough shuffles to clear the correction |
+| `ALLOW_ADMIN_PIPELINE_ROUTES` | `false` | Re-enables the admin panel's pipeline buttons in production. Leave it off — see Step 7 |
 | `CONGRESSIONAL_SALARY` | `174000` | Baseline for the wealth-vs-salary detector |
 | `LATE_FILING_MIN_DAYS` | `60` | Days past the 45-day STOCK Act deadline before a late-PTR anomaly is flagged |
 | `LATE_FILING_MIN_AMOUNT_USD` | `50000` | Minimum transaction size for late-filing flags |
@@ -95,7 +96,7 @@ Click **Deploy** (or push any commit to `main` — Railway auto-deploys on push)
 Watch the **Deployments** tab. You should see, in order:
 
 1. **Build** (~2–3 min): Docker image build, including `pip install -r requirements.txt`
-2. **Pre-deploy** (~10 s): `alembic upgrade head` runs. First time, it creates all 6 tables.
+2. **Pre-deploy** (~10 s): `alembic upgrade head` runs. First time, it creates the whole schema.
 3. **Deploy** (~10 s): uvicorn starts on `$PORT`
 4. **Active**: green dot — service is live
 
@@ -125,19 +126,18 @@ The `X-Request-ID` response header on every endpoint is a UUID4. If you supply y
 
 ## Step 7 — Initial data ingestion
 
-The app boots with an empty database. Two options:
+The app boots with an empty database. Data only ever arrives through the GitHub
+Actions pipelines below.
 
-### Option A: One-shot from the admin panel (easiest)
+The admin panel's **Full Refresh**, **Analyze**, **Regenerate** and **Cleanup**
+buttons return `409` in production. They used to run the detector pipeline inside
+the web process, outside the lock that keeps the Actions pipelines to one writer
+at a time, and without the purges or the significance correction `cli analyze`
+runs. (They also still described a QuiverQuant trade sync that no longer
+exists.) Set `ALLOW_ADMIN_PIPELINE_ROUTES=true` on Railway only if you have a
+specific reason to run them from the web process.
 
-1. Visit `https://<your-domain>/admin`
-2. Log in with the `ADMIN_PASSWORD` you set
-3. Click **Start Full Refresh** — this calls `POST /api/anomalies/full-refresh` which:
-   - Syncs all members from unitedstates.io
-   - Syncs trades from QuiverQuant (skipped if no API key)
-   - Wipes and regenerates anomalies
-4. Watch the progress bar. First run takes 5–15 minutes depending on QuiverQuant rate limits.
-
-### Option B: Set up the daily-update GitHub Action
+### Set up the daily-update GitHub Action
 
 The repo already has `.github/workflows/daily-update.yml` that runs the ingestion daily at 6am UTC. To make it land in the Railway database:
 
@@ -190,6 +190,34 @@ Railway pings `/health` on a schedule (configured in `railway.toml`). If the DB 
 ### Restarting
 
 **Settings** → **Restart**. Or push a no-op commit to `main` — Railway redeploys.
+
+### Backups
+
+`.github/workflows/backup.yml` dumps the production database every night at
+05:13 UTC (before the 06:00 nightly), restores the dump into a scratch Postgres
+on the same run to prove it restores, and keeps it as a workflow artifact for 14
+days. It uses the same `RAILWAY_DATABASE_URL` secret.
+
+- **Set `BACKUP_PASSPHRASE`** as a repository secret. The repository is public,
+  so any signed-in GitHub user can download an artifact; with the secret set the
+  dump is AES-256 encrypted with `gpg --symmetric`. Decrypt with
+  `gpg --decrypt honest-congress.dump.gpg > honest-congress.dump`.
+- **Restore** with `pg_restore --no-owner --no-privileges --clean --if-exists
+  --dbname "$DATABASE_URL" honest-congress.dump`. Stop the daily workflow first.
+- For retention beyond 14 days, also enable Railway's own backups on the
+  Postgres service.
+
+### Alerts
+
+Every pipeline step that reads an external feed carries `continue-on-error`, so
+one slow source cannot stop the analysis. The nightly now ends **red** if any
+feed failed, after the analysis has run, so GitHub's standard failure email
+reaches the repository owner. Make sure Actions notifications are on under
+**GitHub → Settings → Notifications → Actions**.
+
+Add an external uptime check on `https://<your-domain>/health` (UptimeRobot,
+Better Stack, Railway's own monitoring — any of them) so an outage of the web
+service is noticed too; nothing in the repo can watch the site from outside.
 
 ### Rolling back
 

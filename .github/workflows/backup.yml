@@ -1,0 +1,121 @@
+name: Database Backup
+
+# A nightly logical backup of the production database, restored into a scratch
+# Postgres on the same run to prove it restores.
+#
+# Nothing backed the database up. Every other workflow here WRITES to it -- the
+# nightly, the chunked rebuild, and the maintenance purges that delete published
+# rows -- and `cli reset --yes` drops the schema outright. A purge with the wrong
+# flag, or a reset pointed at the wrong URL, had no way back but re-ingesting
+# and re-parsing the whole corpus, which is days of rebuild dispatches.
+#
+# Runs at 05:13 UTC, before the 06:00 nightly, so each dump is the state the
+# nightly started from. It does NOT join the `honest-congress-production-database`
+# concurrency group: it only reads, pg_dump takes a consistent snapshot on its
+# own, and waiting behind a six-hour rebuild would skip the backup exactly when
+# the database is changing most.
+#
+# The artifact is kept 14 days. The repository is public, so any signed-in
+# GitHub user can download an artifact; the database holds only what the site
+# already publishes from public-domain sources, but set BACKUP_PASSPHRASE to
+# encrypt the dump anyway. For longer retention or off-GitHub copies, point
+# Railway's own volume backups at the Postgres service as well.
+
+on:
+  schedule:
+    - cron: '13 5 * * *'
+  workflow_dispatch:
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    # A scratch server to restore into. 18 so its client tools can read a dump
+    # from any server version Railway is likely to run.
+    services:
+      scratch:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Check the database secret is configured
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::RAILWAY_DATABASE_URL is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+      # pg_dump from the postgres:18 image rather than the runner's own client,
+      # which is older than the server and refuses to dump a newer one. The URL
+      # may be stored in SQLAlchemy's `postgresql+psycopg://` form; libpq only
+      # reads the plain scheme.
+      - name: Dump the production database
+        env:
+          DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
+        run: |
+          URL=$(printf '%s' "$DATABASE_URL" | sed -E 's#^postgres(ql)?(\+[a-z0-9]+)?://#postgresql://#')
+          STAMP=$(date -u +%Y-%m-%dT%H%MZ)
+          echo "STAMP=$STAMP" >> "$GITHUB_ENV"
+          docker run --rm --network host -v "$PWD:/out" -e URL="$URL" postgres:18 \
+            sh -c 'pg_dump --format=custom --no-owner --no-privileges --file=/out/honest-congress.dump "$URL"'
+          ls -l honest-congress.dump
+
+      # A backup that has never been restored is a hope, not a backup.
+      - name: Restore it into a scratch database
+        run: |
+          # Into a fresh database. pg_restore exits non-zero on ANY error,
+          # including harmless ones about objects the scratch server already
+          # has, so its errors are surfaced as a warning and the row counts
+          # below are the real test: they fail if a table did not come back.
+          docker run --rm --network host postgres:18 \
+            createdb --dbname=postgresql://postgres:postgres@localhost:5432/postgres restored
+          docker run --rm --network host -v "$PWD:/out" postgres:18 \
+            sh -c 'pg_restore --no-owner --no-privileges \
+                     --dbname=postgresql://postgres:postgres@localhost:5432/restored /out/honest-congress.dump' \
+            || echo "::warning::pg_restore reported errors; check the log. The row counts below decide whether the backup is usable."
+          docker run --rm --network host postgres:18 psql -At -v ON_ERROR_STOP=1 \
+            postgresql://postgres:postgres@localhost:5432/restored -c "
+              SELECT 'tables: '      || count(*) FROM information_schema.tables WHERE table_schema = 'public';
+              SELECT 'members: '     || count(*) FROM members;
+              SELECT 'disclosures: ' || count(*) FROM disclosures;
+              SELECT 'anomalies: '   || count(*) FROM anomalies;" | tee restore-check.txt
+          {
+            echo "## Backup $STAMP"
+            echo ""
+            echo "Restored cleanly into a scratch Postgres 18:"
+            echo '```'
+            cat restore-check.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Encrypt the dump, if a passphrase is configured
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          if [ -n "$BACKUP_PASSPHRASE" ]; then
+            gpg --batch --yes --pinentry-mode loopback --passphrase "$BACKUP_PASSPHRASE" \
+                --symmetric --cipher-algo AES256 --output honest-congress.dump.gpg honest-congress.dump
+            rm honest-congress.dump
+            echo "Encrypted with BACKUP_PASSPHRASE." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::BACKUP_PASSPHRASE is not set, so the backup artifact is unencrypted."
+          fi
+
+      - name: Upload the backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: honest-congress-db-${{ env.STAMP }}
+          path: honest-congress.dump*
+          retention-days: 14
+          if-no-files-found: error

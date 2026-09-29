@@ -123,6 +123,8 @@ full step-by-step guide. Short version:
 4. **Run the daily-update GitHub Action** by adding `RAILWAY_DATABASE_URL`
    (the external connection string from Railway) as a repo secret so the
    cron job lands ingestion rows in the deployed database.
+5. **Backups** run nightly from the same secret (`backup.yml`); add a
+   `BACKUP_PASSPHRASE` secret so the dump artifact is encrypted.
 
 ## Architecture
 
@@ -315,15 +317,20 @@ GET  /api/anomalies/summary        counts by type / severity / party / chamber
 GET  /api/anomalies/types          what each detector looks for and cannot show
 GET  /api/anomalies/{id}           detail
 POST /api/anomalies/admin/login    issue token; required for mutating routes
-POST /api/anomalies/analyze        run full detector suite
-POST /api/anomalies/regenerate     wipe + recompute all anomalies
+POST /api/anomalies/analyze        run full detector suite (409 in production)
+POST /api/anomalies/regenerate     wipe + recompute all anomalies (409 in production)
 GET  /api/insights                 dashboard hero stats
 GET  /api/compliance/              members ranked by STOCK Act filing punctuality
 GET  /api/compliance/{member_id}   one member's filing record
 GET  /api/compliance/opacity/      members ranked by disclosure legibility
 GET  /api/compliance/opacity/{id}  one member's legibility breakdown
 GET  /docs                         Swagger UI
+GET  /about                        what a finding is and is not; corrections
 ```
+
+In production the pipeline routes above return `409`: the pipeline runs in
+GitHub Actions, one writer at a time. Admin login is throttled per client and
+overall after repeated failures.
 
 Filing punctuality and disclosure legibility are also a page at `/compliance`.
 They are the two least interpretive things here — one is the subtraction of two

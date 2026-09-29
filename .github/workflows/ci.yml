@@ -18,6 +18,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+      # The pinned runtime set first, so CI tests the versions that ship;
+      # `-e .[dev]` then adds only the dev tools on top.
+      - run: pip install -r requirements.txt
       - run: pip install -e .[dev]
       - run: ruff check .
       - run: ruff format --check .
@@ -31,6 +34,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+      # The pinned runtime set first, so CI tests the versions that ship;
+      # `-e .[dev]` then adds only the dev tools on top.
+      - run: pip install -r requirements.txt
       - run: pip install -e .[dev]
       # Mypy runs in non-strict mode for now — see [tool.mypy] in pyproject.
       # Failures here are aspirational, not blocking, until we annotate more.
@@ -46,6 +52,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+      # The pinned runtime set first, so CI tests the versions that ship;
+      # `-e .[dev]` then adds only the dev tools on top.
+      - run: pip install -r requirements.txt
       - run: pip install -e .[dev]
       - run: pytest --cov=src --cov-report=term-missing
 
@@ -95,6 +104,9 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
+      # The pinned runtime set first, so CI tests the versions that ship;
+      # `-e .[dev]` then adds only the dev tools on top.
+      - run: pip install -r requirements.txt
       - run: pip install -e .[dev]
 
       - name: 1. Apply the whole chain to an empty database

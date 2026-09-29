@@ -1,20 +1,56 @@
-# Generated from pyproject.toml. Pin versions so CI / Railway builds are
-# reproducible. To regenerate: `pip install -e .` then `pip freeze > requirements.txt`
-# (or use `pip-compile pyproject.toml -o requirements.txt`).
+# Exact versions of every runtime dependency, transitive ones included, so the
+# Railway image and the GitHub Actions pipelines install the same thing twice.
+#
+# The direct dependencies and their allowed ranges live in pyproject.toml. This
+# file used to say "Pin versions" over a list of ranges (fastapi>=0.115,<1.0 and
+# so on), so every build resolved whatever was newest that day, and the image
+# that shipped was never the one the tests had run against.
+#
+# To regenerate, on Python 3.11 in a clean virtualenv:
+#   pip install .                       # resolves the ranges in pyproject.toml
+#   pip freeze --exclude-editable | grep -v '^honest-congress' > requirements.lock
+# then replace everything below this header with requirements.lock and run the
+# test suite against it before committing.
 
-fastapi>=0.115,<1.0
-uvicorn[standard]>=0.30,<1.0
-sqlalchemy>=2.0,<3.0
-alembic>=1.13,<2.0
-psycopg[binary]>=3.1,<4.0
-pydantic>=2.7,<3.0
-pydantic-settings>=2.4,<3.0
-python-dotenv>=1.0,<2.0
-requests>=2.32,<3.0
-beautifulsoup4>=4.12,<5.0
-lxml>=5.0,<7.0
-pdfplumber>=0.11,<1.0
-# Permutation null in src/analysis/significance.py
-numpy>=1.26,<3.0
-jinja2>=3.1,<4.0
-PyYAML>=6.0,<7.0
+alembic==1.20.0
+annotated-doc==0.0.5
+annotated-types==0.8.0
+anyio==4.15.1
+beautifulsoup4==4.15.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+click==8.5.0
+cryptography==50.0.1
+fastapi==0.141.1
+h11==0.16.0
+httptools==0.8.0
+idna==3.20
+Jinja2==3.1.6
+lxml==6.1.3
+Mako==1.4.3
+MarkupSafe==3.0.3
+numpy==2.4.6
+pdfminer.six==20260107
+pdfplumber==0.11.10
+pillow==12.3.0
+psycopg==3.3.6
+psycopg-binary==3.3.6
+pycparser==3.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+pydantic_core==2.46.5
+pypdfium2==5.13.0
+python-dotenv==1.2.3
+PyYAML==6.0.3
+requests==2.34.2
+soupsieve==2.10
+SQLAlchemy==2.1.1
+starlette==1.7.0
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+urllib3==2.8.0
+uvicorn==0.54.0
+uvloop==0.22.1
+watchfiles==1.3.0
+websockets==17.1

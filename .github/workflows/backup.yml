@@ -79,7 +79,7 @@ jobs:
           # has, so its errors are surfaced as a warning and the row counts
           # below are the real test: they fail if a table did not come back.
           docker run --rm --network host postgres:18 \
-            createdb --dbname=postgresql://postgres:postgres@localhost:5432/postgres restored
+            psql postgresql://postgres:postgres@localhost:5432/postgres -c 'CREATE DATABASE restored'
           docker run --rm --network host -v "$PWD:/out" postgres:18 \
             sh -c 'pg_restore --no-owner --no-privileges \
                      --dbname=postgresql://postgres:postgres@localhost:5432/restored /out/honest-congress.dump' \

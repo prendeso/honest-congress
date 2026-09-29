@@ -14,7 +14,7 @@ from src.analysis import (
     run_extended_anomaly_detection,
     run_tier2_detection,
 )
-from src.api.auth import require_admin
+from src.api.auth import refuse_pipeline_in_production, require_admin
 from src.db import Anomaly, get_db_session
 
 router = APIRouter()
@@ -25,6 +25,7 @@ async def run_analysis(
     member_id: int | None = Query(None, description="Analyze specific member"),
     db: Session = Depends(get_db_session),
     _: str = Depends(require_admin),
+    __: None = Depends(refuse_pipeline_in_production),
 ):
     """Run anomaly analysis on members.
 
@@ -60,6 +61,7 @@ async def run_analysis(
 async def regenerate_anomalies(
     db: Session = Depends(get_db_session),
     _: str = Depends(require_admin),
+    __: None = Depends(refuse_pipeline_in_production),
 ):
     """Clear all anomalies and regenerate them with the full detector suite."""
     from src.analysis.trade_analyzer import TradeAnalyzer

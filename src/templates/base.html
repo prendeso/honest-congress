@@ -4,8 +4,15 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}Honest Congress{% endblock %}</title>
+    <meta name="description" content="Congressional financial disclosures, read from official public sources, with the patterns in them and the limits of what they show.">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Honest Congress">
+    <meta property="og:title" content="{{ self.title() }}">
+    <meta property="og:description" content="Congressional financial disclosures, read from official public sources, with the patterns in them and the limits of what they show.">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <!-- Pinned: "3.x.x" served whatever unpkg resolved at request time, so a
+         new release -- or a compromised one -- reached every visitor unreviewed. -->
+    <script src="https://unpkg.com/alpinejs@3.17.4/dist/cdn.min.js" defer></script>
     {% block head_extra %}{% endblock %}
     <style>
         [x-cloak] { display: none !important; }

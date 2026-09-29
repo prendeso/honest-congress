@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -13,7 +13,14 @@ from src.analysis import (
     run_extended_anomaly_detection,
     run_tier2_detection,
 )
-from src.api.auth import issue_admin_token, require_admin, revoke_admin_token
+from src.api.auth import (
+    issue_admin_token,
+    login_throttle,
+    password_matches,
+    refuse_pipeline_in_production,
+    require_admin,
+    revoke_admin_token,
+)
 from src.api.routes.anomalies._shared import sync_lock, sync_status
 from src.config import get_settings
 from src.db import Anomaly, get_db_session
@@ -26,11 +33,21 @@ class AdminLoginRequest(BaseModel):
 
 
 @router.post("/admin/login")
-async def admin_login(payload: AdminLoginRequest):
+async def admin_login(payload: AdminLoginRequest, request: Request):
     settings = get_settings()
     if not settings.admin_password:
         raise HTTPException(status_code=503, detail="Admin password not configured")
-    if payload.password != settings.admin_password:
+
+    client = request.client.host if request.client else "unknown"
+    wait = login_throttle.retry_after(client)
+    if wait is not None:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many failed logins. Try again later.",
+            headers={"Retry-After": str(wait)},
+        )
+    if not password_matches(payload.password, settings.admin_password):
+        login_throttle.record_failure(client)
         raise HTTPException(status_code=401, detail="Invalid password")
     token = issue_admin_token()
     return {"token": token}
@@ -46,6 +63,7 @@ async def admin_logout(admin_token: str = Depends(require_admin)):
 async def cleanup_invalid_anomalies(
     db: Session = Depends(get_db_session),
     _: str = Depends(require_admin),
+    __: None = Depends(refuse_pipeline_in_production),
 ):
     """Remove anomalies where computed_value == threshold_value.
 
@@ -158,6 +176,7 @@ async def full_data_refresh(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db_session),
     _: str = Depends(require_admin),
+    __: None = Depends(refuse_pipeline_in_production),
 ):
     """Full refresh: sync all members → sync all trades → regenerate anomalies."""
     _start_sync("full-refresh", "Starting full data refresh...")

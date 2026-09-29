@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
@@ -71,6 +71,22 @@ async def parsed_page(request: Request) -> HTMLResponse:
 @router.get("/anomalies", response_class=HTMLResponse)
 async def anomalies_page(request: Request) -> HTMLResponse:
     return _render(request, "anomalies.html")
+
+
+@router.get("/about", response_class=HTMLResponse)
+async def about_page(request: Request) -> HTMLResponse:
+    """What a finding is and is not, how it is tested, and how to correct one."""
+    return _render(request, "about.html")
+
+
+# Crawlers may index the public pages; the admin panel and the JSON API are
+# not content, and every page under /api changes nightly.
+_ROBOTS_TXT = "User-agent: *\nDisallow: /admin\nDisallow: /api/\nDisallow: /docs\n"
+
+
+@router.get("/robots.txt", include_in_schema=False)
+async def robots_txt() -> PlainTextResponse:
+    return PlainTextResponse(_ROBOTS_TXT)
 
 
 @router.get("/compliance", response_class=HTMLResponse)

@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+
+{% block title %}About &amp; Methodology &mdash; Honest Congress{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-4 py-8 max-w-4xl">
+    <div class="glass-card rounded-xl shadow-lg p-6 md:p-8 space-y-8 text-gray-700 leading-relaxed">
+
+        <section>
+            <h2 class="text-3xl font-bold text-gray-800 mb-3">About &amp; Methodology</h2>
+            <p>
+                Honest Congress reads the financial disclosures that members of Congress are
+                required to file, and publishes what the filings say alongside patterns in
+                them that may be worth a closer look. Every number here comes from an official,
+                public-domain source: the House Clerk, the Senate eFD system, the
+                congress-legislators dataset, the SEC, the FEC, the Senate LDA, USASpending
+                and Congress.gov.
+            </p>
+        </section>
+
+        <section id="not-an-allegation" class="p-5 bg-amber-50 border border-amber-200 rounded-lg">
+            <h3 class="text-xl font-semibold text-amber-900 mb-2">A finding is not an accusation</h3>
+            <p class="text-amber-900">
+                An &ldquo;anomaly&rdquo; on this site is the output of an automated rule applied to
+                disclosure data. It means a pattern in the filings met a stated condition &mdash;
+                a trade near a donation, a filing past its deadline, an unusually large
+                transaction. <strong>It is not an allegation of wrongdoing, insider trading, a
+                conflict of interest, or any breach of law or ethics rules</strong>, and it should
+                not be reported as one. Many findings have ordinary explanations the filings do not
+                record: trades made by a spouse or an adviser, assets held in managed accounts,
+                or plain coincidence.
+            </p>
+        </section>
+
+        <section>
+            <h3 class="text-xl font-semibold text-gray-800 mb-2">What the data can and cannot show</h3>
+            <ul class="list-disc pl-6 space-y-2">
+                <li>
+                    <strong>Amounts are ranges.</strong> Disclosures report value bands such as
+                    $1,001&ndash;$15,000, never exact amounts or share counts. Figures here carry
+                    those ranges rather than inventing a precise number.
+                </li>
+                <li>
+                    <strong>Dates are as filed.</strong> A disclosure can arrive weeks after the
+                    trade it reports, and filing dates are not trade dates.
+                </li>
+                <li>
+                    <strong>Some filings cannot be read.</strong> Filings are PDFs and web forms,
+                    and some are scanned paper with no text at all. Each filing carries a parse
+                    confidence score, and a member whose filings could not be read may show few
+                    findings for that reason alone. The <a href="/compliance" class="text-blue-700 underline">legibility index</a>
+                    says how much of each member's record was readable.
+                </li>
+                <li>
+                    <strong>No price data.</strong> Nothing here measures trading returns or claims
+                    a member &ldquo;beat the market&rdquo;.
+                </li>
+            </ul>
+        </section>
+
+        <section>
+            <h3 class="text-xl font-semibold text-gray-800 mb-2">How findings are tested</h3>
+            <p class="mb-2">
+                Running many rules against hundreds of people produces some matches by chance
+                alone. The detectors that ask a timing question &mdash; a trade close to a
+                donation, a lobbying filing, a contract award, a bill &mdash; are tested against
+                a null model: the member's own trading calendar is shifted in time many times to
+                see how often the same number of coincidences occurs by chance. The results are
+                then corrected for multiple comparisons (Benjamini&ndash;Hochberg), and by default
+                only findings that survive that correction are shown.
+            </p>
+            <p class="mb-2">
+                Surviving that test means the timing is unlikely to be chance. It does not mean
+                the member acted on any information, or that anything improper happened.
+            </p>
+            <p>
+                The other detectors measure a size &mdash; how late, how large, how concentrated
+                &mdash; and have no chance model to test against. They are ranked against other
+                findings of the same kind instead, and are marked as untested rather than as
+                having passed anything.
+            </p>
+        </section>
+
+        <section>
+            <h3 class="text-xl font-semibold text-gray-800 mb-2">Detectors that are switched off</h3>
+            <p>
+                Several detectors are disabled, either because their output could not be
+                defended with the data available or because nobody has yet reviewed what they
+                say about the current corpus. A disabled detector publishes nothing. The
+                reasons for each are recorded in the project's
+                <a href="https://github.com/prendeso/honest-congress/blob/main/docs/DECISIONS.md"
+                   class="text-blue-700 underline" rel="noopener">decision log</a>.
+            </p>
+        </section>
+
+        <section id="corrections" class="p-5 bg-blue-50 border border-blue-200 rounded-lg">
+            <h3 class="text-xl font-semibold text-blue-900 mb-2">Corrections</h3>
+            <p class="text-blue-900 mb-2">
+                If something on this site misstates what a filing says &mdash; a trade attributed to
+                the wrong person, a misread amount or date, a finding that rests on a parsing
+                error &mdash; please report it. Include the page address and, if you can, the
+                filing's document ID.
+            </p>
+            <p class="text-blue-900">
+                <a href="https://github.com/prendeso/honest-congress/issues/new?template=correction.md"
+                   class="font-semibold underline" rel="noopener">Report a correction</a>
+                &mdash; corrections are published in the open, and a confirmed error is fixed in
+                the pipeline so it cannot recur.
+            </p>
+        </section>
+
+        <section>
+            <h3 class="text-xl font-semibold text-gray-800 mb-2">Source code</h3>
+            <p>
+                The code that produces every number on this site is public at
+                <a href="https://github.com/prendeso/honest-congress" class="text-blue-700 underline" rel="noopener">github.com/prendeso/honest-congress</a>,
+                under the MIT licence.
+            </p>
+        </section>
+    </div>
+</div>
+{% endblock %}

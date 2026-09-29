@@ -69,3 +69,39 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
             )
         request_id_var.reset(token)
         return response
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Baseline browser hardening on every response.
+
+    No Content-Security-Policy, deliberately: the pages load the Tailwind play
+    CDN and Alpine.js, and Alpine evaluates its attribute expressions with
+    `new Function`, so a policy that let the site work would need
+    'unsafe-eval' and 'unsafe-inline' and would say almost nothing. The headers
+    here are the ones that cost nothing to get right.
+
+    HSTS only in production: sent from a local http://localhost it would pin
+    the developer's browser to HTTPS for a host that does not serve it.
+    """
+
+    def __init__(self, app, *, hsts: bool):
+        super().__init__(app)
+        self._hsts = hsts
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        response = await call_next(request)
+        headers = response.headers
+        headers.setdefault("X-Content-Type-Options", "nosniff")
+        # The admin panel is a password form, so nothing off-site may frame it.
+        # SAMEORIGIN rather than DENY: the disclosures page probes a filing's
+        # PDF in a hidden same-origin iframe before opening it.
+        headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        if self._hsts:
+            headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+        return response

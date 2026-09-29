@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     congressional_salary: int = Field(default=174000, alias="CONGRESSIONAL_SALARY")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     admin_password: str = Field(default="", alias="ADMIN_PASSWORD")
+    # The admin routes that run the detector pipeline inside the web process.
+    # Off in production -- see `refuse_pipeline_in_production` in src/api/auth.py.
+    allow_admin_pipeline_routes: bool = Field(default=False, alias="ALLOW_ADMIN_PIPELINE_ROUTES")
 
     # Late-filing detector knobs. Defaults are tuned to keep the noise low —
     # only PTRs filed >60 days late AND for trades >= $50k are flagged.

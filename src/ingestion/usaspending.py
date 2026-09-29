@@ -68,7 +68,7 @@ from __future__ import annotations
 
 import logging
 import time
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, List
 
@@ -77,7 +77,11 @@ from sqlalchemy.orm import Session
 
 from src.db.models import GovernmentContract
 from src.db.resilience import CONNECTION_LOSS_RETRIES, commit_or_recover
-from src.ingestion._helpers import traded_tickers
+from src.ingestion._helpers import (
+    CONSECUTIVE_REFUSALS_BEFORE_STOPPING,
+    sweep_order,
+    traded_tickers,
+)
 from src.ingestion.rate_limit import (
     MINUTE,
     RequestBudgetExhausted,
@@ -283,8 +287,14 @@ def ingest_government_contracts(
     resolver: TickerResolver | None = None,
     client: USASpendingClient | None = None,
     max_requests: int | None = None,
+    max_minutes: float | None = None,
 ) -> Dict[str, Any]:
-    """Fetch federal awards for the companies members have traded, and store them."""
+    """Fetch federal awards for the companies members have traded, and store them.
+
+    `max_minutes` stops the sweep cleanly at a wall-clock limit -- see
+    `ThrottledClient` -- and rotates where it starts by the day, so a sweep that
+    is always cut short still reaches every company over successive nights.
+    """
     end_date = end_date or datetime.now().strftime("%Y-%m-%d")
     if start_date < EARLIEST_SEARCH_DATE:
         logger.warning(
@@ -299,9 +309,14 @@ def ingest_government_contracts(
     # span it rather than resetting per company -- the old code built a fresh
     # `requests.Session()` inside every `fetch_awards` call, which also meant no
     # connection reuse across nine hundred companies.
-    client = client or USASpendingClient(max_requests=max_requests)
+    client = client or USASpendingClient(
+        max_requests=max_requests,
+        max_seconds=max_minutes * 60 if max_minutes is not None else None,
+    )
 
     universe = sorted(t.upper() for t in tickers) if tickers else sorted(traded_tickers(db))
+    if max_minutes is not None:
+        universe = sweep_order(universe, date.today().toordinal())
     if not universe:
         logger.warning(
             "No transactions carry a ticker, so there is nothing to look up. "
@@ -318,8 +333,21 @@ def ingest_government_contracts(
             "rejected_names": {},
             "connection_losses": 0,
             "companies_lost_to_the_database": [],
+            "companies_the_source_refused": [],
+            "source_down": False,
             "stopped_early": False,
         }
+
+    # Companies whose search USASpending answered with an error. Run 238 died
+    # outright on one: a single `500 Internal Server Error` for one company's
+    # search raised out of the loop and ended the sweep for every company after
+    # it. A 500 is deliberately not retried (rate_limit.RETRYABLE_STATUS), which
+    # is right -- but not retrying one company's query is no reason to abandon
+    # the other nine hundred. Named, like the database losses, because a company
+    # silently missing is indistinguishable from one with no contracts.
+    companies_the_source_refused: List[str] = []
+    consecutive_refusals = 0
+    source_down = False
 
     imported = 0
     duplicates = 0
@@ -452,7 +480,24 @@ def ingest_government_contracts(
             logger.warning("USASpending ingest stopped early: %s", exc)
             stopped_early = True
             break
+        except (requests.exceptions.HTTPError, requests.exceptions.RetryError) as exc:
+            companies_the_source_refused.append(ticker)
+            consecutive_refusals += 1
+            logger.warning("USASpending refused the search for %s (%s): %s", ticker, company, exc)
+            if consecutive_refusals >= CONSECUTIVE_REFUSALS_BEFORE_STOPPING:
+                logger.warning(
+                    "USASpending refused %d searches in a row; treating the service "
+                    "as down and stopping",
+                    consecutive_refusals,
+                )
+                stopped_early = True
+                source_down = True
+                break
+            continue
+        consecutive_refusals = 0
         fetched += len(awards)
+        if queried % 100 == 0:
+            logger.info("USASpending: %d companies asked about so far", queried)
 
         # Committed per company rather than once at the end. The old shape held
         # one transaction open across the whole sweep -- 61 minutes in the run
@@ -495,6 +540,13 @@ def ingest_government_contracts(
             ", ".join(companies_lost_to_the_database[:5]) or "none",
         )
 
+    if companies_the_source_refused:
+        logger.warning(
+            "USASpending refused %d company search(es): %s",
+            len(companies_the_source_refused),
+            ", ".join(companies_the_source_refused[:10]),
+        )
+
     if rejected_names:
         # Named, not just counted. A recipient rejected a hundred times is a
         # listed contractor whose federal arm is registered under a divisional
@@ -518,5 +570,7 @@ def ingest_government_contracts(
         "rejected_names": rejected_names,
         "connection_losses": connection_losses,
         "companies_lost_to_the_database": companies_lost_to_the_database,
+        "companies_the_source_refused": companies_the_source_refused,
+        "source_down": source_down,
         "stopped_early": stopped_early,
     }

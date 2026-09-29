@@ -89,6 +89,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_PERMUTATIONS = 1000
 DEFAULT_FDR_ALPHA = 0.05
 
+# Refinement. A test whose p-value lands on or near the permutation floor has
+# shown only that it beat (nearly) every shuffle it was given -- not by how
+# much. When the family is too large for that floor to clear Benjamini-Hochberg,
+# the tests that could pass at all (p <= alpha) are given more shuffles until it
+# can. See `annotate_significance`.
+#
+# The margin puts the refined floor at a quarter of the threshold a lone
+# standout has to clear, so a test that beats every shuffle again passes with
+# room to spare rather than on a rounding. The cap bounds the nightly's wall
+# clock: at roughly a tenth of a millisecond per shuffle per test, 200,000
+# shuffles is about half a minute for each test that needs it.
+REFINE_MARGIN = 4
+MAX_REFINED_PERMUTATIONS = 200_000
+
 # A member whose trades and events span fewer days than this cannot be shifted
 # into a meaningfully different alignment, so no p-value is claimed for them.
 MIN_SPAN_DAYS = 30
@@ -156,6 +170,25 @@ def fdr_is_resolvable(n_tests: int, permutations: int, alpha: float) -> bool:
     if n_tests <= 0:
         return True
     return (1.0 / (permutations + 1)) * n_tests <= alpha
+
+
+def permutations_to_resolve(n_tests: int, alpha: float) -> int:
+    """Shuffles whose floor puts a lone floor-level test inside BH with margin."""
+    return int(n_tests * REFINE_MARGIN / alpha) + 1
+
+
+def _pooled(p_first: float, first: int, p_extra: float | None, extra: int) -> float:
+    """Combine two independent runs of the same null into one p-value.
+
+    Recovers each run's count of shuffles at least as extreme from its
+    Phipson-Smyth p-value, and re-applies the +1s once over the total -- exactly
+    the value one run of `first + extra` shuffles would have produced.
+    """
+    if p_extra is None:
+        return p_first
+    hits_first = round(p_first * (first + 1)) - 1
+    hits_extra = round(p_extra * (extra + 1)) - 1
+    return (1.0 + hits_first + hits_extra) / (1.0 + first + extra)
 
 
 def benjamini_hochberg(p_values: Sequence[float]) -> List[float]:
@@ -624,8 +657,12 @@ def _max_members_in_window(marks: List[Tuple[float, int]], window_days: int) -> 
 
 def _cluster_p_values(
     db: Session, permutations: int, rng: np.random.Generator
-) -> Dict[Tuple[str, str], float]:
-    """A p-value per (ticker, direction) the cluster detector flagged."""
+) -> Dict[Tuple[str, str], Tuple[float, Callable[[int], float | None]]]:
+    """A p-value per (ticker, direction) the cluster detector flagged.
+
+    Each comes with a function that draws `n` more shuffles of the same null,
+    for refinement in `annotate_significance`.
+    """
     from src.analysis.clustering import CLUSTER_WINDOW_DAYS, MIN_MEMBERS_IN_CLUSTER
 
     rows = drop_restated_records(
@@ -661,7 +698,7 @@ def _cluster_p_values(
         direction = "purchase" if kind == TransactionType.PURCHASE else "sale"
         grouped[((ticker or "").strip().upper(), direction)][member_id].append(_days(when))
 
-    results: Dict[Tuple[str, str], float] = {}
+    results: Dict[Tuple[str, str], Tuple[float, Callable[[int], float | None]]] = {}
     for key, member_dates in grouped.items():
         marks = [(when, mid) for mid, dates in member_dates.items() for when in dates]
         observed = _max_members_in_window(marks, CLUSTER_WINDOW_DAYS)
@@ -686,7 +723,12 @@ def _cluster_p_values(
             member_dates, CLUSTER_WINDOW_DAYS, observed, permutations=permutations, rng=rng
         )
         if p_value is not None:
-            results[key] = p_value
+            results[key] = (
+                p_value,
+                lambda n, member_dates=member_dates, observed=observed: cluster_p_value(
+                    member_dates, CLUSTER_WINDOW_DAYS, observed, permutations=n, rng=rng
+                ),
+            )
     return results
 
 
@@ -707,6 +749,8 @@ def annotate_significance(
 
     # (anomaly_type, member_id) -> p, and ("cross_member_cluster", ticker) -> p.
     tests: List[Tuple[str, int | None, str | None, float]] = []
+    # How to draw more shuffles for each test, index-aligned with `tests`.
+    rerun: List[Callable[[int], float | None]] = []
 
     for spec in NULL_SPECS:
         for member_id, streams in spec.collect(db).items():
@@ -719,9 +763,50 @@ def annotate_significance(
             )
             if p_value is not None and observed > 0:
                 tests.append((spec.anomaly_type, member_id, None, p_value))
+                rerun.append(
+                    lambda n, streams=streams, spec=spec: permutation_p_value(
+                        streams, spec.window_days, spec.direction, permutations=n, rng=rng
+                    )[0]
+                )
 
-    for (cluster_ticker, _direction), cluster_p in _cluster_p_values(db, permutations, rng).items():
+    for (cluster_ticker, _direction), (cluster_p, again) in _cluster_p_values(
+        db, permutations, rng
+    ).items():
         tests.append(("cross_member_cluster", None, cluster_ticker, cluster_p))
+        rerun.append(again)
+
+    # Refine the tests that hit the floor, when the floor cannot clear BH.
+    #
+    # Nightly run 238: 357 tests at 1,000 shuffles, so the best q any test could
+    # earn was 0.000999 * 357 = 0.36, and every timing finding was hidden by
+    # arithmetic rather than by evidence. Raising `permutations` for every test
+    # would fix it at ~30x the cost; nearly all of that would go to tests whose
+    # p-value is already well away from the floor and would not move.
+    #
+    # Only a test with p <= alpha can pass at all -- BH never lowers a q below
+    # its p -- so only those are extended, and for them the resolution is what
+    # is limiting. The extra shuffles are POOLED with the first ones, so each
+    # refined p-value is exactly what a single run of that many shuffles would
+    # have given. Nothing about the statistic changes; only its precision does.
+    effective_permutations = permutations
+    refined = 0
+    if tests and not fdr_is_resolvable(len(tests), permutations, alpha):
+        target = min(permutations_to_resolve(len(tests), alpha), MAX_REFINED_PERMUTATIONS)
+        extra = target - permutations
+        if extra > 0:
+            for i, (tested_type, tested_member, tested_ticker, tested_p) in enumerate(tests):
+                if tested_p > alpha:
+                    continue
+                pooled = _pooled(tested_p, permutations, rerun[i](extra), extra)
+                tests[i] = (tested_type, tested_member, tested_ticker, pooled)
+                refined += 1
+            effective_permutations = target
+            logger.info(
+                "Significance: %d test(s) at the %d-shuffle floor refined to %d shuffles",
+                refined,
+                permutations,
+                target,
+            )
 
     q_values = benjamini_hochberg([p for _, _, _, p in tests])
 
@@ -783,8 +868,8 @@ def annotate_significance(
     # between raising `permutations` (~51x here), correcting within detector
     # families instead of one pooled family, or approximating the tail -- and
     # each changes what gets published about named people.
-    floor = 1.0 / (permutations + 1)
-    resolvable = fdr_is_resolvable(len(tests), permutations, alpha)
+    floor = 1.0 / (effective_permutations + 1)
+    resolvable = fdr_is_resolvable(len(tests), effective_permutations, alpha)
     if not resolvable:
         needed = int(len(tests) / alpha) + 1
         logger.warning(
@@ -793,7 +878,7 @@ def annotate_significance(
             "for even the single most extreme test to pass. NO test can pass regardless of "
             "the data; '%d passing' below is a property of the configuration, not a finding. "
             "It would take ~%d permutations, or a smaller correction family.",
-            permutations,
+            effective_permutations,
             floor,
             len(tests),
             alpha / len(tests),
@@ -815,6 +900,10 @@ def annotate_significance(
         "tests_passing_fdr": passing,
         "alpha": alpha,
         "permutations": permutations,
+        # Tests that hit the first run's floor and were given more shuffles, and
+        # the count they were taken to. Equal to `permutations` when none were.
+        "tests_refined": refined,
+        "refined_permutations": effective_permutations,
         "findings_annotated": annotated,
         "findings_without_a_null_model": without_null_model,
         # False when the permutation floor cannot clear alpha at this many

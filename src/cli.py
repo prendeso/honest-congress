@@ -192,6 +192,11 @@ def cmd_analyze(args):
         f"{significance['tests_passing_fdr']} passing FDR at alpha="
         f"{significance['alpha']}"
     )
+    if significance.get("tests_refined"):
+        print(
+            f"  Refined: {significance['tests_refined']} test(s) with p <= alpha re-run at "
+            f"{significance['refined_permutations']} permutations"
+        )
     print(
         f"  Findings with a null model: {significance['findings_annotated']}; "
         f"without one: {significance['findings_without_a_null_model']}"
@@ -478,6 +483,7 @@ def cmd_ingest_contracts(args):
             end_date=args.end,
             pages=args.pages_per_company,
             max_requests=args.max_requests,
+            max_minutes=args.max_minutes,
         )
 
     if not result["tickers_queried"] and not result["tickers_without_a_registered_name"]:
@@ -508,8 +514,9 @@ def cmd_ingest_contracts(args):
     # the company through its own recipient hierarchy, which the SEC register
     # cannot confirm -- a known gap in coverage, and the numbers say how big.
     print(f"  Rejected as a different company: {result['rejected_wrong_company']}")
+    _print_refusals("USASpending", result)
     if result.get("stopped_early"):
-        print("\n  Stopped at the request cap. Rerun to continue.")
+        print("\n  Stopped early (request cap, time limit, or source down). Rerun to continue.")
     if result.get("connection_losses"):
         lost = result["companies_lost_to_the_database"]
         print(
@@ -521,6 +528,24 @@ def cmd_ingest_contracts(args):
     top = sorted(result["rejected_names"].items(), key=lambda kv: -kv[1])[:10]
     for name, count in top:
         print(f"      {count:>5}  {name}")
+    if result.get("source_down"):
+        # Exit non-zero so the workflow step records a failure. A source that
+        # refused every search is an outage, and an outage reported as success
+        # is the green-tick-over-a-dead-feed failure the nightly summary exists
+        # to catch.
+        sys.exit(1)
+
+
+def _print_refusals(source: str, result: dict) -> None:
+    """Name the companies whose search the source answered with an error."""
+    refused = result.get("companies_the_source_refused") or []
+    if not refused:
+        return
+    print(f"  {source} refused {len(refused)} company search(es) - skipped, not lost:")
+    for ticker in refused[:10]:
+        print(f"      {ticker}")
+    if result.get("source_down"):
+        print(f"\n  {source} refused too many searches in a row; treated as down.")
 
 
 def cmd_ingest_donations(args):
@@ -590,6 +615,11 @@ def cmd_significance(args):
     print(f"  Tests run: {result['tests']}")
     print(f"  Passing FDR at alpha={result['alpha']}: {result['tests_passing_fdr']}")
     print(f"  Expected false discoveries among those: {result['expected_false_discoveries']}")
+    if result.get("tests_refined"):
+        print(
+            f"  Refined: {result['tests_refined']} test(s) with p <= alpha re-run at "
+            f"{result['refined_permutations']} permutations"
+        )
     print(f"  Findings annotated: {result['findings_annotated']}")
     print(
         f"  Findings with no null model: {result['findings_without_a_null_model']}"
@@ -714,6 +744,7 @@ def cmd_ingest_lobbying(args):
             api_key=api_key,
             tickers=args.tickers,
             max_requests=args.max_requests,
+            max_minutes=args.max_minutes,
         )
 
     print("\nLobbying ingestion complete:")
@@ -726,8 +757,9 @@ def cmd_ingest_lobbying(args):
         "  - the API matches client names by substring"
     )
     print(f"  LDA requests used: {result['requests_made']}")
+    _print_refusals("Senate LDA", result)
     if result.get("stopped_early"):
-        print("\n  Stopped at the request cap. Rerun to continue.")
+        print("\n  Stopped early (request cap, time limit, or source down). Rerun to continue.")
     if result.get("connection_losses"):
         lost = result["companies_lost_to_the_database"]
         print(
@@ -736,6 +768,8 @@ def cmd_ingest_lobbying(args):
         )
         for ticker in lost[:10]:
             print(f"      {ticker}")
+    if result.get("source_down"):
+        sys.exit(1)
 
 
 def cmd_compliance(args):
@@ -1867,6 +1901,16 @@ def main():
             "(default: 1). One request per company; most return nothing."
         ),
     )
+    contracts_parser.add_argument(
+        "--max-minutes",
+        type=float,
+        default=None,
+        help=(
+            "Stop cleanly after this many minutes, keeping everything committed. "
+            "Also rotates the starting company by day, so a sweep that is always "
+            "cut short still reaches every company over successive runs."
+        ),
+    )
     contracts_parser.set_defaults(func=cmd_ingest_contracts)
 
     donations_parser = subparsers.add_parser(
@@ -1971,6 +2015,16 @@ def main():
         help=(
             "Stop after this many LDA requests. The run so far is kept -- each "
             "company is committed as it is done -- and the next run resumes."
+        ),
+    )
+    lobbying_parser.add_argument(
+        "--max-minutes",
+        type=float,
+        default=None,
+        help=(
+            "Stop cleanly after this many minutes, keeping everything committed. "
+            "Also rotates the starting company by day, so a sweep that is always "
+            "cut short still reaches every company over successive runs."
         ),
     )
     lobbying_parser.set_defaults(func=cmd_ingest_lobbying)

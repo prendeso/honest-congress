@@ -144,3 +144,70 @@ class TestClusterTestsDoNotPadTheDenominator:
             "tests what the detector flagged"
         )
         assert MIN_MEMBERS_IN_CLUSTER == 4
+
+
+class TestTheFloorIsRefinedRatherThanReported:
+    """Nightly run 238: 357 tests at 1,000 shuffles, so no test could pass.
+
+    The guard above names that condition. This is the fix: a test at or near the
+    floor has only shown it beat (nearly) every shuffle it was given, so the
+    tests that could pass at all (p <= alpha) are given more -- pooled with the
+    first run, so each refined p-value is what one longer run would have
+    produced.
+    """
+
+    def _family(self, strong: int, noise: int):
+        import numpy as np
+
+        from src.analysis.significance import NullSpec
+
+        rng = np.random.default_rng(7)
+        streams = {}
+        for member_id in range(strong):
+            # Trades on the event dates themselves, irregularly spaced over three
+            # years: no shift of the calendar lines them up again.
+            days = sorted(rng.choice(1100, size=25, replace=False).astype(float))
+            streams[member_id] = {"T": (list(days), list(days))}
+        for member_id in range(strong, strong + noise):
+            trades = sorted(rng.uniform(0, 1100, size=25))
+            events = sorted(rng.uniform(0, 1100, size=25))
+            streams[member_id] = {"T": (list(trades), list(events))}
+        return NullSpec("donor_conflict", 2, "symmetric", lambda _db: streams)
+
+    def _run(self, db, spec, permutations):
+        from unittest.mock import patch
+
+        from src.analysis.significance import annotate_significance
+
+        with patch("src.analysis.significance.NULL_SPECS", [spec]):
+            with patch("src.analysis.significance._cluster_p_values", return_value={}):
+                return annotate_significance(db, permutations=permutations, seed=1)
+
+    def test_a_standout_the_floor_hid_now_passes(self, db_session):
+        # 30 tests at 200 shuffles: floor * n = 30/201 = 0.15 > 0.05, so
+        # without refinement nothing could pass.
+        summary = self._run(db_session, self._family(strong=5, noise=25), permutations=200)
+
+        assert summary["tests_refined"] >= 5
+        assert summary["refined_permutations"] > 200
+        assert summary["fdr_is_resolvable"] is True
+        assert summary["tests_passing_fdr"] >= 5
+
+    def test_noise_alone_still_passes_nothing(self, db_session):
+        summary = self._run(db_session, self._family(strong=0, noise=30), permutations=200)
+        assert summary["tests_passing_fdr"] == 0
+
+    def test_a_resolvable_family_is_left_alone(self, db_session):
+        summary = self._run(db_session, self._family(strong=2, noise=3), permutations=200)
+        assert summary["tests_refined"] == 0
+        assert summary["refined_permutations"] == 200
+
+    def test_pooling_is_one_longer_run(self):
+        from src.analysis.significance import _pooled
+
+        # 0 of 1,000 then 3 of 9,000 is 3 of 10,000.
+        first = 1 / 1001
+        extra = 4 / 9001
+        assert _pooled(first, 1000, extra, 9000) == pytest.approx(4 / 10001)
+        # No second run leaves the first untouched.
+        assert _pooled(first, 1000, None, 9000) == first

@@ -152,10 +152,22 @@ class ThrottledClient:
         sleeper: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         backoff_seconds: Tuple[int, ...] = DEFAULT_BACKOFF_SECONDS,
+        max_seconds: float | None = None,
     ):
         self.session = session or requests.Session()
         self.requests_made = 0
         self.max_requests = max_requests
+        # A budget in wall-clock time, beside the one in requests. The nightly
+        # steps are bounded by GitHub's `timeout-minutes`, and a step killed by
+        # that is killed mid-company: no summary line, nothing saying how far it
+        # got, and the next night starts again from the same place. Run 238's
+        # lobbying step was exactly that -- forty silent minutes, then a kill.
+        #
+        # Surfaced as `RequestBudgetExhausted` because every caller already
+        # treats that as "stop cleanly, keep what is committed, report" -- which
+        # is precisely what running out of time should mean.
+        self._clock = clock
+        self._deadline = clock() + max_seconds if max_seconds is not None else None
         self._timeout = timeout
         self._sleeper = sleeper
         self._backoff = backoff_seconds
@@ -211,6 +223,10 @@ class ThrottledClient:
         if self.max_requests is not None and self.requests_made >= self.max_requests:
             raise RequestBudgetExhausted(
                 f"stopped after {self.requests_made} requests (--max-requests)"
+            )
+        if self._deadline is not None and self._clock() >= self._deadline:
+            raise RequestBudgetExhausted(
+                f"stopped at the time limit after {self.requests_made} requests (--max-minutes)"
             )
 
         query = self._auth_params(dict(params or {}))

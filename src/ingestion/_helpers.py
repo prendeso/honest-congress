@@ -111,3 +111,28 @@ def traded_tickers(db: Session) -> set[str]:
     """
     rows = db.query(Transaction.ticker).filter(Transaction.ticker.isnot(None)).distinct().all()
     return {(t[0] or "").strip().upper() for t in rows if (t[0] or "").strip()}
+
+
+def sweep_order(universe: list[str], day: int) -> list[str]:
+    """`universe` rotated to start at a position that moves each day.
+
+    The per-company sweeps walk tickers alphabetically, and a time-limited run
+    stops wherever the clock runs out. With a fixed starting point that is the
+    same place every slow night, so the tail of the alphabet is never refreshed
+    at all -- a company starting with W could go unasked for weeks while the
+    step reports it stopped cleanly. Rotating by the day spreads a truncated
+    sweep over the whole universe instead of always sacrificing the same end.
+
+    `day` is taken rather than read from the clock so the order is testable;
+    callers pass `date.today().toordinal()`.
+    """
+    if not universe:
+        return []
+    start = day % len(universe)
+    return universe[start:] + universe[:start]
+
+
+# Consecutive companies a source may refuse before the sweep concludes the
+# source itself is down and stops, rather than spending the rest of the night
+# collecting the same error once per ticker.
+CONSECUTIVE_REFUSALS_BEFORE_STOPPING = 10

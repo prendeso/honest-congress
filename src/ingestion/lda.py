@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Callable, Dict, Iterator, List, Set
 
@@ -51,7 +51,11 @@ from sqlalchemy.orm import Session
 
 from src.db.models import LobbyingDisclosure
 from src.db.resilience import CONNECTION_LOSS_RETRIES, commit_or_recover
-from src.ingestion._helpers import traded_tickers
+from src.ingestion._helpers import (
+    CONSECUTIVE_REFUSALS_BEFORE_STOPPING,
+    sweep_order,
+    traded_tickers,
+)
 from src.ingestion.rate_limit import (
     DEFAULT_BACKOFF_SECONDS,
     MINUTE,
@@ -98,6 +102,7 @@ class LDAClient(ThrottledClient):
         sleeper: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
         backoff_seconds: tuple[int, ...] = DEFAULT_BACKOFF_SECONDS,
+        max_seconds: float | None = None,
     ):
         self.api_key = api_key or ""
 
@@ -114,6 +119,7 @@ class LDAClient(ThrottledClient):
             sleeper=sleeper,
             clock=clock,
             backoff_seconds=backoff_seconds,
+            max_seconds=max_seconds,
         )
         logger.info(
             "Senate LDA: %s, pacing at %d requests/minute",
@@ -208,12 +214,23 @@ def ingest_lobbying_disclosures(
     resolver: TickerResolver | None = None,
     client: LDAClient | None = None,
     max_requests: int | None = None,
+    max_minutes: float | None = None,
 ) -> Dict[str, Any]:
-    """Ingest lobbying filings for the companies members have traded."""
-    client = client or LDAClient(api_key, max_requests=max_requests)
+    """Ingest lobbying filings for the companies members have traded.
+
+    `max_minutes` stops the sweep cleanly at a wall-clock limit and rotates
+    where it starts by the day; see `ingest_government_contracts`.
+    """
+    client = client or LDAClient(
+        api_key,
+        max_requests=max_requests,
+        max_seconds=max_minutes * 60 if max_minutes is not None else None,
+    )
     resolver = resolver or TickerResolver()
 
     universe = sorted(t.upper() for t in tickers) if tickers else sorted(traded_tickers(db))
+    if max_minutes is not None:
+        universe = sweep_order(universe, date.today().toordinal())
     if not universe:
         logger.warning(
             "No transactions carry a ticker, so there is nothing to look up. "
@@ -228,8 +245,16 @@ def ingest_lobbying_disclosures(
             "requests_made": client.requests_made,
             "connection_losses": 0,
             "companies_lost_to_the_database": [],
+            "companies_the_source_refused": [],
+            "source_down": False,
             "stopped_early": False,
         }
+
+    # One company's search failing is not a reason to abandon the rest; see
+    # the same list in `ingest_government_contracts`.
+    companies_the_source_refused: List[str] = []
+    consecutive_refusals = 0
+    source_down = False
 
     imported = 0
     duplicates = 0
@@ -356,6 +381,29 @@ def ingest_lobbying_disclosures(
             logger.warning("Senate LDA ingest stopped early: %s", exc)
             stopped_early = True
             break
+        except (requests.exceptions.HTTPError, requests.exceptions.RetryError) as exc:
+            companies_the_source_refused.append(ticker)
+            consecutive_refusals += 1
+            logger.warning("Senate LDA refused the search for %s (%s): %s", ticker, company, exc)
+            if consecutive_refusals >= CONSECUTIVE_REFUSALS_BEFORE_STOPPING:
+                logger.warning(
+                    "Senate LDA refused %d searches in a row; treating the service "
+                    "as down and stopping",
+                    consecutive_refusals,
+                )
+                stopped_early = True
+                source_down = True
+                break
+            continue
+        consecutive_refusals = 0
+        # The step used to be silent from its first line to its last, so a run
+        # killed by the step timeout left no trace of how far it had got.
+        if queried % 100 == 0:
+            logger.info(
+                "Senate LDA: %d companies asked about so far, %d requests",
+                queried,
+                client.requests_made,
+            )
 
         # Committed per company rather than once at the end: the old shape held
         # one transaction open across the whole sweep, so a drop anywhere in it
@@ -399,5 +447,7 @@ def ingest_lobbying_disclosures(
         "requests_made": client.requests_made,
         "connection_losses": connection_losses,
         "companies_lost_to_the_database": companies_lost_to_the_database,
+        "companies_the_source_refused": companies_the_source_refused,
+        "source_down": source_down,
         "stopped_early": stopped_early,
     }

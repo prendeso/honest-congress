@@ -51,10 +51,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: 'pip'
@@ -155,7 +155,10 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
-        run: python -m src.cli ingest-contracts
+        # --max-minutes stops the sweep cleanly ten minutes inside the ceiling,
+        # so a slow night ends with a summary instead of a kill, and rotates the
+        # starting company by day so the same tail is not the part always lost.
+        run: python -m src.cli ingest-contracts --max-minutes 65
 
       # FEC allows 1,000 requests/hour and a full cycle costs more than that,
       # so the run is capped and resumes tomorrow where it stopped.
@@ -179,7 +182,10 @@ jobs:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
           LDA_API_KEY: ${{ secrets.LDA_API_KEY }}
           SEC_CONTACT_EMAIL: ${{ secrets.SEC_CONTACT_EMAIL || 'contact@example.com' }}
-        run: python -m src.cli ingest-lobbying --year 2024
+        # --max-minutes stops the sweep cleanly ten minutes inside the ceiling,
+        # so a slow night ends with a summary instead of a kill, and rotates the
+        # starting company by day so the same tail is not the part always lost.
+        run: python -m src.cli ingest-lobbying --year 2024 --max-minutes 35
 
       # Sector classification for every traded ticker. Must run before analyze:
       # three detectors join a bill or a committee remit to a sector, and
@@ -260,6 +266,7 @@ jobs:
       # Names any detector whose source table is empty, so "no findings" stays
       # distinguishable from "no data" in the run log.
       - name: Report detector coverage
+        id: coverage
         if: always()
         env:
           DATABASE_URL: ${{ secrets.RAILWAY_DATABASE_URL }}
@@ -283,6 +290,7 @@ jobs:
             "bills:${{ steps.bills.outcome }}"; do
             if [ "${step#*:}" = "failure" ]; then FAILED="$FAILED ${step%%:*}"; fi
           done
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
           if [ -n "$FAILED" ]; then
             echo "### ⚠️ Feeds that FAILED despite the green tick" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
@@ -292,6 +300,19 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           python -m src.cli stats >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      # Fail the job, last, when a feed died. The steps above carry
+      # continue-on-error so a throttled source cannot stop the analysis, and
+      # that is still right -- the analysis above has already run by now. But a
+      # green job sends nobody an email: run 238 lost two feeds behind a green
+      # tick and the only record was a summary nobody opens at 06:00. A red job
+      # is the one alert GitHub sends the repository owner without any secret
+      # or integration to configure.
+      - name: Fail the run if a feed died
+        if: always() && steps.coverage.outputs.failed != ''
+        run: |
+          echo "::error::These feeds failed and their data is missing or partial:${{ steps.coverage.outputs.failed }}. The analysis still ran on what was ingested; open each step's log."
+          exit 1
 
       - name: Notify on failure
         if: failure()

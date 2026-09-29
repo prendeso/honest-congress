@@ -596,8 +596,9 @@ class LobbyingDisclosure(Base):
 
     Sourced from the Senate LDA (`src.ingestion.lda`). The detector
     flags transactions in `ticker` made within ``lobbying_window_days`` of
-    `filed_date` regardless of which member traded — it's a market-wide
-    signal that the issuer is actively trying to shape policy.
+    `filed_date` regardless of which member traded. `filed_date` is when the
+    quarterly report was filed, which is a reporting deadline, not when any
+    lobbying happened.
     """
 
     __tablename__ = "lobbying_disclosures"
@@ -622,8 +623,9 @@ class GovernmentContract(Base):
 
     Sourced from USASpending (`src.ingestion.usaspending`). The
     detector flags PURCHASE transactions in `ticker` made within
-    ``contract_window_days`` *before* `awarded_date` — front-running an
-    award is the clearest insider signal in this dataset.
+    ``contract_window_days`` *before* `awarded_date`. Many awards are
+    anticipated publicly, so a purchase ahead of one is a coincidence in time
+    the data cannot tell apart from knowledge.
     """
 
     __tablename__ = "government_contracts"

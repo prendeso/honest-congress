@@ -125,3 +125,53 @@ class TestTheStoredGradeIsRewritten:
         result = annotate_percentile_ranks(db_session)
 
         assert result["regraded"] >= 20
+
+
+class TestCloserIsStrongerForDistanceDetectors:
+    """Five detectors store the DAYS between a trade and an event.
+
+    A trade one day from a lobbying filing is the strongest finding that
+    detector makes; one thirty days away, at the edge of its window, the
+    weakest. Ranked like every other type, the grade came out upside down.
+    Measured on the live site: every one of the 147 `lobbying_overlap` findings
+    graded "high" sat 28-30 days from the filing, and every "low" one 1-15.
+    """
+
+    def test_the_closest_trade_is_graded_high_and_the_farthest_low(self, db_session):
+        member = _member(db_session, "SV00010")
+        rows = [
+            _anomaly(db_session, member, days, anomaly_type="lobbying_overlap")
+            for days in range(1, 31)
+        ]
+
+        annotate_percentile_ranks(db_session)
+        for row in rows:
+            db_session.refresh(row)
+
+        closest = min(rows, key=lambda r: float(r.computed_value))
+        farthest = max(rows, key=lambda r: float(r.computed_value))
+        assert closest.percentile_rank == 100.0
+        assert closest.severity == "high"
+        assert farthest.severity == "low"
+
+    def test_every_detector_measured_in_days_apart_is_declared(self):
+        """The list must match the catalog's distance detectors, not drift from it.
+
+        `late_filing` is also in days, but a later filing is a MORE extreme one,
+        so it ranks the ordinary way and is deliberately absent.
+        """
+        from src.analysis.baselines import SMALLER_IS_MORE_EXTREME
+        from src.analysis.catalog import DETECTORS
+
+        in_days = {d.anomaly_type for d in DETECTORS if d.value_unit == "days"}
+        assert SMALLER_IS_MORE_EXTREME == in_days - {"late_filing"}
+
+    def test_a_magnitude_detector_still_ranks_larger_as_stronger(self, db_session):
+        member = _member(db_session, "SV00011")
+        rows = [_anomaly(db_session, member, v, anomaly_type="late_filing") for v in range(61, 91)]
+
+        annotate_percentile_ranks(db_session)
+        for row in rows:
+            db_session.refresh(row)
+
+        assert max(rows, key=lambda r: float(r.computed_value)).severity == "high"

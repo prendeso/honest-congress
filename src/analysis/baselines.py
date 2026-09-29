@@ -86,16 +86,46 @@ def detectors_without_source_data(db: Session) -> List[Dict[str, str]]:
     return sorted(empty, key=lambda e: (e["empty_source_table"], e["anomaly_type"]))
 
 
-def percentile_rank(value: float, population: Sequence[float]) -> float:
-    """Percentage of the population at or below `value`, 0-100.
+def percentile_rank(
+    value: float, population: Sequence[float], *, smaller_is_more_extreme: bool = False
+) -> float:
+    """How extreme `value` is within its population, 0-100.
 
-    Uses the weak definition (<=) so the largest observation ranks 100 and ties
-    share a rank.
+    By default the percentage of the population at or below `value`: the
+    largest observation ranks 100 and ties share a rank. With
+    `smaller_is_more_extreme`, the percentage at or ABOVE it, so the smallest
+    ranks 100 -- see `SMALLER_IS_MORE_EXTREME`.
     """
     if not population:
         return 0.0
-    at_or_below = sum(1 for item in population if item <= value)
-    return round(at_or_below / len(population) * 100, 2)
+    if smaller_is_more_extreme:
+        at_or_beyond = sum(1 for item in population if item >= value)
+    else:
+        at_or_beyond = sum(1 for item in population if item <= value)
+    return round(at_or_beyond / len(population) * 100, 2)
+
+
+# Detectors whose `computed_value` is a DISTANCE: the days between a trade and
+# the donation, lobbying filing, contract award or bill it is being matched to.
+# A trade one day from the event is the strongest finding such a detector can
+# make, and one at the far edge of its window the weakest.
+#
+# Ranking them like every other type -- larger value, higher percentile -- put
+# that exactly backwards, and severity is graded from the rank. Measured on the
+# live site: all 147 `lobbying_overlap` findings graded "high" sat 28-30 days
+# from the filing, at the edge of the 30-day window, and every one of the 536
+# graded "low" sat 1-15 days away. The same inversion ran through all five
+# types below, about 4,700 findings in all, each published under a member's
+# name with the grade upside down.
+SMALLER_IS_MORE_EXTREME = frozenset(
+    {
+        "donor_conflict",
+        "lobbying_overlap",
+        "contract_front_run",
+        "sponsorship_conflict",
+        "bill_jurisdiction_conflict",
+    }
+)
 
 
 # Where a finding has to sit among others of its own type to be graded high or
@@ -174,8 +204,11 @@ def annotate_percentile_ranks(db: Session) -> Dict[str, int]:
             (row, float(row.computed_value)) for row in rows if row.computed_value is not None
         ]
         population = [value for _, value in valued]
+        closer_is_stronger = anomaly_type in SMALLER_IS_MORE_EXTREME
         for row, value in valued:
-            row.percentile_rank = percentile_rank(value, population)
+            row.percentile_rank = percentile_rank(
+                value, population, smaller_is_more_extreme=closer_is_stronger
+            )
             row.severity = severity_from_percentile(row.percentile_rank)
             regraded += 1
             ranked += 1

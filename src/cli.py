@@ -980,6 +980,25 @@ def cmd_purge_disabled(args):
 # code -- a band label with " trades" after it, a score over an invented
 # maximum, a coined verb.
 _SUPERSEDED_WORDING = (
+    # The three Tier-2 detectors each closed with a sentence the data cannot
+    # support, published under a member's name:
+    #
+    #   contract_front_run  "Buying ahead of a public contract award is one of
+    #                        the clearest insider-information signals available."
+    #   donor_conflict      "... raise conflict-of-interest concerns regardless
+    #                        of direction."
+    #   lobbying_overlap    "The issuer is actively trying to shape federal
+    #                        policy around the time of the trade."
+    #
+    # The last is also wrong on its facts: 69% of the 1,092 live lobbying
+    # findings sit on a date within days of a quarterly LDA deadline, which is
+    # when the REPORT was due, not when anyone lobbied. The corrected sentences
+    # say what the bill detectors already say -- a disclosed coincidence in
+    # time. Titles are unchanged, so each finding keeps its identity and its
+    # description would never be rewritten without this.
+    ("contract_front_run", "description", "clearest insider-information signals"),
+    ("donor_conflict", "description", "raise conflict-of-interest concerns"),
+    ("lobbying_overlap", "description", "actively trying to shape federal policy"),
     ("high_trading_frequency", "title", "High trading activity: 10-15 trades"),
     ("high_trading_frequency", "title", "High trading activity: 15-25 trades"),
     ("high_trading_frequency", "title", "High trading activity: 25-50 trades"),

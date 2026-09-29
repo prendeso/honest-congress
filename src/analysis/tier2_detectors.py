@@ -228,8 +228,10 @@ def detect_donor_conflicts(
                         f"({days_apart} days {direction} a donation from "
                         f"{donation.donor_name}{amount_str} on "
                         f"{donation.donation_date.strftime('%Y-%m-%d')}). "
-                        f"Trades in companies that donate to a member's campaign "
-                        f"raise conflict-of-interest concerns regardless of direction."
+                        f"The donation and the trade dates are both public record; "
+                        f"this is a disclosed coincidence in time and does not "
+                        f"establish that the member knew of the donation when "
+                        f"trading."
                     ),
                 }
             )
@@ -285,11 +287,14 @@ def detect_lobbying_overlaps(
                     "description": (
                         f"Member traded {filing.ticker} on "
                         f"{txn.transaction_date.strftime('%Y-%m-%d')} "
-                        f"({days_apart}d from a lobbying disclosure filed by "
+                        f"({days_apart}d from a lobbying report filed by "
                         f"{filing.registrant} on "
                         f"{filing.filed_date.strftime('%Y-%m-%d')}). "
-                        f"The issuer is actively trying to shape federal policy "
-                        f"around the time of the trade."
+                        f"Lobbying reports are filed quarterly, so the filing "
+                        f"date marks a reporting deadline rather than when any "
+                        f"lobbying took place, and the report does not name "
+                        f"the members lobbied. This is a disclosed coincidence "
+                        f"in time, not evidence of a connection."
                     ),
                 }
             )
@@ -352,8 +357,12 @@ def detect_contract_front_runs(
                         f"{days_before} days before the company was awarded a "
                         f"federal contract by {contract.agency or 'a federal agency'} "
                         f"on {contract.awarded_date.strftime('%Y-%m-%d')}{amount_str}. "
-                        f"Buying ahead of a public contract award is one of the "
-                        f"clearest insider-information signals available."
+                        f"The purchase and the award dates are both public "
+                        f"record. Many awards are expected long before they "
+                        f"are made, and this cannot tell an anticipated award "
+                        f"from an unannounced one, so it is a disclosed "
+                        f"coincidence in time and does not establish that the "
+                        f"member knew of the award."
                     ),
                 }
             )

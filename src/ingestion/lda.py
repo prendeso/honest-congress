@@ -2,7 +2,8 @@
 
 Feeds `LobbyingDisclosure`, which `detect_lobbying_overlaps` reads to flag
 trades made close to a company's lobbying filing -- a market-wide signal that
-the issuer is actively trying to shape policy.
+the issuer disclosed lobbying (a quarterly report, so its date is a
+deadline, not when the lobbying happened).
 
 The API is official, public domain, and works without a key. A free key from
 https://lda.senate.gov/api/register/ raises the rate limit from roughly 15

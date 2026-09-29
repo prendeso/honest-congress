@@ -298,7 +298,7 @@ async def list_disclosures(
     total = query.count()
 
     # Apply server-side sorting
-    is_desc = sort_order.lower() == "desc"
+    is_desc = (sort_order or "").lower() == "desc"
     if sort_by == "member_name":
         query = query.order_by(
             Member.first_name.desc() if is_desc else Member.first_name.asc(),

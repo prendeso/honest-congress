@@ -237,6 +237,7 @@ class ThrottledClient:
             self._limiter.acquire()
             self.requests_made += 1
 
+            delay: float
             try:
                 if method == "GET":
                     # Unchanged, deliberately: the existing tests assert on
@@ -277,7 +278,7 @@ class ThrottledClient:
                 # not, and guessing shorter than the server asked for is how a
                 # throttle turns into a ban.
                 retry_after = response.headers.get("Retry-After")
-                delay: float = self._backoff[min(attempt, len(self._backoff) - 1)]
+                delay = self._backoff[min(attempt, len(self._backoff) - 1)]
                 if retry_after:
                     try:
                         delay = int(retry_after)

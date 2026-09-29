@@ -6,7 +6,7 @@ Extracts income types, amounts, and sources from FD filings.
 import logging
 import xml.etree.ElementTree as ET
 from decimal import Decimal
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from src.db.database import SessionLocal
 from src.db.models import Disclosure
@@ -63,7 +63,7 @@ class FDIncomeParser:
 
     def parse_fd_xml(self, xml_content: bytes) -> Dict[str, List[Dict]]:
         """Parse income information from FD XML."""
-        income_data = {
+        income_data: Dict[str, List[Dict]] = {
             "salary": [],
             "investment": [],
             "real_estate": [],
@@ -113,7 +113,7 @@ class FDIncomeParser:
 
     def analyze_income(self, income_data: Dict) -> Dict:
         """Analyze income data for anomalies."""
-        analysis = {}
+        analysis: Dict[str, Any] = {}
 
         total_income = Decimal(0)
         income_sources_count = sum(len(sources) for sources in income_data.values())

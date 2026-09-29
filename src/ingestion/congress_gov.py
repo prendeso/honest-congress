@@ -63,7 +63,7 @@ class CongressGovClient:
         """
         # Check cache
         if self._is_cache_valid():
-            members = self._members_cache
+            members = self._members_cache or []
         else:
             # Try unitedstates.io GitHub first (most reliable)
             members = self._fetch_from_unitedstates()
@@ -279,7 +279,7 @@ class CongressGovClient:
 
         try:
             url = f"{CONGRESS_GOV_BASE_URL}/member"
-            params = {
+            params: Dict[str, Any] = {
                 "currentMember": "true",
                 "limit": 250,
                 "api_key": self.api_key,

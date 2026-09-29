@@ -286,7 +286,7 @@ def ingest_lobbying_disclosures(
         """
         seen.clear()
         seen.update(
-            row[0]
+            row[0]  # type: ignore[misc]  # the query filters external_id IS NOT NULL
             for row in db.query(LobbyingDisclosure.external_id)
             .filter(
                 LobbyingDisclosure.source == SOURCE,

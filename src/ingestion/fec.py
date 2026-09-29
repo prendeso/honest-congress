@@ -326,7 +326,7 @@ def ingest_campaign_donations(
         """
         seen_sub_ids.clear()
         seen_sub_ids.update(
-            row[0]
+            row[0]  # type: ignore[misc]  # the query filters external_id IS NOT NULL
             for row in db.query(CampaignDonation.external_id)
             .filter(
                 CampaignDonation.source == SOURCE,
@@ -349,7 +349,7 @@ def ingest_campaign_donations(
     # snapshot never contained, so it cannot go stale in a direction that
     # matters.
     already_done: Set[str] = {
-        row[0]
+        row[0]  # type: ignore[misc]  # ticker is always set on an FEC row
         for row in db.query(CampaignDonation.ticker)
         .filter(
             CampaignDonation.cycle == str(cycle),

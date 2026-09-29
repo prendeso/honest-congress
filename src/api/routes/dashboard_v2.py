@@ -10,7 +10,7 @@ The HTML was extracted by `scripts/migrate_dashboard_to_templates.py`.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -232,8 +232,8 @@ async def get_insights(db: Session = Depends(get_db_session)) -> list[dict[str, 
             .order_by(Transaction.amount_max.desc())
             .first()
         )
-        if largest:
-            low, high = largest
+        if largest and largest[1] is not None:
+            low, high = largest[0], largest[1]
             # A band, said as a band. The filing does not contain a figure.
             band = f"${int(high):,}" if low is None else f"${int(low):,}–${int(high):,}"
             insights.append(
@@ -265,8 +265,8 @@ async def get_insights(db: Session = Depends(get_db_session)) -> list[dict[str, 
             from src.analysis.baselines import significance_summary
 
             summary = significance_summary(db)
-            survived = int(summary["findings_passing_fdr"])
-            tested = int(summary["findings_with_a_null_model"])
+            survived = int(cast(int, summary["findings_passing_fdr"]))
+            tested = int(cast(int, summary["findings_with_a_null_model"]))
             alpha = summary["fdr_alpha"]
 
             # The second number is the honest one and the more interesting one.

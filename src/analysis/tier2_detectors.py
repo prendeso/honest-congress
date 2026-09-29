@@ -190,10 +190,14 @@ def detect_donor_conflicts(
     # One query for every ticker any donation names, rather than one per
     # donation. This detector also filters on the donating member, which stays
     # a comparison in the loop -- a ticker's trades are a short list.
-    by_ticker = _trades_by_ticker(db, {d.ticker for d in donations})
+    by_ticker = _trades_by_ticker(db, {d.ticker for d in donations if d.ticker})
     delta = timedelta(days=window_days)
 
     for donation in donations:
+        # The query filters these out; the check says so to the type checker
+        # and would skip, rather than crash on, a row that slipped through.
+        if donation.donation_date is None or donation.ticker is None:
+            continue
         start = donation.donation_date - delta
         end = donation.donation_date + delta
 
@@ -263,6 +267,8 @@ def detect_lobbying_overlaps(
     delta = timedelta(days=window_days)
 
     for filing in filings:
+        if filing.filed_date is None:
+            continue
         start = filing.filed_date - delta
         end = filing.filed_date + delta
 
@@ -327,6 +333,8 @@ def detect_contract_front_runs(
     delta = timedelta(days=window_days)
 
     for contract in contracts:
+        if contract.awarded_date is None:
+            continue
         start = contract.awarded_date - delta
         end = contract.awarded_date
 

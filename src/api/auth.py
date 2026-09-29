@@ -55,7 +55,7 @@ def require_admin(x_admin_token: str | None = Header(None)) -> str:
 
     if not settings.admin_password:
         raise HTTPException(status_code=503, detail="Admin password not configured")
-    if not validate_admin_token(x_admin_token):
+    if x_admin_token is None or not validate_admin_token(x_admin_token):
         raise HTTPException(status_code=401, detail="Admin authorization required")
     return x_admin_token
 

@@ -503,7 +503,7 @@ class TradeAnalyzer:
         # The join is equivalent rather than merely similar: a filing with no
         # transactions contributed nothing to the loop before, and does not
         # appear in the join now.
-        rows = (
+        rows: Sequence[Any] = (
             db.query(Transaction, Disclosure)
             .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
             .filter(

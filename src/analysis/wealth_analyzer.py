@@ -166,7 +166,7 @@ class WealthAnalyzer:
         totals = self._net_worth_totals(db, [d.id for d in disclosures])
 
         # Calculate net worth for each year
-        net_worths = []
+        net_worths: List[Dict[str, Any]] = []
         for disclosure in disclosures:
             net_worth = self._calculate_net_worth(db, disclosure.id, totals=totals)
             net_worths.append(

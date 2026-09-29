@@ -388,7 +388,7 @@ pre-commit install     # ruff + format + trailing-whitespace + check-yaml
 
 ruff check .           # lint
 ruff format .          # format
-mypy src               # types (non-strict, advisory)
+mypy src               # types (non-strict; blocking in CI)
 pytest
 pytest --cov=src       # coverage report
 ```

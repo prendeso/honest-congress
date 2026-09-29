@@ -38,10 +38,10 @@ jobs:
       # `-e .[dev]` then adds only the dev tools on top.
       - run: pip install -r requirements.txt
       - run: pip install -e .[dev]
-      # Mypy runs in non-strict mode for now — see [tool.mypy] in pyproject.
-      # Failures here are aspirational, not blocking, until we annotate more.
+      # Non-strict (see [tool.mypy] in pyproject), and BLOCKING. It used to
+      # carry continue-on-error with 103 errors behind it, most of them nullable
+      # columns used without a check. At zero, a new one fails the build.
       - run: mypy src
-        continue-on-error: true
 
   test:
     name: Tests

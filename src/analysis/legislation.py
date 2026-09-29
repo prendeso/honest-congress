@@ -157,7 +157,8 @@ def detect_sponsorship_conflicts(
 
     for sponsorship, bill in sponsorships:
         sectors = set(policy_area_sectors(bill.policy_area))
-        if not sectors:
+        introduced = bill.introduced_date
+        if not sectors or introduced is None:
             continue
 
         member = members.get(sponsorship.member_id)
@@ -165,12 +166,12 @@ def detect_sponsorship_conflicts(
         if member is None or not transactions:
             continue
 
-        matched = _matching_trades(transactions, sectors, bill.introduced_date, window_days, index)
+        matched = _matching_trades(transactions, sectors, introduced, window_days, index)
         if not matched:
             continue
 
         tickers, count = _describe(matched)
-        closest = min(abs((t.transaction_date - bill.introduced_date).days) for t in matched)
+        closest = min(abs((t.transaction_date - introduced).days) for t in matched)
         sector_list = ", ".join(sorted(sectors))
 
         anomalies.append(
@@ -192,7 +193,7 @@ def detect_sponsorship_conflicts(
                 "threshold_value": Decimal(str(window_days)),
                 "description": (
                     f"The member sponsored {bill.citation} ({bill.congress}th Congress), "
-                    f"introduced {bill.introduced_date.date()}, which CRS classifies under "
+                    f"introduced {introduced.date()}, which CRS classifies under "
                     f'"{bill.policy_area}" -- covering the {sector_list} sector. '
                     f"They disclosed {count} trade(s) in that sector within {window_days} days "
                     f"of introduction, the closest {closest} day(s) away"
@@ -234,7 +235,8 @@ def detect_bill_jurisdiction_conflicts(
 
     for referral, bill in referrals:
         sectors = set(policy_area_sectors(bill.policy_area))
-        if not sectors:
+        referred = referral.activity_date
+        if not sectors or referred is None:
             continue
         parent = _parent_committee(referral.committee_id)
         if not parent:
@@ -248,14 +250,12 @@ def detect_bill_jurisdiction_conflicts(
             if member is None or not transactions:
                 continue
 
-            matched = _matching_trades(
-                transactions, sectors, referral.activity_date, window_days, index
-            )
+            matched = _matching_trades(transactions, sectors, referred, window_days, index)
             if not matched:
                 continue
 
             tickers, count = _describe(matched)
-            closest = min(abs((t.transaction_date - referral.activity_date).days) for t in matched)
+            closest = min(abs((t.transaction_date - referred).days) for t in matched)
             committee_name = referral.committee_name or member_seats[parent]
             sector_list = ", ".join(sorted(sectors))
             activity = (referral.activity or "referred").lower()
@@ -282,7 +282,7 @@ def detect_bill_jurisdiction_conflicts(
                     "threshold_value": Decimal(str(window_days)),
                     "description": (
                         f"{bill.citation} ({bill.congress}th Congress) was {activity} "
-                        f"{committee_name} on {referral.activity_date.date()}. The member sits "
+                        f"{committee_name} on {referred.date()}. The member sits "
                         f"on that committee, and disclosed {count} trade(s) in the "
                         f"{sector_list} sector within {window_days} days of that date, the "
                         f"closest {closest} day(s) away"

@@ -114,70 +114,72 @@ async def list_members(
     total = query.count()
 
     # Apply server-side sorting using materialized columns
-    from sqlalchemy import asc, desc
-
     if sort_order == "desc":
         if sort_by == "name":
-            query = query.order_by(desc(Member.first_name), desc(Member.last_name))
+            query = query.order_by(Member.first_name.desc(), Member.last_name.desc())
         elif sort_by == "party":
             query = query.order_by(
-                desc(Member.party), asc(Member.first_name), asc(Member.last_name)
+                Member.party.desc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "state":
             query = query.order_by(
-                desc(Member.state), asc(Member.first_name), asc(Member.last_name)
+                Member.state.desc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "chamber":
             query = query.order_by(
-                desc(Member.chamber), asc(Member.first_name), asc(Member.last_name)
+                Member.chamber.desc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "district":
             query = query.order_by(
-                desc(Member.district), asc(Member.first_name), asc(Member.last_name)
+                Member.district.desc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "status":
             query = query.order_by(
-                desc(Member.in_office), asc(Member.first_name), asc(Member.last_name)
+                Member.in_office.desc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "anomalies":
             query = query.order_by(
-                desc(Member.anomaly_count), asc(Member.first_name), asc(Member.last_name)
+                Member.anomaly_count.desc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "disclosures":
             query = query.order_by(
-                desc(Member.disclosure_count), asc(Member.first_name), asc(Member.last_name)
+                Member.disclosure_count.desc(), Member.first_name.asc(), Member.last_name.asc()
             )
         else:
-            query = query.order_by(desc(Member.first_name), desc(Member.last_name))
+            query = query.order_by(Member.first_name.desc(), Member.last_name.desc())
     else:  # asc
         if sort_by == "name":
-            query = query.order_by(asc(Member.first_name), asc(Member.last_name))
+            query = query.order_by(Member.first_name.asc(), Member.last_name.asc())
         elif sort_by == "party":
-            query = query.order_by(asc(Member.party), asc(Member.first_name), asc(Member.last_name))
+            query = query.order_by(
+                Member.party.asc(), Member.first_name.asc(), Member.last_name.asc()
+            )
         elif sort_by == "state":
-            query = query.order_by(asc(Member.state), asc(Member.first_name), asc(Member.last_name))
+            query = query.order_by(
+                Member.state.asc(), Member.first_name.asc(), Member.last_name.asc()
+            )
         elif sort_by == "chamber":
             query = query.order_by(
-                asc(Member.chamber), asc(Member.first_name), asc(Member.last_name)
+                Member.chamber.asc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "district":
             query = query.order_by(
-                asc(Member.district), asc(Member.first_name), asc(Member.last_name)
+                Member.district.asc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "status":
             query = query.order_by(
-                asc(Member.in_office), asc(Member.first_name), asc(Member.last_name)
+                Member.in_office.asc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "anomalies":
             query = query.order_by(
-                asc(Member.anomaly_count), asc(Member.first_name), asc(Member.last_name)
+                Member.anomaly_count.asc(), Member.first_name.asc(), Member.last_name.asc()
             )
         elif sort_by == "disclosures":
             query = query.order_by(
-                asc(Member.disclosure_count), asc(Member.first_name), asc(Member.last_name)
+                Member.disclosure_count.asc(), Member.first_name.asc(), Member.last_name.asc()
             )
         else:
-            query = query.order_by(asc(Member.first_name), asc(Member.last_name))
+            query = query.order_by(Member.first_name.asc(), Member.last_name.asc())
 
     # A unique final tiebreak. Without it the sort keys above have ties --
     # thousands of rows share a severity, a filing year, a disclosure count --

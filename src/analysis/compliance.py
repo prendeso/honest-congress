@@ -51,7 +51,7 @@ def _median(values: List[int]) -> float:
 
 def member_compliance(db: Session, member: Member) -> Dict[str, Any] | None:
     """Filing punctuality for one member, or None if nothing is checkable."""
-    rows = (
+    rows: Sequence[Any] = (
         db.query(Transaction, Disclosure)
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
         .filter(

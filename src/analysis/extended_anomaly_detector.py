@@ -343,7 +343,7 @@ class ExtendedAnomalyDetector:
         """Check for unusual trading volume spikes."""
         from src.analysis import transaction_amount
 
-        anomalies = []
+        anomalies: List[Dict] = []
 
         amounts = [transaction_amount(t) for t in trades]
         amounts = [a for a in amounts if a > 0]

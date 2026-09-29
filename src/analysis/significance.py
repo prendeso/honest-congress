@@ -147,7 +147,10 @@ class NullSpec:
     description: str = field(default="")
 
 
-def _days(value: datetime) -> float:
+def _days(value: datetime | None) -> float:
+    # Every caller's query filters the date IS NOT NULL; the columns are
+    # nullable, so the type says otherwise and this says which is right.
+    assert value is not None, "a date the query filtered on came back NULL"
     return value.toordinal()
 
 
@@ -390,8 +393,8 @@ def _collect_donor(db: Session) -> Dict[int, Streams]:
 
     for member_id, by_ticker in events.items():
         member_trades: Dict[str, List[float]] = defaultdict(list)
-        for ticker, when, _ in trades.get(member_id, []):
-            member_trades[ticker].append(when)
+        for ticker, day, _ in trades.get(member_id, []):
+            member_trades[ticker].append(day)
         for ticker, dates in by_ticker.items():
             if member_trades.get(ticker):
                 streams[member_id][ticker] = (member_trades[ticker], dates)
@@ -413,9 +416,9 @@ def _collect_lobbying(db: Session) -> Dict[int, Streams]:
     streams: Dict[int, Streams] = defaultdict(dict)
     for member_id, member_trades in trades.items():
         by_ticker: Dict[str, List[float]] = defaultdict(list)
-        for ticker, when, _ in member_trades:
+        for ticker, day, _ in member_trades:
             if ticker in filings:
-                by_ticker[ticker].append(when)
+                by_ticker[ticker].append(day)
         for ticker, dates in by_ticker.items():
             streams[member_id][ticker] = (dates, filings[ticker])
     return streams
@@ -443,9 +446,9 @@ def _collect_contracts(db: Session) -> Dict[int, Streams]:
     streams: Dict[int, Streams] = defaultdict(dict)
     for member_id, member_trades in trades.items():
         by_ticker: Dict[str, List[float]] = defaultdict(list)
-        for ticker, when, is_purchase in member_trades:
+        for ticker, day, is_purchase in member_trades:
             if is_purchase and ticker in awards:
-                by_ticker[ticker].append(when)
+                by_ticker[ticker].append(day)
         for ticker, dates in by_ticker.items():
             streams[member_id][ticker] = (dates, awards[ticker])
     return streams

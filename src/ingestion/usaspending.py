@@ -388,7 +388,7 @@ def ingest_government_contracts(
         """
         seen.clear()
         seen.update(
-            row[0]
+            row[0]  # type: ignore[misc]  # the query filters external_id IS NOT NULL
             for row in db.query(GovernmentContract.external_id)
             .filter(
                 GovernmentContract.source == SOURCE,

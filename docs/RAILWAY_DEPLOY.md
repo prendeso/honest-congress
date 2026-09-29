@@ -215,9 +215,11 @@ feed failed, after the analysis has run, so GitHub's standard failure email
 reaches the repository owner. Make sure Actions notifications are on under
 **GitHub → Settings → Notifications → Actions**.
 
-Add an external uptime check on `https://<your-domain>/health` (UptimeRobot,
-Better Stack, Railway's own monitoring — any of them) so an outage of the web
-service is noticed too; nothing in the repo can watch the site from outside.
+`.github/workflows/uptime.yml` checks `/health` every 30 minutes and fails
+(so GitHub emails) after three misses. It reads the repository variable
+`PUBLIC_URL`, defaulting to the Railway domain; set it when you move to a custom
+domain. GitHub's scheduler is best effort, so also add a dedicated monitor
+(UptimeRobot, Better Stack, Railway's own) on the same URL.
 
 ### Rolling back
 

@@ -1,0 +1,43 @@
+name: Uptime
+
+# Is the public site answering, and can it reach its database?
+#
+# Nothing watched the web service from outside. Railway restarts a container
+# that fails its healthcheck, but a service that is down for longer -- a failed
+# deploy, an exhausted trial credit, a Postgres outage -- stayed down until
+# somebody happened to open the site. A failed scheduled run is the one alert
+# GitHub sends without a secret or an integration to configure.
+#
+# GitHub's scheduler is best effort, so runs can arrive late or be skipped
+# under load. Treat this as a floor, not a pager: a dedicated monitor
+# (UptimeRobot, Better Stack) on the same URL is still worth adding.
+#
+# Set the repository variable PUBLIC_URL (Settings -> Secrets and variables ->
+# Actions -> Variables) when the site moves to its own domain.
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check /health
+        env:
+          URL: ${{ vars.PUBLIC_URL || 'https://honest-congress-production.up.railway.app' }}
+        run: |
+          # Three tries a minute apart, so one dropped connection is not an alert.
+          for attempt in 1 2 3; do
+            code=$(curl -s -o body.json -w '%{http_code}' --max-time 20 "$URL/health" || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "healthy: $(cat body.json)"
+              exit 0
+            fi
+            echo "attempt $attempt: HTTP $code $(cat body.json 2>/dev/null)"
+            [ "$attempt" -lt 3 ] && sleep 60
+          done
+          echo "::error::$URL/health did not return 200 after three attempts (last: HTTP $code). A 503 means the app is up but cannot reach Postgres."
+          exit 1

@@ -73,6 +73,9 @@ class AnomalySummaryResponse(BaseModel):
     """Summary of anomalies by type and severity."""
 
     total_anomalies: int
+    # Findings left out of `total_anomalies` for failing FDR correction; 0 when
+    # the caller asked for them to be included.
+    withheld_below_fdr: int = 0
     by_type: dict
     by_severity: dict
     by_party: dict

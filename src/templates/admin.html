@@ -328,7 +328,7 @@
                     const [members, disclosures, anomalies] = await Promise.all([
                         fetch('/api/members?page_size=1').then(r => r.json()),
                         fetch('/api/disclosures?page_size=1').then(r => r.json()),
-                        fetch('/api/anomalies/summary').then(r => r.json())
+                        fetch('/api/anomalies/summary?include_below_fdr=true').then(r => r.json())
                     ]);
                     this.stats = {
                         members: members.total || 0,

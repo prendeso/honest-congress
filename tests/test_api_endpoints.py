@@ -751,3 +751,39 @@ class TestTheParsedDocumentsPageHasSomethingToShow:
 
         counting = [s for s in statements if "count(" in s.lower() and "GROUP BY" in s]
         assert len(counting) <= 3, f"{len(counting)} grouped count queries: {counting}"
+
+
+class TestTheSummaryCountsWhatTheListShows:
+    """The headline tiles counted findings the list endpoint withholds."""
+
+    def _withheld(self, seeded_db):
+        db = SessionLocal()
+        member = db.query(Member).first()
+        db.add(
+            Anomaly(
+                member_id=member.id,
+                anomaly_type="donor_conflict",
+                severity="high",
+                title="Withheld by FDR",
+                description="x",
+                p_value=0.5,
+                q_value=0.9,
+            )
+        )
+        db.commit()
+        db.close()
+
+    def test_a_finding_that_failed_fdr_is_not_in_the_default_total(self, client, seeded_db):
+        self._withheld(seeded_db)
+        body = client.get("/api/anomalies/summary").json()
+        listed = client.get("/api/anomalies/").json()["total"]
+
+        assert body["total_anomalies"] == listed == 1
+        assert body["withheld_below_fdr"] == 1
+        assert "donor_conflict" not in body["by_type"]
+
+    def test_asking_for_everything_counts_everything(self, client, seeded_db):
+        self._withheld(seeded_db)
+        body = client.get("/api/anomalies/summary?include_below_fdr=true").json()
+        assert body["total_anomalies"] == 2
+        assert body["withheld_below_fdr"] == 0

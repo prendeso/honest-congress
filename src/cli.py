@@ -610,6 +610,9 @@ def cmd_significance(args):
 
     with get_db() as db:
         result = annotate_significance(db, permutations=permutations, alpha=alpha, seed=args.seed)
+        # The per-member count shown on the members page counts only findings
+        # that pass this correction, so it moves whenever the q-values do.
+        recalculate_member_counts(db)
 
     print("\nSignificance complete:")
     print(f"  Tests run: {result['tests']}")

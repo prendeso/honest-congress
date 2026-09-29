@@ -201,3 +201,27 @@ class TestMembersApiSortingUsesLiveCounts:
         body = r.json()
         assert body["total"] == 1
         assert body["members"][0]["anomaly_count"] == 3
+
+
+class TestTheCountIsOfWhatTheSiteShows:
+    """The members table shows this number beside each name and sorts by it.
+
+    It counted findings `GET /api/anomalies/` withholds for failing FDR
+    correction, so it ranked people by exactly the noise the correction exists
+    to hold back.
+    """
+
+    def test_a_finding_withheld_by_fdr_is_not_counted(self, db_session):
+        m = _member(db_session, "C000020", "Zeta")
+        shown = _anomaly(db_session, m, "untested magnitude finding")
+        withheld = _anomaly(db_session, m, "failed the correction")
+        withheld.q_value = 0.9
+        passed = _anomaly(db_session, m, "passed the correction")
+        passed.q_value = 0.01
+        db_session.commit()
+
+        recalculate_member_counts(db_session)
+        db_session.refresh(m)
+
+        assert shown.q_value is None
+        assert m.anomaly_count == 2

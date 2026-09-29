@@ -13,9 +13,10 @@ per-member increment/decrement helpers were unused, and two of them called
 
 from typing import Dict
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from src.config import get_settings
 from src.db import Anomaly, Disclosure, Member
 
 
@@ -31,8 +32,17 @@ def recalculate_member_counts(db: Session) -> Dict[str, int]:
     disclosure_count = (
         select(func.count(Disclosure.id)).where(Disclosure.member_id == Member.id).scalar_subquery()
     )
+    # Only the findings the site shows: the members table displays this beside
+    # each name and sorts by it, and counting the ones `GET /api/anomalies/`
+    # withholds for failing FDR correction ranked people by exactly the noise
+    # the correction exists to hold back. Same filter as that endpoint -- a
+    # NULL q-value is "untested", not "failed", and is counted.
+    alpha = get_settings().fdr_alpha
     anomaly_count = (
-        select(func.count(Anomaly.id)).where(Anomaly.member_id == Member.id).scalar_subquery()
+        select(func.count(Anomaly.id))
+        .where(Anomaly.member_id == Member.id)
+        .where(or_(Anomaly.q_value.is_(None), Anomaly.q_value <= alpha))
+        .scalar_subquery()
     )
 
     db.query(Member).update({"disclosure_count": disclosure_count}, synchronize_session=False)

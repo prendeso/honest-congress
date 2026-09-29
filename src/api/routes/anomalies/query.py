@@ -161,28 +161,56 @@ async def list_anomalies(
 
 
 @router.get("/summary", response_model=AnomalySummaryResponse)
-async def get_anomaly_summary(db: Session = Depends(get_db_session)):
-    """Get summary statistics of all anomalies."""
-    total = db.query(Anomaly).count()
+async def get_anomaly_summary(
+    include_below_fdr: bool = Query(
+        False,
+        description=(
+            "Count findings that did not survive false-discovery-rate correction. "
+            "Off by default, the same as the list endpoint, so the totals describe "
+            "the findings the site actually shows."
+        ),
+    ),
+    db: Session = Depends(get_db_session),
+):
+    """Counts of the findings the list endpoint serves, by type, severity, party and chamber.
+
+    These counted every row, including the ones `GET /api/anomalies/` withholds
+    for failing FDR correction. On the live site that was 5,717 against the
+    ~1,600 a visitor could actually see, and the home page and the anomalies
+    page both put the larger number in their headline tiles -- along with a
+    party split of findings the site itself declines to show. The filter is the
+    list endpoint's own, and the withheld count is reported beside it.
+    """
+    alpha = get_settings().fdr_alpha
+    shown = or_(Anomaly.q_value.is_(None), Anomaly.q_value <= alpha)
+
+    def scoped(query):
+        return query if include_below_fdr else query.filter(shown)
+
+    total = scoped(db.query(Anomaly)).count()
+    withheld = 0 if include_below_fdr else db.query(Anomaly).filter(~shown).count()
 
     by_type_raw = (
-        db.query(Anomaly.anomaly_type, func.count(Anomaly.id)).group_by(Anomaly.anomaly_type).all()
+        scoped(db.query(Anomaly.anomaly_type, func.count(Anomaly.id)))
+        .group_by(Anomaly.anomaly_type)
+        .all()
     )
     by_type: dict[str, int] = {row[0]: row[1] for row in by_type_raw}
 
     by_severity_raw = (
-        db.query(Anomaly.severity, func.count(Anomaly.id)).group_by(Anomaly.severity).all()
+        scoped(db.query(Anomaly.severity, func.count(Anomaly.id))).group_by(Anomaly.severity).all()
     )
     by_severity: dict[str, int] = {row[0]: row[1] for row in by_severity_raw}
 
     by_party_raw = (
-        db.query(Member.party, func.count(Anomaly.id)).join(Anomaly).group_by(Member.party).all()
+        scoped(db.query(Member.party, func.count(Anomaly.id)).join(Anomaly))
+        .group_by(Member.party)
+        .all()
     )
     by_party = {p.value: c for p, c in by_party_raw}
 
     by_chamber_raw = (
-        db.query(Member.chamber, func.count(Anomaly.id))
-        .join(Anomaly)
+        scoped(db.query(Member.chamber, func.count(Anomaly.id)).join(Anomaly))
         .group_by(Member.chamber)
         .all()
     )
@@ -190,6 +218,7 @@ async def get_anomaly_summary(db: Session = Depends(get_db_session)):
 
     return AnomalySummaryResponse(
         total_anomalies=total,
+        withheld_below_fdr=withheld,
         by_type=by_type,
         by_severity=by_severity,
         by_party=by_party,

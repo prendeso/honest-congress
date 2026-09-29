@@ -56,3 +56,17 @@ def test_the_script_versions_are_pinned():
 
     base = (Path(__file__).resolve().parents[1] / "src" / "templates" / "base.html").read_text()
     assert "@3.x.x" not in base
+
+
+def test_each_summary_tile_asks_for_the_count_its_label_describes():
+    """The anomalies page labels its tile "every detection, including those that
+    failed correction"; the home page's "Flags" tile is what the site shows."""
+    from pathlib import Path
+
+    templates = Path(__file__).resolve().parents[1] / "src" / "templates"
+    anomalies = (templates / "anomalies.html").read_text()
+    home = (templates / "home.html").read_text()
+
+    assert "including those that failed correction" in anomalies
+    assert "/api/anomalies/summary?include_below_fdr=true" in anomalies
+    assert "fetch('/api/anomalies/summary')" in home

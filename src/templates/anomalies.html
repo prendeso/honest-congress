@@ -27,7 +27,9 @@
                     <div class="text-gray-500 text-sm font-medium">Findings detected</div>
                     <div class="text-3xl font-bold text-red-600" x-text="stats.totalAnomalies">-</div>
                     <!-- This is the whole corpus, which is a larger number than
-                         the list below can reach. Said here, so the difference
+                         the list below can reach -- so it asks /summary for
+                         include_below_fdr=true, the one caller besides the admin
+                         panel that wants the unfiltered count. Said here, so the difference
                          reads as a stated policy rather than as an arithmetic
                          error the reader has to catch. -->
                     <div class="text-gray-400 text-[11px] mt-1">every detection, including those that failed correction</div>
@@ -512,7 +514,7 @@
                             fetch('/api/members?page_size=1').then(r => r.json()),
                             fetch('/api/disclosures?page_size=1&is_ptr=false').then(r => r.json()),
                             fetch('/api/disclosures?page_size=1&is_ptr=true').then(r => r.json()),
-                            fetch('/api/anomalies/summary').then(r => r.json())
+                            fetch('/api/anomalies/summary?include_below_fdr=true').then(r => r.json())
                         ]);
                         this.stats = { 
                             totalMembers: m.total || 0, 

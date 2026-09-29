@@ -100,7 +100,9 @@ DETECTORS: List[Detector] = [
     ),
     Detector(
         "contract_front_run",
-        "Contract Front-Run",
+        # Not "Front-Run": that word means trading on advance knowledge, which
+        # is the one thing this detector cannot show.
+        "Purchase Before Contract Award",
         "The member bought a company's stock shortly before that company was "
         "awarded a federal contract.",
         "Purchases only, and many awards are publicly anticipated long before "

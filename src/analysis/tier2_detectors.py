@@ -346,7 +346,7 @@ def detect_contract_front_runs(
                     "anomaly_type": "contract_front_run",
                     "severity": "HIGH",
                     "title": (
-                        f"Contract front-run: bought {contract.ticker} {days_before}d before award"
+                        f"Bought {contract.ticker} {days_before}d before a federal contract award"
                     ),
                     "transaction_id": txn.id,
                     "computed_value": Decimal(str(days_before)),

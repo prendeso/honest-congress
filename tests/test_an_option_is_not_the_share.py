@@ -126,7 +126,7 @@ class TestWhatGetsPublished:
     def test_the_standing_caveat_survives_either_way(self):
         for description in ("... (MSFT) [OP]", "... (MSFT) [ST]"):
             assert (
-                "Large transactions warrant additional scrutiny."
+                "nothing about the trade's timing or purpose"
                 in (self._text(description, ticker="MSFT")["description"])
             )
 

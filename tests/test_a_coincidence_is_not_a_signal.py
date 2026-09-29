@@ -113,3 +113,17 @@ def test_the_purge_removes_what_the_old_code_wrote(kind):
     from src.cli import _SUPERSEDED_WORDING
 
     assert (kind, "description", OLD[kind]) in _SUPERSEDED_WORDING
+
+
+def test_the_contract_title_does_not_name_the_act(db_session):
+    """ "Front-run" means trading on advance knowledge -- the one thing this
+    detector cannot show."""
+    (finding,) = _contract(db_session)
+    assert "front-run" not in finding["title"].lower()
+    assert finding["title"] == "Bought RTX 5d before a federal contract award"
+
+
+def test_the_old_contract_title_is_purged():
+    from src.cli import _SUPERSEDED_WORDING
+
+    assert ("contract_front_run", "title", "Contract front-run:") in _SUPERSEDED_WORDING

@@ -1002,6 +1002,11 @@ _SUPERSEDED_WORDING = (
     ("contract_front_run", "description", "clearest insider-information signals"),
     ("donor_conflict", "description", "raise conflict-of-interest concerns"),
     ("lobbying_overlap", "description", "actively trying to shape federal policy"),
+    # And the contract title named the act itself: "Contract front-run: bought
+    # PPG 17d before award". Front-running is trading on advance knowledge --
+    # the claim the description now disclaims -- so the title says what
+    # happened instead: "Bought PPG 17d before a federal contract award".
+    ("contract_front_run", "title", "Contract front-run:"),
     ("high_trading_frequency", "title", "High trading activity: 10-15 trades"),
     ("high_trading_frequency", "title", "High trading activity: 15-25 trades"),
     ("high_trading_frequency", "title", "High trading activity: 25-50 trades"),

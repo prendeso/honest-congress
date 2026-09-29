@@ -336,7 +336,14 @@ class TradeAnalyzer:
                 "value the filing reports for the transaction, not the value of "
                 "the underlying shares."
             )
-        description += " Large transactions warrant additional scrutiny."
+        # This used to close on "Large transactions warrant additional
+        # scrutiny" -- beside a Treasury bill sale and a family LLC interest as
+        # readily as a stock. Size is all this detector measures, so size is all
+        # the sentence may claim.
+        description += (
+            " This records the size the filing reports and nothing about the"
+            " trade's timing or purpose."
+        )
         return {"title": title, "description": description}
 
     def _sync_large_trade_anomalies(self, db: Session, member_id: int | None = None) -> None:

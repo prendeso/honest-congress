@@ -125,3 +125,51 @@ class TestTheStoredGradeIsRewritten:
         result = annotate_percentile_ranks(db_session)
 
         assert result["regraded"] >= 20
+
+
+class TestCloserIsStrongerForTheTimingTypes:
+    """For a trade matched to an event, `computed_value` is the gap in days.
+
+    A trade the day before a contract award is the stronger finding, and it was
+    graded `low`, while one at the far edge of the window was graded `high`.
+    Live: every `high` committee-bill finding sat 50-60 days from its referral.
+    """
+
+    @pytest.mark.parametrize(
+        "anomaly_type",
+        [
+            "donor_conflict",
+            "lobbying_overlap",
+            "contract_front_run",
+            "sponsorship_conflict",
+            "bill_jurisdiction_conflict",
+        ],
+    )
+    def test_the_closest_trade_is_graded_high(self, db_session, anomaly_type):
+        member = _member(db_session, "SV00010")
+        rows = [_anomaly(db_session, member, v, anomaly_type=anomaly_type) for v in range(0, 20)]
+
+        annotate_percentile_ranks(db_session)
+        for row in rows:
+            db_session.refresh(row)
+
+        closest = min(rows, key=lambda r: float(r.computed_value))
+        farthest = max(rows, key=lambda r: float(r.computed_value))
+
+        assert closest.severity == "high"
+        assert closest.percentile_rank == 100.0
+        assert farthest.severity == "low", (
+            "a trade at the edge of the window is the weakest coincidence of its type"
+        )
+
+    def test_a_long_delay_is_still_the_stronger_late_filing(self, db_session):
+        """`late_filing` is also counted in days, and there more is worse."""
+        member = _member(db_session, "SV00011")
+        rows = [_anomaly(db_session, member, v, anomaly_type="late_filing") for v in range(46, 66)]
+
+        annotate_percentile_ranks(db_session)
+        for row in rows:
+            db_session.refresh(row)
+
+        assert max(rows, key=lambda r: float(r.computed_value)).severity == "high"
+        assert min(rows, key=lambda r: float(r.computed_value)).severity == "low"

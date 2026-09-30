@@ -98,6 +98,42 @@ def percentile_rank(value: float, population: Sequence[float]) -> float:
     return round(at_or_below / len(population) * 100, 2)
 
 
+# Types whose `computed_value` is how many days separate a trade from the event
+# it is matched to. For these a SMALLER number is the stronger finding: a trade
+# the day before a contract award is more striking than one 29 days before it.
+#
+# They were ranked like every other type, largest first, and so graded exactly
+# backwards. Measured on the live corpus: every `high` committee-bill finding
+# sat 50-60 days from its referral, every `high` lobbying finding 28-30 days
+# from its filing, every `high` donor finding 79-90 days from its donation --
+# the edge of each window -- while trades 0 days from the event were `low`.
+# About 4,700 findings were mis-graded, 551 of them published as `high`.
+#
+# Declared as a set, not inferred from a unit: `late_filing` is also counted in
+# days, and there a larger number IS the stronger finding.
+SMALLER_IS_MORE_EXTREME = frozenset(
+    {
+        "donor_conflict",
+        "lobbying_overlap",
+        "contract_front_run",
+        "sponsorship_conflict",
+        "bill_jurisdiction_conflict",
+    }
+)
+
+
+def proximity_rank(value: float, population: Sequence[float]) -> float:
+    """`percentile_rank` for a type where closer is stronger, 0-100.
+
+    Percentage of the population at or ABOVE `value`, so the smallest gap ranks
+    100 and ties share a rank -- the mirror of `percentile_rank`.
+    """
+    if not population:
+        return 0.0
+    at_or_above = sum(1 for item in population if item >= value)
+    return round(at_or_above / len(population) * 100, 2)
+
+
 # Where a finding has to sit among others of its own type to be graded high or
 # medium. Chosen so the words mean what a reader takes them to mean: "high" is
 # the top tenth, "medium" is the upper half, and everything else is low.
@@ -174,8 +210,9 @@ def annotate_percentile_ranks(db: Session) -> Dict[str, int]:
             (row, float(row.computed_value)) for row in rows if row.computed_value is not None
         ]
         population = [value for _, value in valued]
+        rank = proximity_rank if anomaly_type in SMALLER_IS_MORE_EXTREME else percentile_rank
         for row, value in valued:
-            row.percentile_rank = percentile_rank(value, population)
+            row.percentile_rank = rank(value, population)
             row.severity = severity_from_percentile(row.percentile_rank)
             regraded += 1
             ranked += 1

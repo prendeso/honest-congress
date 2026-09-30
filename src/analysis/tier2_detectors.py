@@ -74,6 +74,14 @@ def award_action_criteria() -> List[Any]:
     a deobligation, and dropping it would quietly narrow coverage on the
     strength of a missing field.
 
+    A **modification** is excluded too. Most positive-dollar actions are not a
+    contract being awarded but money added to one signed years earlier --
+    incremental funding, an option exercised. Checked against USASpending, 183
+    of 437 published front-run findings pointed at one: Bell Textron's FLRAA
+    contract, signed 2022-12-05, was reported as "awarded" on 2026-04-02 because
+    $336M of funding was added to it that day. A row whose modification status
+    is unknown is kept, on the same reasoning as a missing amount.
+
     This is one function rather than a filter written twice because
     :func:`src.analysis.significance._collect_contracts` builds the null model
     from the same table. If the detector and its null model disagree about which
@@ -84,6 +92,10 @@ def award_action_criteria() -> List[Any]:
     return [
         GovernmentContract.awarded_date.isnot(None),
         or_(GovernmentContract.amount.is_(None), GovernmentContract.amount > 0),
+        or_(
+            GovernmentContract.is_modification.is_(None),
+            GovernmentContract.is_modification.is_(False),
+        ),
     ]
 
 
@@ -352,8 +364,9 @@ def detect_contract_front_runs(
                         f"{days_before} days before the company was awarded a "
                         f"federal contract by {contract.agency or 'a federal agency'} "
                         f"on {contract.awarded_date.strftime('%Y-%m-%d')}{amount_str}. "
-                        f"Buying ahead of a public contract award is one of the "
-                        f"clearest insider-information signals available."
+                        f"The purchase and the award are both public record; this is "
+                        f"a disclosed coincidence in time. Many awards are publicly "
+                        f"anticipated, and nothing here shows the member knew of this one."
                     ),
                 }
             )

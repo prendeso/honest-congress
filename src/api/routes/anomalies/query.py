@@ -143,8 +143,8 @@ async def list_anomalies(
                 severity=a.severity,
                 title=a.title,
                 description=a.description,
-                computed_value=float(a.computed_value) if a.computed_value else None,
-                threshold_value=float(a.threshold_value) if a.threshold_value else None,
+                computed_value=float(a.computed_value) if a.computed_value is not None else None,
+                threshold_value=float(a.threshold_value) if a.threshold_value is not None else None,
                 detected_at=a.detected_at,
                 reviewed=a.reviewed,
                 disclosure_id=a.disclosure_id,
@@ -238,8 +238,12 @@ async def get_anomaly(
         severity=anomaly.severity,
         title=anomaly.title,
         description=anomaly.description,
-        computed_value=float(anomaly.computed_value) if anomaly.computed_value else None,
-        threshold_value=float(anomaly.threshold_value) if anomaly.threshold_value else None,
+        computed_value=float(anomaly.computed_value)
+        if anomaly.computed_value is not None
+        else None,
+        threshold_value=float(anomaly.threshold_value)
+        if anomaly.threshold_value is not None
+        else None,
         detected_at=anomaly.detected_at,
         reviewed=anomaly.reviewed,
         disclosure_id=anomaly.disclosure_id,

@@ -1071,6 +1071,12 @@ _SUPERSEDED_WORDING = (
     # The corrected detector names the filings it compared rather than only the
     # years, so "would not explain" is a phrase it can no longer write.
     ("excessive_wealth_growth", "description", "would not explain"),
+    # `contract_front_run` closed every finding with "one of the clearest
+    # insider-information signals available", whatever its q-value -- and the
+    # live ones ran 0.75 to 0.98, which is to say indistinguishable from chance.
+    # A transaction-level finding keeps its identity when its description
+    # changes, so without this the sentence is served for ever.
+    ("contract_front_run", "description", "clearest insider-information signals"),
 )
 
 

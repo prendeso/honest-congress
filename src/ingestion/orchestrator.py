@@ -1108,7 +1108,9 @@ class IngestionOrchestrator:
                 self._clear_parsed_rows(
                     db,
                     disclosure,
-                    (parsed.get("assets") or []) + (parsed.get("liabilities") or []),
+                    (parsed.get("assets") or [])
+                    + (parsed.get("liabilities") or [])
+                    + (parsed.get("transactions") or []),
                 )
                 self._store_fd_data(db, disclosure, parsed)
                 text_extracted = bool((parsed.get("raw_text") or "").strip())

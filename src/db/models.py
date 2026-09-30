@@ -622,8 +622,9 @@ class GovernmentContract(Base):
 
     Sourced from USASpending (`src.ingestion.usaspending`). The
     detector flags PURCHASE transactions in `ticker` made within
-    ``contract_window_days`` *before* `awarded_date` — front-running an
-    award is the clearest insider signal in this dataset.
+    ``contract_window_days`` *before* `awarded_date`. A row is an award
+    ACTION: see `is_modification` for the ones that add to an existing
+    contract rather than award one.
     """
 
     __tablename__ = "government_contracts"
@@ -638,6 +639,10 @@ class GovernmentContract(Base):
 
     source: Mapped[str] = mapped_column(String(50), default="unknown")
     external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # True when this action modifies an existing contract (USASpending `Mod`
+    # other than zero) -- added funding, an option exercised -- rather than
+    # awarding one. NULL when the source did not say.
+    is_modification: Mapped[bool | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (Index("ix_contracts_source_external", "source", "external_id", unique=True),)

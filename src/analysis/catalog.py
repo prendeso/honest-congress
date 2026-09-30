@@ -111,8 +111,9 @@ DETECTORS: List[Detector] = [
         "a smaller award to a heavily contracted company is not in it, and an "
         "award booked to a subsidiary the SEC register does not tie back to its "
         "parent is missing entirely. An absence here is not evidence of none. "
-        "Actions that take money back off a contract, and modifications that "
-        "move no money at all, are excluded: they are in the federal feed but "
+        "Only new awards count. Modifications to an existing contract -- "
+        "funding added to it, an option exercised on it -- are excluded, as are "
+        "actions that take money back off one: they are in the federal feed but "
         "they are not an award being made.",
         f"{PTR} joined to USASpending federal award actions",
         value_unit="days",

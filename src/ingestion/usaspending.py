@@ -157,6 +157,20 @@ def award_action_key(award: Dict[str, Any]) -> str | None:
     return "|".join(parts)
 
 
+def is_modification(mod: Any) -> bool | None:
+    """Whether a USASpending `Mod` value modifies an existing contract.
+
+    The base award is modification "0" -- sometimes "00" or "000" -- and every
+    later action on the same contract carries its own number, "P00086" or
+    "A00012". Blank means the source did not say, which is not evidence either
+    way. Mirrored in the migration that backfilled the column.
+    """
+    text = str(mod if mod is not None else "").strip()
+    if not text:
+        return None
+    return text.strip("0") != ""
+
+
 def _parse_date(value: Any) -> datetime | None:
     if not value:
         return None
@@ -428,6 +442,7 @@ def ingest_government_contracts(
                     awarded_date=awarded,
                     source=SOURCE,
                     external_id=external_id,
+                    is_modification=is_modification(award.get("Mod")),
                 )
             )
             counts["imported"] += 1

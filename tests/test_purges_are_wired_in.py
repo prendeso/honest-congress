@@ -65,6 +65,11 @@ CONVENTIONS = {
         "cli": "parse",
         "extra": ("--reparse", "--annual-only", "--limit", "--min-confidence"),
     },
+    "reparse-ptrs": {
+        "previews": "--dry-run",
+        "cli": "parse",
+        "extra": ("--reparse", "--ptr-only", "--limit"),
+    },
 }
 
 

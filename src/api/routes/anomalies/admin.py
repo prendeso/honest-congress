@@ -60,8 +60,8 @@ async def cleanup_invalid_anomalies(
     deleted_count = 0
     deleted_titles = []
     for a in all_anomalies:
-        computed = float(a.computed_value) if a.computed_value else None
-        threshold = float(a.threshold_value) if a.threshold_value else None
+        computed = float(a.computed_value) if a.computed_value is not None else None
+        threshold = float(a.threshold_value) if a.threshold_value is not None else None
         if computed is not None and threshold is not None and computed == threshold:
             deleted_titles.append(a.title)
             db.delete(a)

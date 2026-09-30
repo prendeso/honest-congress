@@ -240,10 +240,27 @@ class SenateHtmlParser(PTRParser):
             result["assets"] = self._senate_assets(soup)
             result["liabilities"] = self._senate_liabilities(soup)
 
+            # Part 4a and 4b, read exactly as `parse_senate_html` reads them.
+            # This reader was added for the assets and returned no trades at
+            # all, and re-reading a filing clears every row it holds before
+            # storing the new read -- so re-parsing an annual report deleted
+            # its Part 4b trades and put nothing back. Measured in production:
+            # the annual reports behind live committee-bill and cluster
+            # findings for eleven senators now show zero transactions, and the
+            # findings still stand on trades the database no longer has.
+            #
+            # A 4a row restates a PTR the member already filed; that is the
+            # cross-filing duplicate `restatements.py` exists to drop, so it is
+            # read here rather than second-guessed here.
+            quality = ParseQuality()
+            for table, indices in self._transaction_tables(soup):
+                result["transactions"].extend(self._rows_to_transactions(table, quality, indices))
+
             logger.info(
-                "Parsed %d assets and %d liabilities from a Senate annual report",
+                "Parsed %d assets, %d liabilities and %d transactions from a Senate annual report",
                 len(result["assets"]),
                 len(result["liabilities"]),
+                len(result["transactions"]),
             )
         except Exception as e:  # pragma: no cover - defensive, mirrors parse_ptr
             logger.error("Error parsing Senate annual report %s: %s", path, e)

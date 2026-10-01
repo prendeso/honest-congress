@@ -358,6 +358,9 @@ def _collect_donor(db: Session) -> Dict[int, Streams]:
         events[member_id][(ticker or "").strip().upper()].append(_days(when))
 
     for member_id, by_ticker in events.items():
+        # One event per day, as the detector combines same-day checks.
+        for ticker in by_ticker:
+            by_ticker[ticker] = sorted(set(by_ticker[ticker]))
         member_trades: Dict[str, List[float]] = defaultdict(list)
         for ticker, when, _ in trades.get(member_id, []):
             member_trades[ticker].append(when)

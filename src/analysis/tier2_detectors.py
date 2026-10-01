@@ -235,7 +235,24 @@ def detect_donor_conflicts(
     by_ticker = _trades_by_ticker(db, {d.ticker for d in donations})
     delta = timedelta(days=window_days)
 
+    # One donation per donor, member and day. A PAC routinely writes two checks
+    # at once -- one for the primary, one for the general -- and they are one
+    # decision. Taking whichever row came first cited Elevance Health's PAC as
+    # giving Jared Moskowitz $1,500 on a day it gave him $2,500.
+    combined: Dict[Any, List[Any]] = {}
     for donation in donations:
+        key = (
+            donation.member_id,
+            donation.ticker,
+            (donation.donor_name or "").strip().upper(),
+            donation.donation_date.date(),
+        )
+        combined.setdefault(key, []).append(donation)
+
+    for same_day in combined.values():
+        donation = same_day[0]
+        amounts = [d.amount for d in same_day if d.amount is not None]
+        total = sum(amounts) if amounts else None
         start = donation.donation_date - delta
         end = donation.donation_date + delta
 
@@ -249,8 +266,8 @@ def detect_donor_conflicts(
             days_apart = abs((txn.transaction_date - donation.donation_date).days)
             direction = "after" if txn.transaction_date >= donation.donation_date else "before"
             amount_str = ""
-            if donation.amount is not None:
-                amount_str = f" (${float(donation.amount):,.0f})"
+            if total is not None:
+                amount_str = f" (${float(total):,.0f})"
 
             anomalies.append(
                 {
@@ -270,8 +287,10 @@ def detect_donor_conflicts(
                         f"({days_apart} days {direction} a donation from "
                         f"{donation.donor_name}{amount_str} on "
                         f"{donation.donation_date.strftime('%Y-%m-%d')}). "
-                        f"Trades in companies that donate to a member's campaign "
-                        f"raise conflict-of-interest concerns regardless of direction."
+                        f"The trade and the donation are both public record; this is a "
+                        f"disclosed coincidence in time. Corporate PACs give routinely to "
+                        f"many members, and nothing here connects this trade to the "
+                        f"donation."
                     ),
                 }
             )

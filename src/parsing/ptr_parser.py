@@ -98,10 +98,32 @@ def _filing_status_in(text: str) -> str | None:
 TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
 STOCK_KEYWORD = re.compile(r"\b(?:stock|common|shares)\b", re.IGNORECASE)
 
-# Abbreviations fund names print in capitals: "ProShares TR", "SPDR S&P 500 ETF
-# TR". Only the keyword fallback skips them. An explicit "(TR)" is still Tootsie
-# Roll, which is why these are not NON_TICKERS.
-FUND_NAME_WORDS = {"TR", "SPDR", "ADR"}
+# Words descriptions print in capitals that are not the holding's symbol: fund
+# abbreviations ("ProShares TR"), legal forms ("Iberdrola SA"), and fund-name
+# words ("iShares CORE S&P 500"). Only the keyword fallback skips them -- an
+# explicit "(TR)" is still Tootsie Roll and "(CL)" still Colgate, which is why
+# these are not NON_TICKERS. Measured on 16,267 production rows: CORE, CALL,
+# MID, TRUST and SA had all been stored as tickers this way.
+FUND_NAME_WORDS = {
+    "TR",
+    "SPDR",
+    "ADR",
+    "ADS",
+    "SA",
+    "AG",
+    "NV",
+    "SE",
+    "PLC",
+    "SHS",
+    "CORE",
+    "CALL",
+    "PUT",
+    "MID",
+    "CAP",
+    "TRUST",
+    "STOCK",
+    "CLASS",
+}
 
 # Words that look like tickers but aren't
 # House Clerk PTR filings tag each holding with a bracketed asset-class code --
@@ -1134,7 +1156,11 @@ class PTRParser:
         # run after it was taken as the symbol -- "ProShares TR UltraPro Short
         # S&P 500", a 3x inverse S&P fund, was stored as TR (Tootsie Roll) and
         # published as agricultural trading in 15 live findings.
-        if STOCK_KEYWORD.search(text):
+        #
+        # Not in text with no lower case at all. There every word is a run of
+        # capitals, so "FIDELITY MID CAP STOCK" offers MID as readily as a
+        # symbol, and the first one wins.
+        if STOCK_KEYWORD.search(text) and re.search(r"[a-z]", text):
             for t in TICKER_PATTERN.findall(text):
                 if t not in NON_TICKERS and t not in FUND_NAME_WORDS and len(t) >= 2:
                     return t

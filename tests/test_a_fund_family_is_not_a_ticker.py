@@ -38,3 +38,26 @@ def test_an_explicit_tr_is_still_tootsie_roll():
 )
 def test_the_keyword_fallback_still_works(description, ticker):
     assert PTRParser()._extract_ticker(description) == ticker
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        "FIDELITY MID CAP STOCK",
+        "ISHARES CORE S&P 500 ETF SHARES",
+        "MICROSOFT CORP COMMON STOCK",
+        "Iberdrola SA Bilbao Ordinary Shares",
+        "iShares Trust CORE Dividend Growth shares",
+    ],
+)
+def test_words_in_capitals_are_not_symbols(description):
+    """All read as tickers in production: MID, CORE, STOCK, SA."""
+    assert PTRParser()._extract_ticker(description) is None
+
+
+@pytest.mark.parametrize(
+    ("description", "ticker"),
+    [("Colgate-Palmolive Company (CL)", "CL"), ("BILL Holdings, Inc. Common Stock (BILL)", "BILL")],
+)
+def test_an_explicit_symbol_that_is_also_a_word_is_kept(description, ticker):
+    assert PTRParser()._extract_ticker(description) == ticker

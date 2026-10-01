@@ -612,7 +612,7 @@ class LobbyingDisclosure(Base):
     # The LDA's own code: "Q3" a third-quarter report, "3A" an amendment of
     # one, "Q3Y" a report of no activity. NULL for rows ingested before it was
     # stored. See `tier2_detectors.lobbying_event_criteria`.
-    filing_type: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    filing_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     source: Mapped[str] = mapped_column(String(50), default="unknown")
     external_id: Mapped[str | None] = mapped_column(String(100), nullable=True)

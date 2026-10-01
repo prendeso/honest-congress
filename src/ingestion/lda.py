@@ -353,7 +353,7 @@ def ingest_lobbying_disclosures(
             counts["imported"] += 1
         if typed:
             # One executemany for the company, not a round trip per row.
-            db.bulk_update_mappings(LobbyingDisclosure, typed)  # type: ignore[arg-type]
+            db.bulk_update_mappings(LobbyingDisclosure, typed)
         return counts
 
     for ticker in universe:

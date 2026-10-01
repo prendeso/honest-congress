@@ -178,6 +178,7 @@ class TestEveryExternallyFedTextColumnHasRoom:
         ("government_contracts", "source"): "our own source label",
         ("lobbying_disclosures", "ticker"): "a ticker symbol",
         ("lobbying_disclosures", "source"): "our own source label",
+        ("lobbying_disclosures", "filing_type"): "an LDA filing-type code, 4 at most",
         ("disclosures", "filing_type"): "a filing-type label we normalise ourselves",
     }
 

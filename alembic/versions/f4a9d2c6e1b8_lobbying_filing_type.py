@@ -27,7 +27,7 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "lobbying_disclosures",
-        sa.Column("filing_type", sa.String(length=10), nullable=True),
+        sa.Column("filing_type", sa.String(length=20), nullable=True),
     )
 
 

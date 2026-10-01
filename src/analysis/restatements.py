@@ -116,6 +116,55 @@ def content_key(transaction: Transaction) -> tuple:
     )
 
 
+def _trade_key(transaction) -> tuple:
+    """`content_key` without the two fields an amendment exists to correct."""
+
+    def amount(value) -> str:
+        return format(value, "f") if value is not None else ""
+
+    return (
+        transaction.transaction_date,
+        getattr(transaction.transaction_type, "value", transaction.transaction_type),
+        amount(transaction.amount_min),
+        amount(transaction.amount_max),
+        (transaction.owner or "").strip(),
+    )
+
+
+def _corrected_copies(earlier_rows: Sequence, later_rows: Sequence) -> List:
+    """Rows of a restating filing that re-report an earlier row with its name fixed.
+
+    Called only for a pair already established as a restatement, on the rows
+    `content_key` left unmatched. An amendment exists to correct things, and
+    the asset's name and symbol are what it most often corrects -- John
+    Boozman's amended filings add "AVGO" to a Broadcom row and prefix "SPYM - "
+    to a fund's name -- so an exact match missed them and every such trade was
+    counted twice.
+
+    Same date, direction, band and owner, and EITHER the same symbol OR the
+    same description: the name changed, or the symbol did, never both. That
+    second condition is what keeps it from pairing two different trades that
+    happen to share a band and a day -- matched on the first alone, a First
+    Trust commodity fund paired with Cboe stock, and two share classes of one
+    American Funds fund with each other.
+    """
+    pool = list(earlier_rows)
+    matched: List = []
+    for row in later_rows:
+        ticker = (row.ticker or "").strip().upper()
+        description = (row.description or "").strip()
+        for index, candidate in enumerate(pool):
+            if _trade_key(candidate) != _trade_key(row):
+                continue
+            same_ticker = ticker and ticker == (candidate.ticker or "").strip().upper()
+            same_name = description and description == (candidate.description or "").strip()
+            if same_ticker or same_name:
+                matched.append(row)
+                del pool[index]
+                break
+    return matched
+
+
 WITHDRAWN = "Deleted"
 
 
@@ -216,15 +265,17 @@ def drop_restatements(
         labelled = _AMENDMENT_LABEL.search(types.get(later) or "") is not None
         # How many copies of each key earlier filings already accounted for.
         already: Counter = Counter()
+        restated: List[int] = []
         for earlier in order[:position]:
             shared = counts[later] & counts[earlier]
-            if not shared:
-                continue
             if not labelled and sum(shared.values()) < MIN_SHARED_ROWS_FOR_RESTATEMENT:
                 continue
+            if not shared and not labelled:
+                continue
             already |= shared
+            restated.append(earlier)
 
-        if not already:
+        if not restated:
             continue
         # Drop only as many copies as the earlier filings carried. If the later
         # filing reports the same trade twice where the earlier reported it
@@ -235,6 +286,22 @@ def drop_restatements(
             if seen[key] < already.get(key, 0):
                 seen[key] += 1
                 dropped.add(id(transaction))
+
+        # Then the rows the restatement re-reported under a corrected name.
+        # Earlier rows are taken in filing order and only once each, and only
+        # from filings this one was just shown to restate.
+        unmatched_later = [t for t in by_disclosure[later] if id(t) not in dropped]
+        consumed = Counter(already)
+        unmatched_earlier = []
+        for earlier in restated:
+            for transaction in by_disclosure[earlier]:
+                key = content_key(transaction)
+                if consumed[key] > 0:
+                    consumed[key] -= 1
+                    continue
+                unmatched_earlier.append(transaction)
+        for transaction in _corrected_copies(unmatched_earlier, unmatched_later):
+            dropped.add(id(transaction))
 
     kept = [t for t in transactions if id(t) not in dropped]
     kept.sort(key=lambda t: (t.transaction_date is None, t.transaction_date, t.id or 0))

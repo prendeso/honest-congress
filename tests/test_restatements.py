@@ -235,7 +235,6 @@ class TestOnlyGenuinelyIdenticalRowsCollapse:
             ("low", "15001"),
             ("high", "50000"),
             ("owner", "Spouse"),
-            ("ticker", "AAPL"),
         ],
     )
     def test_a_row_differing_in_any_compared_field_is_a_separate_trade(self, db, field, value):
@@ -557,3 +556,50 @@ class TestAnAmendmentThatAddsATrade:
 
         assert len(kept) == 4
         assert sum(1 for t in kept if t.description == "Holding 0") == 2
+
+
+class TestAnAmendmentThatCorrectsTheName:
+    """An amendment exists to correct things, and the asset's name and symbol
+    are what it most often corrects. John Boozman's amended filings add "AVGO"
+    to a Broadcom row and prefix "SPYM - " to a fund's name; matched exactly,
+    each such trade was counted twice."""
+
+    def _pair(self, db, bioguide):
+        who = member(db, bioguide=bioguide)
+        original = filing(db, who, "Annual", datetime(2025, 5, 1), f"{bioguide}a")
+        amendment = filing(db, who, "Annual (Amendment 1)", datetime(2025, 9, 1), f"{bioguide}b")
+        return who, original, amendment
+
+    def test_a_symbol_filled_in_is_the_same_trade(self, db):
+        who, original, amendment = self._pair(db, "X000101")
+        trade(db, original, description="Broadcom Inc. - Common Stock")
+        trade(db, amendment, description="Broadcom Inc. - Common Stock", ticker="AVGO")
+
+        (kept,) = member_transactions(db, who.id)
+        assert kept.disclosure_id == original.id, "the earliest filing still wins"
+
+    def test_a_renamed_row_with_the_same_symbol_is_the_same_trade(self, db):
+        who, original, amendment = self._pair(db, "X000102")
+        trade(db, original, description="Tradr 2X Long SPY Monthly ETF", ticker="SPYM")
+        trade(db, amendment, description="SPYM - Tradr 2X Long SPY Monthly ETF", ticker="SPYM")
+
+        assert len(member_transactions(db, who.id)) == 1
+
+    def test_a_different_name_and_symbol_is_a_different_trade(self, db):
+        """Same day and band is not enough: a commodity fund is not Cboe stock."""
+        who, original, amendment = self._pair(db, "X000103")
+        trade(db, original, description="First Trust Global Tactical Commodity", ticker="FTGC")
+        trade(db, amendment, description="Cboe Global Markets, Inc. Common Stock", ticker="CBOE")
+
+        assert len(member_transactions(db, who.id)) == 2
+
+    def test_only_between_filings_already_shown_to_restate(self, db):
+        """Two unlabelled filings sharing no identical rows are not a restatement,
+        so a near-match between them is two trades."""
+        who = member(db, bioguide="X000104")
+        first = filing(db, who, "P", datetime(2025, 5, 1), "X000104a")
+        second = filing(db, who, "P", datetime(2025, 9, 1), "X000104b")
+        trade(db, first, description="Broadcom Inc. - Common Stock")
+        trade(db, second, description="Broadcom Inc. - Common Stock", ticker="AVGO")
+
+        assert len(member_transactions(db, who.id)) == 2

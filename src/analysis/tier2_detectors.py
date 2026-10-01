@@ -182,6 +182,36 @@ def _trades_by_ticker(
     return grouped
 
 
+# LDA filing types that report lobbying being done: a registration, the four
+# quarterly reports (and the mid-year and year-end reports they replaced in
+# 2008), and terminations, which report the final period's activity.
+#
+# Left out, deliberately: amendments ("1A", "MA", "RA", "1@"), whose posting
+# date says when a correction was filed rather than when anyone lobbied --
+# ONEOK's 2025-04-28 filing amends its Q4 2024 report -- and every "No
+# Activity" variant (suffix Y), which reports that there was no lobbying at all.
+# The full list is the LDA's /constants/filing/filingtypes/.
+LOBBYING_EVENT_TYPES = frozenset(
+    {"RR", "Q1", "Q2", "Q3", "Q4", "1T", "2T", "3T", "4T", "MM", "MT", "YY", "YT"}
+)
+
+
+def lobbying_event_criteria() -> List[Any]:
+    """Which stored lobbying filings are an event a trade can be measured against.
+
+    Shared with the null model in `significance`, for the reason
+    `award_action_criteria` is. A row whose type is unknown -- ingested before
+    the column existed -- is kept: an absent field is not evidence either way.
+    """
+    return [
+        LobbyingDisclosure.filed_date.isnot(None),
+        or_(
+            LobbyingDisclosure.filing_type.is_(None),
+            LobbyingDisclosure.filing_type.in_(sorted(LOBBYING_EVENT_TYPES)),
+        ),
+    ]
+
+
 def _nearest_event_per_trade(anomalies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """One finding per trade, citing the event closest to it.
 
@@ -312,7 +342,7 @@ def detect_lobbying_overlaps(
 
     filings = (
         db.query(LobbyingDisclosure)
-        .filter(LobbyingDisclosure.filed_date.isnot(None))
+        .filter(*lobbying_event_criteria())
         .order_by(LobbyingDisclosure.id)
         .all()
     )

@@ -250,6 +250,10 @@ def ingest_lobbying_disclosures(
     # autoflush=False, so a row added earlier in this loop is invisible to a
     # query anyway.
     seen: Set[str] = set()
+    # Stored rows with no filing type, by external id -> row id. Rows ingested
+    # before the column existed; a rerun meets each as a duplicate and fills
+    # the type in, which is the only way to learn it.
+    untyped: Dict[str, int] = {}
 
     def reload_seen() -> None:
         """Refill `seen` from committed state, in place.
@@ -259,15 +263,24 @@ def ingest_lobbying_disclosures(
         ids for rows that no longer exist and would skip re-importing them.
         """
         seen.clear()
-        seen.update(
-            row[0]
-            for row in db.query(LobbyingDisclosure.external_id)
+        untyped.clear()
+        # One query for both: the external ids, and which of them still lack
+        # a type. A rerun's whole database cost stays one SELECT.
+        for external_id, row_id, filing_type in (
+            db.query(
+                LobbyingDisclosure.external_id,
+                LobbyingDisclosure.id,
+                LobbyingDisclosure.filing_type,
+            )
             .filter(
                 LobbyingDisclosure.source == SOURCE,
                 LobbyingDisclosure.external_id.isnot(None),
             )
             .all()
-        )
+        ):
+            seen.add(external_id)
+            if filing_type is None:
+                untyped[external_id] = row_id
 
     reload_seen()
 
@@ -279,6 +292,7 @@ def ingest_lobbying_disclosures(
         without asking the LDA again.
         """
         counts = {"imported": 0, "duplicates": 0, "rejected": 0}
+        typed: List[Dict[str, Any]] = []
         for filing in filings:
             client_name = (filing.get("client") or {}).get("name") or ""
 
@@ -298,6 +312,10 @@ def ingest_lobbying_disclosures(
             if external_id:
                 if external_id in seen:
                     counts["duplicates"] += 1
+                    if external_id in untyped and filing.get("filing_type"):
+                        typed.append(
+                            {"id": untyped.pop(external_id), "filing_type": filing["filing_type"]}
+                        )
                     continue
                 seen.add(external_id)
             else:
@@ -327,11 +345,15 @@ def ingest_lobbying_disclosures(
                     or _parse_amount(filing.get("expenses")),
                     filed_date=_parse_date(filing.get("dt_posted")),
                     issue_codes=_issue_codes(filing),
+                    filing_type=filing.get("filing_type"),
                     source=SOURCE,
                     external_id=external_id,
                 )
             )
             counts["imported"] += 1
+        if typed:
+            # One executemany for the company, not a round trip per row.
+            db.bulk_update_mappings(LobbyingDisclosure, typed)  # type: ignore[arg-type]
         return counts
 
     for ticker in universe:

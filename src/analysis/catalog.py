@@ -94,7 +94,9 @@ DETECTORS: List[Detector] = [
         "often through several registrants, and each filing opens a window "
         "either side of it. For a company that lobbies continuously those "
         "windows cover most of the year, so almost any trade in its stock "
-        "falls inside one. Read the q-value, not the count.",
+        "falls inside one. Read the q-value, not the count. Amendments and "
+        "reports of no activity are not counted: an amendment's date says when a "
+        "correction was filed, not when anyone lobbied.",
         f"{PTR} joined to Senate LDA lobbying filings",
         value_unit="days",
     ),

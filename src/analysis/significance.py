@@ -70,6 +70,7 @@ from src.analysis.tier2_detectors import (
     DEFAULT_DONOR_WINDOW_DAYS,
     DEFAULT_LOBBYING_WINDOW_DAYS,
     award_action_criteria,
+    lobbying_event_criteria,
 )
 from src.db.models import (
     Anomaly,
@@ -377,7 +378,7 @@ def _collect_lobbying(db: Session) -> Dict[int, Streams]:
     filings: Dict[str, List[float]] = defaultdict(list)
     for ticker, when in (
         db.query(LobbyingDisclosure.ticker, LobbyingDisclosure.filed_date)
-        .filter(LobbyingDisclosure.filed_date.isnot(None))
+        .filter(*lobbying_event_criteria())
         .all()
     ):
         filings[(ticker or "").strip().upper()].append(_days(when))

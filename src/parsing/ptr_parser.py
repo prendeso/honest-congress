@@ -52,6 +52,9 @@ _FOOTNOTE_PREFIX = re.compile(r"^\s*(?:F\s+S\s*:|S\s+O\s*:|D\s*:|L\s*:)")
 # survives into a description (231 rows).
 _TRAILING_TYPE = re.compile(r"\s+[PS]\s*\(partial\)\s*$")
 
+# A range that opens on this line and closes on the next: "$15,001 -", "Over".
+_OPEN_RANGE = re.compile(r"\$[\d,]+\s*[-–—]\s*$|\b(?:over|above|more than)\s*$", re.IGNORECASE)
+
 # Whatever follows a row's amount range on its line.
 _AFTER_AMOUNT = re.compile(r"\$[\d,]+\s*-\s*\$[\d,]+(.*)$")
 
@@ -469,20 +472,18 @@ class PTRParser:
                         self._parse_date(match.group("date")),
                         self._TYPE_WORDS.get(match.group("type")),
                     ),
-                    line,
-                    self._continuation(lines, index),
+                    index,
                 )
             )
 
         recovered: List[Dict[str, Any]] = []
-        for key, line, continuation in printed:
+        for key, index in printed:
             if have[key] > 0:
                 have[key] -= 1
                 continue
-            txn = self._parse_text_line(self._spell_out_type_letter(line))
+            txn, _ = self._read_printed_record(lines, index)
             if not txn or not txn.get("transaction_date"):
                 continue
-            self._complete_asset(txn, continuation)
             # Read off the printed page rather than a split cell, so it carries
             # the same flag the confidence score already reports.
             txn["recovered_from_collapsed_row"] = True
@@ -493,6 +494,47 @@ class PTRParser:
             quality.rows_parsed += 1
 
         return recovered
+
+    def _read_printed_record(
+        self, lines: List[str], index: int
+    ) -> Tuple[Dict[str, Any] | None, str]:
+        """Read the record printed on `lines[index]`, with what wrapped below it.
+
+        One reader for both paths that see a row as printed text -- a table
+        cell pdfplumber collapsed, and a printed row no table yielded -- so
+        neither can drift from the other. Returns the transaction and the line
+        it was read from (amount rejoined), or (None, line).
+        """
+        line = lines[index]
+        following = lines[index + 1] if index + 1 < len(lines) else None
+        took_next = False
+        if following is not None and _OPEN_RANGE.search(line):
+            # "$15,001 -" here, "Stock (AMAT) [ST] $50,000" below. Read alone,
+            # the range never closes and the trade has no amount.
+            line = self._join_wrapped_amounts([line, following])[0]
+            took_next = True
+
+        txn = self._parse_text_line(self._spell_out_type_letter(line))
+        if not txn:
+            return None, line
+
+        # Where the amount wrapped, the rest of the next line -- symbol
+        # included -- now sits after the amount: "... $15,001 - $50,000 Stock
+        # (AMAT) [ST]".
+        tail = _AFTER_AMOUNT.search(line)
+        tail_text = tail.group(1).strip() if tail else ""
+        if ASSET_CLASS_TAG.search(tail_text):
+            continuation = tail_text
+        elif took_next:
+            # The line taken to close the amount is this record's by
+            # construction, tag or no tag; the tag can sit one line further
+            # down ("Corporation Common Stock (IBM) $50,000" then "[ST]").
+            rest = self._continuation(lines, index + 1)
+            continuation = f"{tail_text} {rest}".strip()
+        else:
+            continuation = self._continuation(lines, index)
+        self._complete_asset(txn, continuation)
+        return txn, line
 
     def _complete_asset(self, txn: Dict[str, Any], continuation: str) -> None:
         """Finish a row read off a single printed line with its wrapped half.
@@ -651,9 +693,19 @@ class PTRParser:
             return False
 
         # A footnote block can still quote a date in its prose, so the date has
-        # to appear on a line that is not itself a footnote.
-        dated = [line for line in joined.split("\n") if _DATE_PATTERN.search(line)]
-        return any(not _FOOTNOTE_PREFIX.match(line) for line in dated)
+        # to appear on a line before the footnotes begin. Not merely on a line
+        # without a footnote label: footnote prose wraps, and its second line
+        # carries no label --
+        #     D: Exercised 50 call options ... with an expiration date of
+        #     1/16/26.
+        # -- which counted as an unread transaction and marked a cleanly read
+        # filing down (20 rows "detected", 18 real).
+        for line in joined.split("\n"):
+            if _FOOTNOTE_PREFIX.match(line):
+                return False
+            if _DATE_PATTERN.search(line):
+                return True
+        return False
 
     @staticmethod
     def _headers_recognised(headers: List[str]) -> bool:
@@ -810,19 +862,11 @@ class PTRParser:
         """
         lines = self._join_wrapped_amounts(str(cell).replace("\x00", "").split("\n"))
 
-        for index, line in enumerate(lines):
-            txn = self._parse_text_line(self._spell_out_type_letter(line))
+        lines = [x.strip() for x in lines]
+        for index in range(len(lines)):
+            txn, line = self._read_printed_record(lines, index)
             if not txn:
                 continue
-            # Where the amount wrapped, `_join_wrapped_amounts` has already moved
-            # the rest of the next line -- symbol included -- onto this one,
-            # after the amount: "... $100,001 - $250,000 (NVDA) [ST]".
-            tail = _AFTER_AMOUNT.search(line)
-            if tail and ASSET_CLASS_TAG.search(tail.group(1)):
-                continuation = tail.group(1).strip()
-            else:
-                continuation = self._continuation([x.strip() for x in lines], index)
-            self._complete_asset(txn, continuation)
 
             # The record carries both dates in order -- the trade, then the
             # notification. `_parse_text_line` takes the first, which is the one
@@ -868,11 +912,18 @@ class PTRParser:
     # forty days from the other two, and how a late-filing finding came to
     # claim 742 days.
     _TYPE_BEFORE_DATE = re.compile(
-        r"\b(?:purchase|sale|exchange|[PSE])\s+(?=\d{1,2}/\d{1,2}/\d{2,4})", re.IGNORECASE
+        r"\b(?:purchase|sale|exchange|[PSE])(?:\s*\(partial\))?\s+(?=\d{1,2}/\d{1,2}/\d{2,4})",
+        re.IGNORECASE,
     )
     _ANY_DATE = re.compile(r"(\d{1,2}/\d{1,2}/\d{2,4})")
 
-    _TYPE_LETTER = re.compile(r"\b([PSE])\s+(?=\d{1,2}/\d{1,2}/\d{2,4})")
+    # "(partial)" may sit between the letter and the date. Without it the
+    # anchor failed on every partial sale, and the first date on the line --
+    # for a Treasury bill, the maturity printed in its name -- was taken as the
+    # trade date: "US Treasury Bill 12/21/2023 [GS] S (partial) 10/17/2023" was
+    # stored as a sale on 2023-12-21, then recovered a second time, amountless,
+    # on the right date.
+    _TYPE_LETTER = re.compile(r"\b([PSE])(?:\s*\(partial\))?\s+(?=\d{1,2}/\d{1,2}/\d{2,4})")
     _TYPE_WORDS = {"P": "purchase", "S": "sale", "E": "exchange"}
 
     def _spell_out_type_letter(self, line: str) -> str:
@@ -985,7 +1036,9 @@ class PTRParser:
         type_anchor = self._TYPE_BEFORE_DATE.search(line)
         date_match = self._ANY_DATE.search(line, type_anchor.end() if type_anchor else 0)
         amount_match = re.search(
-            r"\$[\d,]+\s*-\s*\$[\d,]+|(?:over|above|more than)\s+\$[\d,]+|\$[\d,]+\s*\+",
+            r"\$[\d,]+\s*-\s*\$[\d,]+|(?:over|above|more than)\s+\$[\d,]+|\$[\d,]+\s*\+"
+            # An exact figure, which only a custodial or small account reports.
+            r"|\$[\d,]+\.\d{2}\b",
             line,
             re.IGNORECASE,
         )
@@ -1158,9 +1211,15 @@ class PTRParser:
                     Decimal(max_val) if max_val else None,
                 )
 
-        # Try to parse custom range
-        amounts = re.findall(r"\$?([\d,]+)", text)
-        amounts = [int(a.replace(",", "")) for a in amounts if a]
+        # Try to parse custom range. Cents are part of the figure: a custodial
+        # account reports what it actually spent -- "$172.00", "$223.60" -- and
+        # reading the cents as a second number stored $172.00 as a range from
+        # $0 to $172.
+        amounts = [
+            Decimal(a.replace(",", ""))
+            for a in re.findall(r"\$?((?:\d[\d,]*)(?:\.\d{1,2})?)", text)
+            if a.replace(",", "")
+        ]
 
         if len(amounts) >= 2:
             return Decimal(min(amounts)), Decimal(max(amounts))

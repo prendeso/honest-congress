@@ -45,6 +45,16 @@ _DATE_PATTERN = re.compile(r"\d{1,2}/\d{1,2}/\d{2,4}")
 # "D:", "L:" -- Filing Status, Subholding Of, Description, Location.
 _FOOTNOTE_PREFIX = re.compile(r"^\s*(?:F\s+S\s*:|S\s+O\s*:|D\s*:|L\s*:)")
 
+# A transaction marker left at the end of a description read off a printed
+# line: "Amazon.com, Inc. - Common Stock S (partial)". Only the "(partial)"
+# form: a bare trailing letter can be the name's own ("... Series E"), and over
+# every filing the audit downloaded the partial form is the only one that
+# survives into a description (231 rows).
+_TRAILING_TYPE = re.compile(r"\s+[PS]\s*\(partial\)\s*$")
+
+# Whatever follows a row's amount range on its line.
+_AFTER_AMOUNT = re.compile(r"\$[\d,]+\s*-\s*\$[\d,]+(.*)$")
+
 # The value of that first footnote. The House PTR marks EVERY row "New" or
 # "Amended", and the parser read the label and threw the answer away.
 #
@@ -446,9 +456,9 @@ class PTRParser:
             for t in parsed
         )
 
+        lines = [raw.strip() for raw in text.split("\n")]
         printed: List[tuple] = []
-        for raw in text.split("\n"):
-            line = raw.strip()
+        for index, line in enumerate(lines):
             match = self._PRINTED_ROW.match(line)
             if not match:
                 continue
@@ -460,17 +470,19 @@ class PTRParser:
                         self._TYPE_WORDS.get(match.group("type")),
                     ),
                     line,
+                    self._continuation(lines, index),
                 )
             )
 
         recovered: List[Dict[str, Any]] = []
-        for key, line in printed:
+        for key, line, continuation in printed:
             if have[key] > 0:
                 have[key] -= 1
                 continue
             txn = self._parse_text_line(self._spell_out_type_letter(line))
             if not txn or not txn.get("transaction_date"):
                 continue
+            self._complete_asset(txn, continuation)
             # Read off the printed page rather than a split cell, so it carries
             # the same flag the confidence score already reports.
             txn["recovered_from_collapsed_row"] = True
@@ -481,6 +493,51 @@ class PTRParser:
             quality.rows_parsed += 1
 
         return recovered
+
+    def _complete_asset(self, txn: Dict[str, Any], continuation: str) -> None:
+        """Finish a row read off a single printed line with its wrapped half.
+
+        The asset name wraps, and the symbol is usually on the wrapped half:
+        "NVIDIA Corporation - Common Stock" on the row's line, "(NVDA) [ST]"
+        under it. Read alone, the line yields no ticker -- 279 of 722 rows in
+        one filing, NVIDIA, Alphabet and Amazon among them -- and every
+        detector that joins on a ticker misses the trade. The type the line
+        also carries is not part of the name either ("... Stock S (partial)").
+        """
+        description = _TRAILING_TYPE.sub("", txn.get("description") or "")
+        if continuation:
+            # A wrapped amount can share the line ("(NVDA) [ST] $250,000"); the
+            # amount was already read from the joined range, so it is dropped
+            # from the name.
+            continuation = re.sub(r"\s*\$[\d,]+.*$", "", continuation).strip()
+        if continuation:
+            description = f"{description}\n{continuation}"
+            if not txn.get("ticker"):
+                txn["ticker"] = self._extract_ticker(description)
+        txn["description"] = description
+
+    def _continuation(self, lines: List[str], index: int) -> str:
+        """The wrapped rest of a printed row's asset name, or "".
+
+        Up to two following lines, and only when they end in the House's
+        bracketed asset-class code ("(GOOG) [ST]", "Stock (NVDA) [ST]") -- the
+        code closes every asset cell, so it marks where the name ends. Anything
+        else under a row (its footnotes, the next row, a page header) is left
+        alone: a wrong continuation would attach one trade's symbol to another.
+        """
+        taken: List[str] = []
+        for line in lines[index + 1 : index + 3]:
+            if (
+                not line
+                or self._PRINTED_ROW.match(line)
+                or _FOOTNOTE_PREFIX.match(line)
+                or _DATE_PATTERN.search(line)
+            ):
+                return ""
+            taken.append(line)
+            if ASSET_CLASS_TAG.search(line):
+                return " ".join(taken)
+        return ""
 
     def _extract_filer_info(self, text: str) -> Dict[str, str]:
         """Extract filer name, state, district from PTR header."""
@@ -753,10 +810,19 @@ class PTRParser:
         """
         lines = self._join_wrapped_amounts(str(cell).replace("\x00", "").split("\n"))
 
-        for line in lines:
+        for index, line in enumerate(lines):
             txn = self._parse_text_line(self._spell_out_type_letter(line))
             if not txn:
                 continue
+            # Where the amount wrapped, `_join_wrapped_amounts` has already moved
+            # the rest of the next line -- symbol included -- onto this one,
+            # after the amount: "... $100,001 - $250,000 (NVDA) [ST]".
+            tail = _AFTER_AMOUNT.search(line)
+            if tail and ASSET_CLASS_TAG.search(tail.group(1)):
+                continuation = tail.group(1).strip()
+            else:
+                continuation = self._continuation([x.strip() for x in lines], index)
+            self._complete_asset(txn, continuation)
 
             # The record carries both dates in order -- the trade, then the
             # notification. `_parse_text_line` takes the first, which is the one

@@ -255,3 +255,26 @@ class TestWhatACountedTradeIs:
         self._background(db_session, members)
 
         assert len(detect_cross_member_clusters(db_session)) == 1
+
+
+def test_the_null_model_counts_what_the_detector_counts(db_session, members):
+    """`_cluster_p_values` builds its own rows; a spouse's trade or an index
+    fund it kept would test a cluster the detector never reported."""
+    import numpy as np
+
+    from src.analysis.significance import _cluster_p_values
+
+    # Each ticker also traded months later, so the span is long enough to
+    # shuffle; a control ticker shows the fixture does produce p-values.
+    for ticker, owner in (("VOO", None), ("NICHE", "Spouse"), ("CTRL", None)):
+        for i in range(MIN_MEMBERS_IN_CLUSTER):
+            for offset in (i, 120 + 9 * i):
+                _trade(db_session, members[i], ticker, offset)
+                _last_trade(db_session).owner = owner
+    db_session.commit()
+
+    p_values = _cluster_p_values(db_session, 20, np.random.default_rng(0))
+
+    assert ("CTRL", "purchase") in p_values
+    assert ("VOO", "purchase") not in p_values
+    assert ("NICHE", "purchase") not in p_values

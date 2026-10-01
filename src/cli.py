@@ -1179,6 +1179,11 @@ _ATTRIBUTED_TO_THE_MEMBER = (
     "sponsorship_conflict",
     "bill_jurisdiction_conflict",
     "cross_member_cluster",
+    # Keyed by the trade, and the trade can be a spouse's or a child's: these
+    # detectors counted every owner until they were brought under #99.
+    "donor_conflict",
+    "lobbying_overlap",
+    "contract_front_run",
 )
 
 
@@ -1231,6 +1236,11 @@ def cmd_retract_withdrawn_findings(args):
     from src.analysis.legislation import (
         detect_bill_jurisdiction_conflicts,
         detect_sponsorship_conflicts,
+    )
+    from src.analysis.tier2_detectors import (
+        detect_contract_front_runs,
+        detect_donor_conflicts,
+        detect_lobbying_overlaps,
     )
     from src.analysis.trade_analyzer import TradeAnalyzer
     from src.db.models import Anomaly, Member
@@ -1302,6 +1312,9 @@ def cmd_retract_withdrawn_findings(args):
             detect_sponsorship_conflicts(db)
             + detect_bill_jurisdiction_conflicts(db)
             + detect_cross_member_clusters(db)
+            + detect_donor_conflicts(db)
+            + detect_lobbying_overlaps(db)
+            + detect_contract_front_runs(db)
         ):
             key = identity_of(finding)
             if key:

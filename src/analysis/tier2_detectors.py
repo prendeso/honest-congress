@@ -33,6 +33,7 @@ from typing import Any, Collection, Dict, List
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from src.analysis.attribution import held_by_member
 from src.analysis.restatements import drop_restated_records
 from src.db.models import (
     CampaignDonation,
@@ -170,8 +171,14 @@ def _trades_by_ticker(
     if purchases_only:
         query = query.filter(Transaction.transaction_type == TransactionType.PURCHASE)
 
+    # Only trades the member holds. These findings say "Member traded" and are
+    # filed under the member's name; a dependent child's $172 purchase in a
+    # custodial account was published as Brian Mast buying ahead of a contract.
+    # The same rule every member-attributed detector follows (#99), and
+    # `significance` applies it to the null model.
     for row in drop_restated_records(query.order_by(Transaction.id).all()):
-        grouped.setdefault(row.ticker, []).append(row)
+        if held_by_member(row):
+            grouped.setdefault(row.ticker, []).append(row)
     return grouped
 
 

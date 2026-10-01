@@ -265,6 +265,10 @@ def test_every_covered_type_is_one_this_command_re_runs():
         "bill_jurisdiction_conflict",
         # detect_cross_member_clusters
         "cross_member_cluster",
+        # detect_donor_conflicts, detect_lobbying_overlaps, detect_contract_front_runs
+        "donor_conflict",
+        "lobbying_overlap",
+        "contract_front_run",
     }
     missing = set(_ATTRIBUTED_TO_THE_MEMBER) - produced_by_the_detectors_this_reruns
     assert not missing, f"covered but never re-derived, so always deleted: {sorted(missing)}"

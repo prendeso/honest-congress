@@ -61,6 +61,7 @@ from typing import Any, Callable, Dict, List, Sequence, Tuple
 import numpy as np
 from sqlalchemy.orm import Session
 
+from src.analysis.attribution import held_by_member
 from src.analysis.legislation import DEFAULT_WINDOW_DAYS as LEGISLATION_WINDOW_DAYS
 from src.analysis.restatements import drop_restated_records
 from src.analysis.sectors import SectorIndex, policy_area_sectors
@@ -326,6 +327,8 @@ def _member_trades(db: Session) -> Dict[int, List[Tuple[str, float, bool]]]:
         .filter(Transaction.transaction_date.isnot(None))
         .all()
     )
+    # Only trades the member holds, as the detector counts them (#99).
+    rows = [row for row in rows if held_by_member(row)]
     by_member: Dict[int, List[Tuple[str, float, bool]]] = defaultdict(list)
     for member_id, ticker, when, kind in (
         (r.member_id, r.ticker, r.transaction_date, r.transaction_type) for r in rows
@@ -442,6 +445,8 @@ def _sector_trades(db: Session) -> Dict[int, Dict[str, List[float]]]:
         .filter(Transaction.transaction_date.isnot(None))
         .all()
     )
+    # Only trades the member holds, as the detector counts them (#99).
+    rows = [row for row in rows if held_by_member(row)]
     by_member: Dict[int, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
     for member_id, ticker, description, when in (
         (r.member_id, r.ticker, r.description, r.transaction_date) for r in rows
@@ -626,7 +631,11 @@ def _cluster_p_values(
     db: Session, permutations: int, rng: np.random.Generator
 ) -> Dict[Tuple[str, str], float]:
     """A p-value per (ticker, direction) the cluster detector flagged."""
-    from src.analysis.clustering import CLUSTER_WINDOW_DAYS, MIN_MEMBERS_IN_CLUSTER
+    from src.analysis.clustering import (
+        CLUSTER_WINDOW_DAYS,
+        MIN_MEMBERS_IN_CLUSTER,
+        counts_toward_a_cluster,
+    )
 
     rows = drop_restated_records(
         db.query(
@@ -640,6 +649,7 @@ def _cluster_p_values(
             Transaction.amount_min.label("amount_min"),
             Transaction.amount_max.label("amount_max"),
             Transaction.owner.label("owner"),
+            Transaction.filer_comment.label("filer_comment"),
             # Carried because `drop_restatements` drops rows the filer
             # struck out, and a projection that omits the column keeps
             # them silently.
@@ -651,6 +661,7 @@ def _cluster_p_values(
         .filter(Transaction.transaction_date.isnot(None))
         .all()
     )
+    rows = [row for row in rows if counts_toward_a_cluster(row)]
 
     grouped: Dict[Tuple[str, str], Dict[int, List[float]]] = defaultdict(lambda: defaultdict(list))
     for member_id, ticker, when, kind in (

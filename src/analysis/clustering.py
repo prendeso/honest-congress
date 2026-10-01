@@ -138,6 +138,20 @@ def _is_reinvestment(txn: Any) -> bool:
     return bool(_REINVESTED.search(f"{txn.description or ''} {txn.filer_comment or ''}"))
 
 
+def counts_toward_a_cluster(row: Any) -> bool:
+    """Whether a trade row can be part of a cluster.
+
+    One predicate for the detector and for its null model in `significance`.
+    If they disagreed, the q-value would be measured against trades no finding
+    could have been drawn from.
+    """
+    return (
+        held_by_member(row)
+        and (row.ticker or "").strip().upper() not in BROAD_MARKET_FUNDS
+        and not _is_reinvestment(row)
+    )
+
+
 # "purchase" and "sale" are the stored directions; neither takes a "d".
 _PAST_TENSE = {"purchase": "bought", "sale": "sold"}
 
@@ -188,13 +202,7 @@ def detect_cross_member_clusters(db: Session) -> List[Dict[str, Any]]:
         .order_by(Transaction.id)
         .all()
     )
-    rows = [
-        row
-        for row in drop_restated_records(rows)
-        if held_by_member(row)
-        and (row.ticker or "").strip().upper() not in BROAD_MARKET_FUNDS
-        and not _is_reinvestment(row)
-    ]
+    rows = [row for row in drop_restated_records(rows) if counts_toward_a_cluster(row)]
     if not rows:
         return []
 

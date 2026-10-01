@@ -51,6 +51,7 @@ from typing import Any, Dict, List, Set
 
 from sqlalchemy.orm import Session
 
+from src.analysis.attribution import trades_the_member_holds
 from src.analysis.committee_conflicts import roster_since
 from src.analysis.restatements import transactions_by_member
 from src.analysis.sectors import SectorIndex, policy_area_sectors
@@ -110,8 +111,19 @@ def _member_transactions(db: Session) -> Dict[int, List[Transaction]]:
     than filing the difference, and `_matching_trades` returns a list whose
     length is the finding, so a restated trade counted twice inflates the claim
     directly.
+
+    Only trades the member holds. A finding here says "the member ... disclosed
+    N trade(s)", and Greg Steube's three Synovus trades, and all five counted
+    as his, were his spouse's. The rule every member-attributed detector
+    follows (#99); `significance` applies it to the null model.
     """
-    return defaultdict(list, transactions_by_member(db))
+    return defaultdict(
+        list,
+        {
+            member_id: trades_the_member_holds(rows)
+            for member_id, rows in transactions_by_member(db).items()
+        },
+    )
 
 
 def _matching_trades(

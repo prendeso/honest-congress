@@ -291,8 +291,14 @@ class TestTheLegislationFindingsComeDownToo:
         db.commit()
 
     def test_one_no_longer_derived_is_deleted(self, cli, db_session):
+        from src.db.models import CommitteeAssignment
+
         member = _live_member(db_session, "WD00101")
         self._referral_on_file(db_session)
+        db_session.add(
+            CommitteeAssignment(member_id=member.id, committee_id="SSAS", committee_name="Armed")
+        )
+        db_session.commit()
         _stored(db_session, member, "bill_jurisdiction_conflict", self.TITLE)
 
         cli.cmd_retract_withdrawn_findings(Namespace(dry_run=False))
@@ -300,6 +306,17 @@ class TestTheLegislationFindingsComeDownToo:
         assert all(
             a.anomaly_type != "bill_jurisdiction_conflict" for a in _remaining(db_session, member)
         )
+
+    def test_an_empty_committee_roster_is_not_a_withdrawal(self, cli, db_session):
+        """Referrals stored but no roster: the detector can name no seat, and
+        that is a missing input, not every finding having stopped being true."""
+        member = _live_member(db_session, "WD00103")
+        self._referral_on_file(db_session)
+        kept = _stored(db_session, member, "bill_jurisdiction_conflict", self.TITLE)
+
+        cli.cmd_retract_withdrawn_findings(Namespace(dry_run=False))
+
+        assert kept.id in {a.id for a in _remaining(db_session, member)}
 
     def test_an_empty_bills_feed_is_not_a_withdrawal(self, cli, db_session):
         """No referrals stored means the feed has not run, not that every

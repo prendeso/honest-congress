@@ -1243,7 +1243,7 @@ def cmd_retract_withdrawn_findings(args):
         detect_lobbying_overlaps,
     )
     from src.analysis.trade_analyzer import TradeAnalyzer
-    from src.db.models import Anomaly, Member
+    from src.db.models import Anomaly, CommitteeAssignment, Member
 
     covered = [t for t in _ATTRIBUTED_TO_THE_MEMBER if not detector_is_disabled(t)]
     held = sorted(set(_ATTRIBUTED_TO_THE_MEMBER) - set(covered))
@@ -1257,11 +1257,16 @@ def cmd_retract_withdrawn_findings(args):
         # A detector whose input table is empty produces nothing, and that is
         # a failed feed, not a withdrawal: an empty bills table would otherwise
         # delete every committee-bill finding. Left alone, and said so.
+        #
+        # Every table a type reads, not just its primary one: committee-bill
+        # findings need the committee roster as well as the referrals, and an
+        # empty roster would otherwise retract every one of them.
+        inputs = {t: [DETECTOR_SOURCE_TABLES[t]] for t in covered if t in DETECTOR_SOURCE_TABLES}
+        inputs.setdefault("bill_jurisdiction_conflict", []).append(CommitteeAssignment)
         starved = [
             t
             for t in covered
-            if t in DETECTOR_SOURCE_TABLES
-            and not db.query(func.count(DETECTOR_SOURCE_TABLES[t].id)).scalar()
+            if any(not db.query(func.count(model.id)).scalar() for model in inputs.get(t, []))
         ]
         if starved:
             print(f"Input table empty, so left alone: {', '.join(sorted(starved))}")

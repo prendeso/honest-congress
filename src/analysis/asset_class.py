@@ -95,6 +95,34 @@ def is_fixed_income(transaction) -> bool:
     return bool(_FIXED_INCOME_WORDING.search(getattr(transaction, "description", None) or ""))
 
 
+_PRINTED_DATE = re.compile(r"\b(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})\b")
+
+
+def redeemed_at_maturity(transaction) -> bool:
+    """A debt instrument "sold" on the maturity date printed in its own name.
+
+    That is the Treasury paying the bill off, not a trade anybody placed:
+    "US Treasury Bill 02/22/2024 [GS]  S  02/22/2024  $1,000,001 - $5,000,000".
+    David Trone's T-bill ladder was published as a string of $1m+ "sales" made
+    this way. Only an exact match counts: a bill sold three days before it
+    matures was sold.
+    """
+    if not is_fixed_income(transaction):
+        return False
+    kind = getattr(transaction.transaction_type, "value", transaction.transaction_type)
+    when = getattr(transaction, "transaction_date", None)
+    if kind != "sale" or when is None:
+        return False
+    for month, day, year in _PRINTED_DATE.findall(getattr(transaction, "description", "") or ""):
+        full_year = int(year) + 2000 if len(year) == 2 else int(year)
+        try:
+            if (full_year, int(month), int(day)) == (when.year, when.month, when.day):
+                return True
+        except ValueError:
+            continue
+    return False
+
+
 def all_fixed_income(transactions: Sequence) -> bool:
     """Whether every row here is debt -- the case that makes "stock" a lie."""
     return bool(transactions) and all(is_fixed_income(t) for t in transactions)

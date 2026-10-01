@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Sequence
 from sqlalchemy.orm import Session
 
 from src.analysis.anomaly_key import identity_of, stored_by_identity
-from src.analysis.asset_class import all_fixed_income, is_option
+from src.analysis.asset_class import all_fixed_income, is_option, redeemed_at_maturity
 from src.analysis.attribution import (
     excluded_clause,
     held_by_member,
@@ -372,7 +372,11 @@ class TradeAnalyzer:
         # filing marks `SP` is the spouse's, and syncing a title for it
         # would re-assert an attribution `_check_large_trades` no longer
         # makes.
-        rows = [row for row in drop_restated_pairs(query.all()) if held_by_member(row[0])]
+        rows = [
+            row
+            for row in drop_restated_pairs(query.all())
+            if held_by_member(row[0]) and not redeemed_at_maturity(row[0])
+        ]
         if not rows:
             return
 
@@ -866,6 +870,8 @@ class TradeAnalyzer:
         large_trade_threshold = Decimal("1000000")  # $1M
 
         for txn in transactions:
+            if redeemed_at_maturity(txn):
+                continue
             if txn.amount_min and txn.amount_min > large_trade_threshold:
                 text = self._build_large_trade_text(txn)
 

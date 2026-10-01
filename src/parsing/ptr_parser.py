@@ -96,6 +96,12 @@ def _filing_status_in(text: str) -> str | None:
 
 # Common ticker pattern
 TICKER_PATTERN = re.compile(r"\b([A-Z]{1,5})\b")
+STOCK_KEYWORD = re.compile(r"\b(?:stock|common|shares)\b", re.IGNORECASE)
+
+# Abbreviations fund names print in capitals: "ProShares TR", "SPDR S&P 500 ETF
+# TR". Only the keyword fallback skips them. An explicit "(TR)" is still Tootsie
+# Roll, which is why these are not NON_TICKERS.
+FUND_NAME_WORDS = {"TR", "SPDR", "ADR"}
 
 # Words that look like tickers but aren't
 # House Clerk PTR filings tag each holding with a bracketed asset-class code --
@@ -1051,9 +1057,14 @@ class PTRParser:
         if not text:
             return None, None
 
-        # Check against known ranges
+        # Check against known ranges. Whitespace collapsed first: a table cell
+        # wraps "Spouse/DC Over" and "$1,000,000" onto two lines, the band was
+        # not recognised, and the generic path below stored it as a floor of
+        # exactly $1,000,000 -- which the large-trade rule (strictly over $1M)
+        # never flagged, while the same band read from the text layer was.
+        flat = " ".join(text.split()).lower()
         for range_text, (min_val, max_val) in PTR_VALUE_RANGES.items():
-            if range_text.lower() in text.lower():
+            if range_text.lower() in flat:
                 return (
                     Decimal(min_val) if min_val else None,
                     Decimal(max_val) if max_val else None,
@@ -1118,13 +1129,15 @@ class PTRParser:
             if ticker not in NON_TICKERS:
                 return ticker
 
-        # Look for standalone tickers near stock keywords
-        for keyword in ["stock", "common", "shares"]:
-            if keyword in text.lower():
-                tickers = TICKER_PATTERN.findall(text)
-                for t in tickers:
-                    if t not in NON_TICKERS and len(t) >= 2:
-                        return t
+        # Look for standalone tickers near stock keywords. Whole words: as a
+        # substring, "shares" matched inside "ProShares", and the first capital
+        # run after it was taken as the symbol -- "ProShares TR UltraPro Short
+        # S&P 500", a 3x inverse S&P fund, was stored as TR (Tootsie Roll) and
+        # published as agricultural trading in 15 live findings.
+        if STOCK_KEYWORD.search(text):
+            for t in TICKER_PATTERN.findall(text):
+                if t not in NON_TICKERS and t not in FUND_NAME_WORDS and len(t) >= 2:
+                    return t
 
         return None
 

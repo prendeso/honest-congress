@@ -51,6 +51,7 @@ from typing import Any, Dict, List, Set
 
 from sqlalchemy.orm import Session
 
+from src.analysis.committee_conflicts import roster_since
 from src.analysis.restatements import transactions_by_member
 from src.analysis.sectors import SectorIndex, policy_area_sectors
 from src.db.models import (
@@ -217,6 +218,12 @@ def detect_bill_jurisdiction_conflicts(
     members = {m.id: m for m in db.query(Member).all()}
     index = SectorIndex.from_db(db)
 
+    # The roster is the sitting Congress's, so it is no evidence of a seat at a
+    # referral before that Congress began. See `roster_since`.
+    since = roster_since(db)
+    if since is None:
+        return anomalies
+
     # member_id -> parent committee code -> the name to cite in the finding.
     seats: Dict[int, Dict[str, str]] = defaultdict(dict)
     for assignment in db.query(CommitteeAssignment).all():
@@ -228,6 +235,7 @@ def detect_bill_jurisdiction_conflicts(
         db.query(BillCommittee, Bill)
         .join(Bill, BillCommittee.bill_id == Bill.id)
         .filter(BillCommittee.activity_date.isnot(None))
+        .filter(BillCommittee.activity_date >= since)
         .filter(Bill.policy_area.isnot(None))
         .all()
     )

@@ -1077,6 +1077,16 @@ _SUPERSEDED_WORDING = (
     # A transaction-level finding keeps its identity when its description
     # changes, so without this the sentence is served for ever.
     ("contract_front_run", "description", "clearest insider-information signals"),
+    # `cross_member_cluster` said "Filing dates are not trade dates" about a
+    # window built from trade dates. Its title carries the member count, which
+    # the owner filter changes for some clusters and not others, so an
+    # unchanged count keeps its identity and the old caveat is never rewritten.
+    ("cross_member_cluster", "description", "Filing dates are not trade dates"),
+    # `committee_jurisdiction_conflict` counted every trade the member ever
+    # filed against today's committee seats. It now counts from the start of
+    # the Congress the roster describes and says so ("since 2025-01-03"); the
+    # title is unchanged, so without this the old count is served for ever.
+    ("committee_jurisdiction_conflict", "description", "trades attributed to this member ("),
 )
 
 
@@ -1162,6 +1172,13 @@ _ATTRIBUTED_TO_THE_MEMBER = (
     "large_trade",
     "sector_concentration",
     "committee_jurisdiction_conflict",
+    # Member-level and keyed by title, so a corrected detector that stops
+    # producing one -- a gold trust that is not finance, a seat the member did
+    # not yet hold, a cluster of a spouse's index-fund purchases -- leaves the
+    # published one up for ever unless it is retracted here.
+    "sponsorship_conflict",
+    "bill_jurisdiction_conflict",
+    "cross_member_cluster",
 )
 
 
@@ -1201,12 +1218,20 @@ def cmd_retract_withdrawn_findings(args):
     data, which is what makes this recoverable in the one direction that
     matters.
     """
+    from sqlalchemy import func
+
     from src.analysis import (
         ExtendedAnomalyDetector,
+        detect_cross_member_clusters,
         detector_is_disabled,
         run_committee_conflict_detection,
     )
     from src.analysis.anomaly_key import identity_of, identity_of_row
+    from src.analysis.baselines import DETECTOR_SOURCE_TABLES
+    from src.analysis.legislation import (
+        detect_bill_jurisdiction_conflicts,
+        detect_sponsorship_conflicts,
+    )
     from src.analysis.trade_analyzer import TradeAnalyzer
     from src.db.models import Anomaly, Member
 
@@ -1219,6 +1244,22 @@ def cmd_retract_withdrawn_findings(args):
         return
 
     with get_db() as db:
+        # A detector whose input table is empty produces nothing, and that is
+        # a failed feed, not a withdrawal: an empty bills table would otherwise
+        # delete every committee-bill finding. Left alone, and said so.
+        starved = [
+            t
+            for t in covered
+            if t in DETECTOR_SOURCE_TABLES
+            and not db.query(func.count(DETECTOR_SOURCE_TABLES[t].id)).scalar()
+        ]
+        if starved:
+            print(f"Input table empty, so left alone: {', '.join(sorted(starved))}")
+            covered = [t for t in covered if t not in starved]
+        if not covered:
+            print("Nothing left to check.")
+            return
+
         print("Re-deriving findings with the current detectors...")
         produced: set = set()
         found = 0
@@ -1252,6 +1293,16 @@ def cmd_retract_withdrawn_findings(args):
         # inserted while it ran would hide its own withdrawals.
         conflicts = run_committee_conflict_detection(db, persist=False)
         for finding in conflicts.get("anomalies") or []:
+            key = identity_of(finding)
+            if key:
+                produced.add(key)
+                found += 1
+
+        for finding in (
+            detect_sponsorship_conflicts(db)
+            + detect_bill_jurisdiction_conflicts(db)
+            + detect_cross_member_clusters(db)
+        ):
             key = identity_of(finding)
             if key:
                 produced.add(key)

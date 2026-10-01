@@ -260,6 +260,49 @@ def test_every_covered_type_is_one_this_command_re_runs():
         "volume_spikes",
         # run_committee_conflict_detection
         "committee_jurisdiction_conflict",
+        # detect_sponsorship_conflicts, detect_bill_jurisdiction_conflicts
+        "sponsorship_conflict",
+        "bill_jurisdiction_conflict",
+        # detect_cross_member_clusters
+        "cross_member_cluster",
     }
     missing = set(_ATTRIBUTED_TO_THE_MEMBER) - produced_by_the_detectors_this_reruns
     assert not missing, f"covered but never re-derived, so always deleted: {sorted(missing)}"
+
+
+class TestTheLegislationFindingsComeDownToo:
+    """Committee-bill findings are member-level and keyed by title, so one the
+    corrected detector stops producing -- a 2023 referral to a committee the
+    member joined in 2025, a gold trust that is not finance -- stayed up."""
+
+    TITLE = "Traded finance around S 1181 reaching Banking, Housing, and Urban Affairs"
+
+    def _referral_on_file(self, db):
+        from src.db.models import Bill, BillCommittee
+
+        bill = Bill(congress=118, bill_type="s", number="1181")
+        db.add(bill)
+        db.commit()
+        db.add(BillCommittee(bill_id=bill.id, committee_id="SSBK", committee_name="Banking"))
+        db.commit()
+
+    def test_one_no_longer_derived_is_deleted(self, cli, db_session):
+        member = _live_member(db_session, "WD00101")
+        self._referral_on_file(db_session)
+        _stored(db_session, member, "bill_jurisdiction_conflict", self.TITLE)
+
+        cli.cmd_retract_withdrawn_findings(Namespace(dry_run=False))
+
+        assert all(
+            a.anomaly_type != "bill_jurisdiction_conflict" for a in _remaining(db_session, member)
+        )
+
+    def test_an_empty_bills_feed_is_not_a_withdrawal(self, cli, db_session):
+        """No referrals stored means the feed has not run, not that every
+        committee-bill finding stopped being true."""
+        member = _live_member(db_session, "WD00102")
+        kept = _stored(db_session, member, "bill_jurisdiction_conflict", self.TITLE)
+
+        cli.cmd_retract_withdrawn_findings(Namespace(dry_run=False))
+
+        assert kept.id in {a.id for a in _remaining(db_session, member)}

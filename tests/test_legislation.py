@@ -51,6 +51,7 @@ from src.db.models import (
 )
 
 INTRODUCED = datetime(2024, 6, 1)
+ROSTER_SYNCED = datetime(2024, 9, 1)
 
 
 @pytest.fixture
@@ -272,6 +273,9 @@ def _seat(db_session, member, committee_id, name="Commerce Committee"):
             committee_id=committee_id,
             committee_name=name,
             chamber=Chamber.SENATE,
+            # The roster describes the Congress sitting when it was synced;
+            # these fixtures' trades and referrals fall in the 118th.
+            created_at=ROSTER_SYNCED,
         )
     )
     db_session.commit()
@@ -377,3 +381,34 @@ def test_coverage_report_exposes_the_binding_constraint(db_session, member):
     assert report["bills_mapped_to_a_sector"] == 1
     assert report["distinct_traded_tickers"] == 2
     assert report["traded_tickers_with_a_known_sector"] == 1
+
+
+def test_a_seat_in_todays_roster_says_nothing_about_an_earlier_congress(db_session, member):
+    """Pete Ricketts joined Banking in January 2025 and was published 39 times
+    for 2023 trades around bills reaching it. The roster is the current
+    Congress's; a referral before that Congress began is not evidence of a seat."""
+    bill = _bill(db_session, "Science, Technology, Communications")
+    _seat(db_session, member, "SSCM")
+    db_session.query(CommitteeAssignment).update({"created_at": datetime(2025, 9, 1)})
+    db_session.commit()
+    _referral(db_session, bill, "SSCM")  # 2024, in the 118th
+    _trade(db_session, member, "MSFT", INTRODUCED + timedelta(days=5))
+
+    assert detect_bill_jurisdiction_conflicts(db_session) == []
+
+
+@pytest.mark.parametrize(
+    ("when", "number"),
+    [
+        (datetime(2025, 1, 3), 119),
+        (datetime(2025, 1, 2), 118),
+        (datetime(2026, 9, 30), 119),
+        (datetime(2024, 9, 1), 118),
+        (datetime(2023, 1, 3), 118),
+    ],
+)
+def test_the_congress_sitting_on_a_date(when, number):
+    from src.analysis.committee_conflicts import congress_on, congress_start
+
+    assert congress_on(when) == number
+    assert congress_start(119) == datetime(2025, 1, 3)

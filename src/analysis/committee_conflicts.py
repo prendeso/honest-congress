@@ -20,9 +20,11 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Dict, List
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from src.analysis.attribution import (
@@ -45,12 +47,50 @@ MIN_TRADES_IN_SECTOR = 3
 MIN_SHARE_OF_TRADES = 0.20
 
 
+def congress_on(when: datetime) -> int:
+    """The Congress sitting on a date. Each term starts on 3 January of an odd year."""
+    number = (when.year - 1789) // 2 + 1
+    if when.year % 2 == 1 and (when.month, when.day) < (1, 3):
+        number -= 1
+    return number
+
+
+def congress_start(number: int) -> datetime:
+    return datetime(1789 + 2 * (number - 1), 1, 3)
+
+
+def roster_since(db: Session) -> datetime | None:
+    """The earliest date the stored committee roster speaks for.
+
+    `committee_assignments` is the congress-legislators *current* membership
+    file, replaced wholesale on every sync. It says who sits on what in the
+    Congress that was sitting when it was fetched, and nothing about any
+    earlier one. Both committee detectors read it as if it were true for all
+    time: Pete Ricketts joined Banking in January 2025 and was published 39
+    times for 2023 trades around bills reaching Banking. Replaying the file's
+    history put about 200-233 live committee-bill findings on a seat the
+    member did not hold on that date.
+
+    So a seat is evidence only from the start of the roster's Congress. A
+    change in membership within a Congress is still invisible -- that is a
+    limit the catalog states -- but those are rare; a new Congress reshuffles
+    every committee.
+    """
+    synced = db.query(func.max(CommitteeAssignment.created_at)).scalar()
+    if synced is None:
+        return None
+    return congress_start(congress_on(synced))
+
+
 def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]:
     """Flag members trading in sectors their committees oversee."""
     anomalies: List[Dict[str, Any]] = []
 
     members = db.query(Member).all()
     index = SectorIndex.from_db(db)
+    since = roster_since(db)
+    if since is None:
+        return anomalies
 
     for member in members:
         assignments = (
@@ -72,7 +112,11 @@ def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]
 
         # A conflict is between the member's committee and the member's own
         # holdings. A spouse's trade is not the member's position.
-        household = member_transactions(db, member.id)
+        household = [
+            t
+            for t in member_transactions(db, member.id)
+            if t.transaction_date is not None and t.transaction_date >= since
+        ]
         transactions = trades_the_member_holds(household)
         if not transactions:
             continue
@@ -121,8 +165,9 @@ def detect_committee_jurisdiction_conflicts(db: Session) -> List[Dict[str, Any]]
                     "threshold_value": Decimal(str(round(MIN_SHARE_OF_TRADES * 100, 2))),
                     "description": (
                         f"{len(matched)} of {total_trades} trades attributed to this "
-                        f"member ({share * 100:.0f}%) are in the {sector} sector, while "
-                        f"the member serves on {', '.join(committee_names)}."
+                        f"member since {since.date()} ({share * 100:.0f}%) are in the "
+                        f"{sector} sector, while the member serves on "
+                        f"{', '.join(committee_names)}."
                         f"{excluded_clause(excluded, _ALSO_REPORT)} "
                         f"Tickers: {', '.join(tickers) if tickers else 'n/a'}. "
                         f"This is a disclosed overlap between committee remit and trading "

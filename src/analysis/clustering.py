@@ -22,6 +22,7 @@ the largest and most interesting clusters also involve the most members.
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from datetime import timedelta
 from decimal import Decimal
@@ -29,6 +30,8 @@ from typing import Any, Dict, List, Tuple
 
 from sqlalchemy.orm import Session
 
+from src.analysis.attribution import held_by_member
+from src.analysis.restatements import drop_restated_records
 from src.db.models import Disclosure, Member, Transaction, TransactionType
 
 logger = logging.getLogger(__name__)
@@ -45,6 +48,96 @@ CLUSTER_WINDOW_DAYS = 14
 MIN_CLUSTER_CONCENTRATION = 0.5
 
 
+# Funds that hold the whole market, or a whole bond market. Every member with a
+# brokerage account buys these on a schedule -- monthly contributions, dividend
+# reinvestment, rebalancing -- so several of them landing in one fortnight says
+# nothing about any issuer. All four live clusters were of this kind (BND, VOO,
+# VEA, SPCX), and in the VOO one three of the four purchases were a spouse's,
+# one of them labelled "Dividend reinvestment" on the filing. A sector fund is
+# not here: XLE moving together is a statement about energy.
+BROAD_MARKET_FUNDS = frozenset(
+    {
+        # US equity, total market and large cap
+        "VOO",
+        "SPY",
+        "IVV",
+        "SPLG",
+        "VTI",
+        "ITOT",
+        "SCHB",
+        "SCHX",
+        "VV",
+        "RSP",
+        "DIA",
+        "QQQ",
+        "QQQM",
+        "VUG",
+        "VTV",
+        "IWB",
+        "IWF",
+        "IWD",
+        "SCHG",
+        "SCHV",
+        "VIG",
+        "VYM",
+        "SCHD",
+        "DGRO",
+        # US mid and small cap
+        "IWM",
+        "IJH",
+        "IJR",
+        "VO",
+        "VB",
+        "VXF",
+        "SCHA",
+        "SCHM",
+        # International and global
+        "VT",
+        "VEA",
+        "VXUS",
+        "VEU",
+        "IEFA",
+        "EFA",
+        "SCHF",
+        "VWO",
+        "IEMG",
+        "EEM",
+        "IXUS",
+        "ACWI",
+        # Aggregate bond, Treasury and municipal
+        "BND",
+        "AGG",
+        "BNDX",
+        "SCHZ",
+        "IUSB",
+        "VTEB",
+        "MUB",
+        "TIP",
+        "VTIP",
+        "GOVT",
+        "SHY",
+        "IEF",
+        "TLT",
+        "VGSH",
+        "VGIT",
+        "VGLT",
+        "BSV",
+        "BIV",
+        "BLV",
+        "VCIT",
+        "VCSH",
+        "LQD",
+    }
+)
+
+_REINVESTED = re.compile(r"dividend reinvest|reinvested dividend|\bdrip\b", re.IGNORECASE)
+
+
+def _is_reinvestment(txn: Any) -> bool:
+    """An automatic dividend reinvestment, which nobody decided to make that day."""
+    return bool(_REINVESTED.search(f"{txn.description or ''} {txn.filer_comment or ''}"))
+
+
 # "purchase" and "sale" are the stored directions; neither takes a "d".
 _PAST_TENSE = {"purchase": "bought", "sale": "sold"}
 
@@ -53,7 +146,7 @@ def _days(n: int) -> str:
     return f"{n} day" if n == 1 else f"{n} days"
 
 
-def _cluster_key(txn: Transaction) -> Tuple[str, str] | None:
+def _cluster_key(txn: Any) -> Tuple[str, str] | None:
     if not txn.ticker or not txn.transaction_date:
         return None
     if txn.transaction_type == TransactionType.PURCHASE:
@@ -66,13 +159,42 @@ def _cluster_key(txn: Transaction) -> Tuple[str, str] | None:
 
 
 def detect_cross_member_clusters(db: Session) -> List[Dict[str, Any]]:
-    """Find tickers several members traded the same way at the same time."""
+    """Find tickers several members traded the same way at the same time.
+
+    Only trades the member holds count, each restated trade once, and neither
+    a broad index fund nor a dividend reinvestment counts at all. A cluster
+    named four members and was attributed to each of them, so a spouse's
+    purchase put the member's name on it.
+    """
     rows = (
-        db.query(Transaction, Disclosure.member_id)
+        db.query(
+            Transaction.id.label("id"),
+            Transaction.ticker.label("ticker"),
+            Transaction.transaction_date.label("transaction_date"),
+            Transaction.transaction_type.label("transaction_type"),
+            Transaction.description.label("description"),
+            Transaction.amount_min.label("amount_min"),
+            Transaction.amount_max.label("amount_max"),
+            Transaction.owner.label("owner"),
+            Transaction.filing_status.label("filing_status"),
+            Transaction.filer_comment.label("filer_comment"),
+            Transaction.disclosure_id.label("disclosure_id"),
+            Disclosure.member_id.label("member_id"),
+            Disclosure.filing_date.label("filing_date"),
+            Disclosure.filing_type.label("filing_type"),
+        )
         .join(Disclosure, Transaction.disclosure_id == Disclosure.id)
         .filter(Transaction.ticker.isnot(None))
+        .order_by(Transaction.id)
         .all()
     )
+    rows = [
+        row
+        for row in drop_restated_records(rows)
+        if held_by_member(row)
+        and (row.ticker or "").strip().upper() not in BROAD_MARKET_FUNDS
+        and not _is_reinvestment(row)
+    ]
     if not rows:
         return []
 
@@ -82,7 +204,8 @@ def detect_cross_member_clusters(db: Session) -> List[Dict[str, Any]]:
     ticker_members: Dict[str, set] = defaultdict(set)
     trading_members: set = set()
 
-    for txn, member_id in rows:
+    for txn in rows:
+        member_id = txn.member_id
         key = _cluster_key(txn)
         if key is None or member_id is None:
             continue
@@ -170,8 +293,8 @@ def detect_cross_member_clusters(db: Session) -> List[Dict[str, Any]]:
                     f"That is {round(concentration * 100)}% of everyone who has ever "
                     f"traded {ticker} here, and {round(ubiquity * 100)}% of trading "
                     f"members hold it at all. "
-                    f"Filing dates are not trade dates, and disclosure lags "
-                    f"vary by member; this shows co-movement in reported activity, not "
+                    f"These are the trade dates the filings report. Members read the "
+                    f"same news, so this shows co-movement in disclosed trading, not "
                     f"coordination."
                 ),
             }

@@ -175,6 +175,29 @@ def _trades_by_ticker(
     return grouped
 
 
+def _nearest_event_per_trade(anomalies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """One finding per trade, citing the event closest to it.
+
+    Several events can fall inside one trade's window -- a large company files
+    lobbying reports through several registrants every quarter -- and only one
+    finding per (member, type, trade) is ever stored. Which one survived was
+    whichever event the table returned first, so the finding cited an arbitrary
+    event and the day count that goes with it. Measured on 12 live lobbying
+    findings, 4 cited a farther filing than the nearest: Apple at 28 days, graded
+    on that, when Apple's own report was posted 10 days from the trade.
+
+    `computed_value` is the gap in days for all three detectors here. Ties keep
+    the first, and the input is ordered by event id, so the choice is stable.
+    """
+    nearest: Dict[Any, Dict[str, Any]] = {}
+    for finding in anomalies:
+        key = (finding["member_id"], finding["transaction_id"])
+        held = nearest.get(key)
+        if held is None or finding["computed_value"] < held["computed_value"]:
+            nearest[key] = finding
+    return list(nearest.values())
+
+
 def detect_donor_conflicts(
     db: Session, window_days: int = DEFAULT_DONOR_WINDOW_DAYS
 ) -> List[Dict[str, Any]]:
@@ -246,7 +269,7 @@ def detect_donor_conflicts(
                 }
             )
 
-    return anomalies
+    return _nearest_event_per_trade(anomalies)
 
 
 def detect_lobbying_overlaps(
@@ -306,7 +329,7 @@ def detect_lobbying_overlaps(
                 }
             )
 
-    return anomalies
+    return _nearest_event_per_trade(anomalies)
 
 
 def detect_contract_front_runs(
@@ -371,7 +394,7 @@ def detect_contract_front_runs(
                 }
             )
 
-    return anomalies
+    return _nearest_event_per_trade(anomalies)
 
 
 def run_tier2_detection(db: Session, persist: bool = True) -> Dict[str, Any]:

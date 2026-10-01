@@ -1,6 +1,7 @@
 """Analysis package: anomaly detectors and shared helpers."""
 
 import logging
+from decimal import Decimal
 from typing import Any, Dict, List
 
 from sqlalchemy.orm import Session
@@ -201,10 +202,10 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
     from src.db.resilience import CONNECTION_LOSS_RETRIES, commit_or_recover
 
     for _attempt in range(1 + CONNECTION_LOSS_RETRIES):
-        inserted = _add_anomalies(db, anomalies)
+        inserted, restated = _add_anomalies(db, anomalies)
         # Nothing new to write, so nothing to lose: the old shape skipped the
         # commit in this case and there is no reason to start issuing one.
-        if not inserted:
+        if not inserted and not restated:
             return 0
         if commit_or_recover(db, rebuild_caches=lambda: None, unit="anomalies"):
             return inserted
@@ -216,13 +217,29 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
     return 0
 
 
-def _add_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
-    """Add the rows, without committing. Safe to call again after a rollback."""
+# Findings that cite a trigger event -- a donation, a lobbying filing, a
+# contract award -- and are keyed by the trade, not by the event. The event a
+# trade is matched to can change while the trade does not: a nearer filing is
+# ingested, an award turns out to be a modification. Skipping a stored finding
+# would serve the old event, and its day count, for ever; so for these the
+# stored row is restated from the current derivation instead. Its identity,
+# its review flag and its grade are left alone -- severity is the percentile
+# pass's to set.
+RESTATED_IN_PLACE = frozenset({"donor_conflict", "lobbying_overlap", "contract_front_run"})
+_RESTATED_FIELDS = ("title", "description", "computed_value", "threshold_value")
+
+
+def _add_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> tuple[int, int]:
+    """Add the rows, without committing. Safe to call again after a rollback.
+
+    Returns (inserted, restated).
+    """
     from src.config import get_settings
 
     disabled = get_settings().disabled_anomaly_types_set
 
     inserted = 0
+    restated = 0
     skipped_disabled = 0
     # See src/analysis/anomaly_key.py for what counts as the same finding. The
     # existence check below queries the database, which cannot see rows added
@@ -256,6 +273,19 @@ def _add_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
             continue
 
         if key in stored:
+            if anomaly_type in RESTATED_IN_PLACE:
+                seen.add(key)
+                current = {
+                    "title": title[:200],
+                    "description": description,
+                    "computed_value": a.get("computed_value"),
+                    "threshold_value": a.get("threshold_value"),
+                }
+                row = stored[key]
+                if any(_differs(getattr(row, f), current[f]) for f in _RESTATED_FIELDS):
+                    for field in _RESTATED_FIELDS:
+                        setattr(row, field, current[field])
+                    restated += 1
             continue
 
         seen.add(key)
@@ -281,8 +311,23 @@ def _add_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
             skipped_disabled,
             ", ".join(sorted(disabled)),
         )
+    if restated:
+        logger.info("Restated %d stored finding(s) against their current event", restated)
 
-    return inserted
+    return inserted, restated
+
+
+def _differs(stored: Any, current: Any) -> bool:
+    """Compare a stored column with a fresh value, numbers by value.
+
+    A Numeric column reads back as Decimal('28.00') where the detector wrote
+    Decimal('28'); those are the same finding, not a restatement.
+    """
+    if stored is None or current is None:
+        return stored is not current
+    if isinstance(current, (int, float, Decimal)):
+        return Decimal(str(stored)) != Decimal(str(current))
+    return stored != current
 
 
 __all__ = [

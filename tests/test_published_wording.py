@@ -436,9 +436,9 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
             (
                 "committee_jurisdiction_conflict",
                 "Traded finance while serving on overseeing committee",
-                "3 of 13 trades attributed to this member (23%) are in the finance "
-                "sector, while the member serves on House Committee on Financial "
-                "Services.",
+                "3 of 13 trades attributed to this member since 2025-01-03 (23%) are "
+                "in the finance sector, while the member serves on House Committee on "
+                "Financial Services.",
             ),
         ]
         for anomaly_type, title, description in corrected:

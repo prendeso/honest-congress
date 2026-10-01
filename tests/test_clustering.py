@@ -182,7 +182,7 @@ class TestClusterDetection:
 
         assert "everyone who has ever" in description
         assert "not coordination" in description
-        assert "Filing dates are not trade dates" in description
+        assert "trade dates the filings report" in description
 
     def test_larger_clusters_rank_first(self, db_session, members):
         for i in range(6):
@@ -205,3 +205,53 @@ class TestClusterDetection:
             _trade(db_session, members[i], None, i)
 
         assert detect_cross_member_clusters(db_session) == []
+
+
+def _last_trade(db):
+    return db.query(Transaction).order_by(Transaction.id.desc()).first()
+
+
+class TestWhatACountedTradeIs:
+    """A cluster names members and is attributed to each of them.
+
+    Live, all four clusters were broad index funds bought on a schedule, and
+    in the VOO one three of the four purchases were a spouse's.
+    """
+
+    def _background(self, db, members):
+        for i in range(MIN_MEMBERS_IN_CLUSTER, 12):
+            _trade(db, members[i], "OTHER", 500 + i * (CLUSTER_WINDOW_DAYS + 5))
+
+    def test_a_spouses_trade_does_not_count(self, db_session, members):
+        for i in range(MIN_MEMBERS_IN_CLUSTER):
+            _trade(db_session, members[i], "NICHE", i)
+        _last_trade(db_session).owner = "Spouse"
+        db_session.commit()
+        self._background(db_session, members)
+
+        assert detect_cross_member_clusters(db_session) == []
+
+    def test_a_broad_index_fund_does_not_cluster(self, db_session, members):
+        for i in range(MIN_MEMBERS_IN_CLUSTER):
+            _trade(db_session, members[i], "VOO", i)
+        self._background(db_session, members)
+
+        assert detect_cross_member_clusters(db_session) == []
+
+    def test_a_dividend_reinvestment_does_not_count(self, db_session, members):
+        for i in range(MIN_MEMBERS_IN_CLUSTER):
+            _trade(db_session, members[i], "NICHE", i)
+        _last_trade(db_session).filer_comment = "Dividend reinvestment"
+        db_session.commit()
+        self._background(db_session, members)
+
+        assert detect_cross_member_clusters(db_session) == []
+
+    def test_the_members_own_and_joint_trades_still_cluster(self, db_session, members):
+        for i in range(MIN_MEMBERS_IN_CLUSTER):
+            _trade(db_session, members[i], "NICHE", i)
+        _last_trade(db_session).owner = "Joint"
+        db_session.commit()
+        self._background(db_session, members)
+
+        assert len(detect_cross_member_clusters(db_session)) == 1

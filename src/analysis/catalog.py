@@ -133,7 +133,9 @@ DETECTORS: List[Detector] = [
         "The member traded in a sector around a bill in that sector reaching a "
         "committee they sit on.",
         "A committee sees a great many bills, and a seat on it is not knowledge "
-        "of any one of them.",
+        "of any one of them. Seats are known only for the sitting Congress, so "
+        "referrals before it began are not examined, and a seat taken or given up "
+        "partway through a Congress is not seen.",
         f"{PTR} joined to Congress.gov bill referrals and committee rosters",
         value_unit="days",
     ),
@@ -142,7 +144,10 @@ DETECTORS: List[Detector] = [
         "Cross-Member Cluster",
         "Several members traded the same stock the same way within a short window of each other.",
         "Members read the same news. A cluster is a coincidence in timing, not "
-        "evidence of coordination, and widely held stocks cluster by nature.",
+        "evidence of coordination, and widely held stocks cluster by nature. "
+        "Only the member's own and joint trades count; broad index and bond "
+        "funds and dividend reinvestments are left out, since those are bought "
+        "on a schedule.",
         PTR,
         value_unit="count",
     ),
@@ -151,7 +156,9 @@ DETECTORS: List[Detector] = [
         "Committee Jurisdiction",
         "The member traded in a sector their committee oversees.",
         "This is a standing state of affairs, not an event: it says nothing "
-        "about the timing of any trade, which is why it carries no q-value.",
+        "about the timing of any trade, which is why it carries no q-value. "
+        "Seats are known only for the sitting Congress, so only trades since it "
+        "began are counted.",
         f"{PTR} joined to committee assignments",
         value_unit="percent",
     ),

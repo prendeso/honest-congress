@@ -48,14 +48,26 @@ SECTOR_KEYWORDS: Dict[str, FrozenSet[str]] = {
     "healthcare": frozenset(
         {"pharmaceutical", "pharma", "biotech", "health", "medical", "pfizer", "moderna", "merck"}
     ),
-    "finance": frozenset(
-        {"bank", "bancorp", "financial", "insurance", "jpmorgan", "goldman", "citigroup"}
-    ),
+    "finance": frozenset({"bank", "bancorp", "financial", "insurance", "citigroup"}),
     "energy": frozenset({"energy", "petroleum", "exxon", "chevron", "conoco", "pipeline"}),
     "telecom": frozenset({"telecom", "wireless", "broadband", "verizon", "comcast"}),
     "transportation": frozenset({"airlines", "railroad", "railway", "logistics", "freight"}),
     "agriculture": frozenset({"agriculture", "agricultural", "farm", "fertilizer", "deere"}),
 }
+
+# Banks whose names are also fund families. "JPMorgan Chase & Co. Common Stock"
+# is a bank; "JPMorgan Large Cap Growth Fund" is a growth-stock fund the bank
+# manages, and "Goldman Sachs GQG Partners International Opportunities" holds no
+# banks at all. As plain finance keywords they put every such fund in finance:
+# about 198 live committee-bill and sponsorship findings named nothing but
+# mutual funds -- a bond fund among them. So they classify an issuer, never a
+# fund. A sector fund still classifies through its own words ("health" in
+# "Vanguard Health Care Fund").
+FINANCE_ISSUER_NAMES = re.compile(r"\b(?:jpmorgan|goldman)\b", re.IGNORECASE)
+FUND_WORDS = re.compile(
+    r"\b(?:fund|funds|etf|portfolio|index|trust|tr|insti|instl|inst|institutional)\b",
+    re.IGNORECASE,
+)
 
 # Committee thomas_id -> sectors within its remit. Sourced from the committees'
 # published jurisdictions. Coarse by design.
@@ -137,10 +149,15 @@ SIC_SECTORS: Dict[str, FrozenSet[str]] = {
     "376": frozenset({"defense"}),
     "3795": frozenset({"defense"}),
     "3812": frozenset({"defense"}),
-    # Technology. 357x computers, 36xx electronics and semiconductors,
-    # 737x software and data processing.
+    # Technology. 357x computers, 367x electronic components and
+    # semiconductors, 737x software and data processing.
+    #
+    # Not the rest of 36xx. 3600 and 361x-364x are electrical equipment --
+    # generators, turbines, transformers, appliances, lighting -- and General
+    # Electric and GE Vernova both file at 3600, so a member selling both was
+    # published as trading technology while on the Science committee.
     "357": frozenset({"technology"}),
-    "36": frozenset({"technology"}),
+    "367": frozenset({"technology"}),
     "737": frozenset({"technology"}),
     # Telecom. 366x communications equipment, 481x carriers, 483x/484x
     # broadcasting and cable. 366x is equipment for the telecom industry, so it
@@ -166,6 +183,12 @@ SIC_SECTORS: Dict[str, FrozenSet[str]] = {
     "60": frozenset({"finance"}),
     "61": frozenset({"finance"}),
     "62": frozenset({"finance"}),
+    # Commodity contracts dealers -- and the code every physically backed
+    # commodity trust files under: SPDR Gold (GLD), iShares Gold (IAU), iShares
+    # Silver (SLV). Holding bullion is not exposure to banking, and 221 live
+    # finance findings named nothing but gold trusts. Mapped to nothing, which
+    # under longest-prefix stops the search before it reaches 62xx.
+    "6221": frozenset(),
     "63": frozenset({"finance"}),
     "64": frozenset({"finance"}),
 }
@@ -220,7 +243,10 @@ def classify(ticker: str | None, description: str | None = None) -> Set[str]:
     if not description:
         return set()
 
-    return {sector for sector, pattern in _WORD_PATTERNS.items() if pattern.search(description)}
+    sectors = {sector for sector, pattern in _WORD_PATTERNS.items() if pattern.search(description)}
+    if FINANCE_ISSUER_NAMES.search(description) and not FUND_WORDS.search(description):
+        sectors.add("finance")
+    return sectors
 
 
 def committee_sectors(committee_id: str | None) -> FrozenSet[str]:
@@ -269,9 +295,10 @@ def sector_for_sic(sic: str | int | None) -> FrozenSet[str]:
         return frozenset()
 
     for length in range(len(code), 0, -1):
-        sectors = SIC_SECTORS.get(code[:length])
-        if sectors:
-            return sectors
+        # Membership, not truthiness: an entry mapped to no sector is a
+        # deliberate exclusion from the group it sits in (6221 inside 62xx).
+        if code[:length] in SIC_SECTORS:
+            return SIC_SECTORS[code[:length]]
     return frozenset()
 
 

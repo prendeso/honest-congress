@@ -30,6 +30,8 @@ from src.db.models import (
     TransactionType,
 )
 
+ROSTER_SYNCED = datetime(2024, 9, 1)
+
 
 class TestSectorClassification:
     def test_exact_ticker_beats_substring(self):
@@ -109,6 +111,9 @@ def _assign(db, member, committee_id, name="Senate Committee on Armed Services")
             committee_id=committee_id,
             committee_name=name,
             chamber=Chamber.SENATE,
+            # The roster describes the Congress sitting when it was synced;
+            # these fixtures' trades and referrals fall in the 118th.
+            created_at=ROSTER_SYNCED,
         )
     )
     db.commit()
@@ -142,6 +147,26 @@ class TestDetector:
         assert findings[0]["anomaly_type"] == ANOMALY_TYPE
         assert findings[0]["sector"] == "defense"
         assert findings[0]["member_id"] == member.id
+
+    def test_trades_before_the_rosters_congress_are_not_counted(
+        self, db_session, member, disclosure
+    ):
+        """The roster is the sitting Congress's; 2024 trades predate the 119th."""
+        _assign(db_session, member, "SSAS")
+        db_session.query(CommitteeAssignment).update({"created_at": datetime(2025, 9, 1)})
+        db_session.commit()
+        for ticker in ["LMT", "RTX", "NOC", "GD"]:
+            _trade(db_session, disclosure, ticker)
+
+        assert detect_committee_jurisdiction_conflicts(db_session) == []
+
+    def test_the_description_says_from_when_it_counted(self, db_session, member, disclosure):
+        _assign(db_session, member, "SSAS")
+        for ticker in ["LMT", "RTX", "NOC", "GD"]:
+            _trade(db_session, disclosure, ticker)
+
+        (finding,) = detect_committee_jurisdiction_conflicts(db_session)
+        assert "since 2023-01-03" in finding["description"]
 
     def test_does_not_flag_unrelated_sectors(self, db_session, member, disclosure):
         _assign(db_session, member, "SSAS")  # defense

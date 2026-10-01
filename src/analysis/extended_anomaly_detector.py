@@ -345,6 +345,14 @@ class ExtendedAnomalyDetector:
 
         anomalies = []
 
+        # An exchange converts a holding in kind; it is not a trade the member
+        # sized, so it is neither a spike nor part of the baseline one is
+        # measured against.
+        trades = [
+            t
+            for t in trades
+            if getattr(t.transaction_type, "value", t.transaction_type) != "exchange"
+        ]
         amounts = [transaction_amount(t) for t in trades]
         amounts = [a for a in amounts if a > 0]
 

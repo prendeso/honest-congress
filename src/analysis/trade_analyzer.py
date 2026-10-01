@@ -72,12 +72,12 @@ def _corporate_actions(rows) -> tuple:
     return traded, exchanged
 
 
-def _exchange_clause(exchanged) -> str:
+def _exchange_clause(exchanged, lead: str = "The filings covering that month also report") -> str:
     if not exchanged:
         return ""
     n = len(exchanged)
     return (
-        f" The filings covering that month also report {n} exchange(s) -- "
+        f" {lead} {n} exchange(s) -- "
         f"holdings converted in kind, which the form marks `E` and which this "
         f"count excludes because they are not trades the member placed."
     )
@@ -633,6 +633,14 @@ class TradeAnalyzer:
         # Group transactions by disclosure (by year)
         disclosures_map = defaultdict(list)
 
+        # Exchanges are not trades (see `_corporate_actions`). Counted here they
+        # made a sector of a merger: three of the four "telecom trades" behind
+        # one published finding were share exchanges in a split-off.
+        transactions, exchanged = _corporate_actions(transactions)
+        exchanges_by_filing: Dict[Any, list] = defaultdict(list)
+        for txn in exchanged:
+            exchanges_by_filing[txn.disclosure_id].append(txn)
+
         for txn in transactions:
             if txn.disclosure_id:
                 disclosures_map[txn.disclosure_id].append(txn)
@@ -690,6 +698,7 @@ class TradeAnalyzer:
                                 f"({_percent(concentration_percent)}), above the "
                                 f"{self.concentration_threshold_percent:.0f}% threshold."
                                 f"{_excluded_from_filing(household.get(disclosure_id))}"
+                                f"{_exchange_clause(exchanges_by_filing.get(disclosure_id), 'The filing also reports')}"
                             ),
                             "computed_value": Decimal(str(concentration_percent)),
                             "threshold_value": Decimal(str(self.concentration_threshold_percent)),

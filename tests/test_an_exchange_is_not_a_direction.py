@@ -228,3 +228,56 @@ def test_the_published_sentence_is_taken_down_rather_than_left_up():
     from src.cli import _SUPERSEDED_WORDING
 
     assert ("trade_clustering", "description", "all buys or all sells") in _SUPERSEDED_WORDING
+
+
+class _Row(_Txn):
+    def __init__(self, kind, ticker, tid, low="1001", high="15000"):
+        super().__init__(datetime(2025, 3, 3), kind, tid=tid)
+        self.ticker = ticker
+        self.description = f"{ticker} Common Stock"
+        from decimal import Decimal
+
+        self.amount_min = Decimal(low)
+        self.amount_max = Decimal(high)
+
+
+class TestTheOtherCountsSkipExchangesToo:
+    """Sector concentration and volume spikes counted exchanges as trades.
+
+    August Pfluger was published as concentrated in telecom; three of the four
+    "telecom trades" were share exchanges in a merger and a split-off.
+    """
+
+    def test_a_merger_does_not_make_a_sector(self):
+        from src.analysis.sectors import SectorIndex
+
+        rows = [
+            _Row(B, "T", 1),
+            _Row(E, "T", 2),
+            _Row(E, "VZ", 3),
+            _Row(E, "TMUS", 4),
+            _Row(B, "XYZ", 5),
+            _Row(S, "QRS", 6),
+        ]
+        analyzer = TradeAnalyzer(min_trades_for_concentration=3)
+
+        found = analyzer._check_sector_concentration(rows, 1, None, SectorIndex({}))
+
+        assert found == [], "1 telecom trade of 3 is not a concentration"
+
+    def test_the_finding_names_the_exchanges_it_left_out(self):
+        from src.analysis.sectors import SectorIndex
+
+        rows = [_Row(B, "T", 1), _Row(B, "VZ", 2), _Row(S, "XYZ", 3), _Row(E, "TMUS", 4)]
+        analyzer = TradeAnalyzer(min_trades_for_concentration=3)
+
+        (finding,) = analyzer._check_sector_concentration(rows, 1, None, SectorIndex({}))
+
+        assert "(2 of 3)" in finding["title"]
+        assert "1 exchange(s)" in finding["description"]
+
+    def test_an_exchange_is_not_a_volume_spike(self):
+        rows = [_Row(B, f"A{i}", i) for i in range(8)]
+        rows += [_Row(E, "BIG", 98 + i, low="5000001", high="25000000") for i in range(2)]
+
+        assert ExtendedAnomalyDetector()._check_volume_spikes(rows) == []

@@ -1328,3 +1328,102 @@ both cases was a value read and silently not stored.
 **Corpus effect: none.** No finding appears or disappears; `late_filing` stays
 at 174. Both columns are NULL on every stored row until a re-parse fills them,
 and NULL means "not read yet", never "no notification" or "no comment".
+
+## D29. A hundred findings, checked against the documents they cite
+
+An adversarial audit drew 100 live findings, stratified across all thirteen
+published types, and tried to disprove each against its primary source: the
+House Clerk PDF or Senate eFD page for every trade, and FEC receipts, Senate
+LDA filings, USASpending award actions, Congress.gov referrals and the
+congress-legislators membership history for every event a finding joins to.
+
+    disproved (a stated fact is false)        22
+    weakened  (facts hold, claim overstated)   48
+    survived                                   30
+
+The split by type is the finding. Detectors that read one filing held up --
+11 of 12 late filings are real violations with no earlier timely filing. The
+detectors that join a trade to an outside event carried almost every failure:
+committee-bill 9 of 12 disproved, sponsorship 6 of 10, and not one lobbying,
+donor or contract finding survived unweakened.
+
+### What was wrong, and what changed
+
+**Severity ran backwards for every timing detector.** `computed_value` is the
+gap in days for donor, lobbying, contract, sponsorship and committee-bill
+findings, and the percentile pass ranked larger as more extreme. Every `high`
+committee-bill finding sat 50-60 days from its referral; trades 0 days from
+the event were `low`. About 4,700 findings, 551 of them published `high`.
+`baselines.SMALLER_IS_MORE_EXTREME` names these types; `late_filing`, also in
+days, keeps larger-is-worse.
+
+**A contract modification was published as an award.** 183 of 437 contract
+findings pointed at money added to an old contract -- Bell Textron's FLRAA,
+signed 2022-12-05, "awarded" on 2026-04-02. USASpending's `Mod` number, always
+fetched and kept only inside `external_id`, is now `is_modification`,
+backfilled by migration and excluded by `award_action_criteria`. The fixed
+sentence calling every such trade "one of the clearest insider-information
+signals available" -- at q-values of 0.75 to 0.98 -- is gone.
+
+**Committee seats were read as permanent.** `committee_assignments` is the
+current-membership file, replaced on every sync, and both committee detectors
+read it as true for all time: Pete Ricketts, on Banking since January 2025, was
+published 39 times for 2023 trades. A seat now counts from the start of the
+Congress the roster was synced in (`committee_conflicts.roster_since`). This is
+a bound, not a history: earlier referrals are not examined, and a seat changed
+within a Congress is still unseen. The catalog says both.
+
+**Whose trade it was.** Donor, lobbying, contract, sponsorship, committee-bill
+and cluster findings counted every owner's trades under the member's name -- a
+dependent child's $172 purchase published as Brian Mast buying ahead of a
+contract. They now follow #99, and so does `significance`, whose null model
+built its own trade streams. The cluster null model had also never received
+the cluster detector's filters; both now share `counts_toward_a_cluster`.
+
+**Sectors.** Gold trusts (SIC 6221) were finance -- 221 findings named nothing
+else. "JPMorgan" and "Goldman" made every fund those banks manage a bank. All of
+SIC 36xx was technology, so GE and GE Vernova (3600) were. Cross-member
+clusters now leave out broad index and bond funds and dividend reinvestments:
+all four live clusters were index funds bought on a schedule.
+
+**Events.** A trade inside several events' windows cited whichever the table
+returned first; donor, lobbying and contract findings now cite the nearest and
+are restated in place each run. Same-day checks from one PAC are one donation.
+LDA amendments and "No Activity" reports are not lobbying (new `filing_type`
+column, filled in on the next ingest).
+
+**Parsing.** Re-reading a Senate annual report deleted its Part 4b trades and
+stored none -- a re-parse would have destroyed data, so this was fixed first.
+In the House parser: a wrapped symbol is read from the line below (rows with a
+ticker 2,056 -> 3,141 over 90 audited PTRs); "S (partial)" no longer defeats
+the trade-date anchor; a wrapped amount closes (amountless rows 24 -> 3);
+"$172.00" is an exact figure; "Over $1,000,000" wrapped is the band; and
+"ProShares TR", "Novartis AG" and "FIDELITY MID CAP STOCK" no longer yield
+tickers. Exchanges are out of sector concentration and volume spikes, a bill
+redeemed at maturity is not a large sale, and an amendment that corrects an
+asset's name still restates it.
+
+### What production needs, because code does not change stored rows
+
+Much of what the audit found was not the current code but a **stale parse**:
+rows written by a parser since fixed (#98, #105) and never re-read -- about
+1,930 spouse and child trades stored as the member's, and bond maturities
+stored as trade dates. The nightly applies the migrations, the purges and the
+regrading. Three steps are manual, from the Maintenance workflow, each with a
+dry run first:
+
+1. `reparse-ptrs`, dispatched until the queue is done;
+2. `reparse-annuals`, which now restores the Senate annual trades;
+3. `retract-withdrawn-findings` after the next nightly. It now covers the
+   legislation, cluster and trigger-event types, and skips any type whose
+   input table is empty -- an unfed bills table is a failed feed, not a
+   withdrawal of every committee-bill finding.
+
+### Left open, deliberately
+
+* **One late-filing finding per row.** A single 703-row PTR filed 113 days
+  late is 114 findings. Each row is its own violation in law, but the count
+  reads as 114 events. Grouping by filing is a choice about what the site
+  counts, not a defect.
+* **Option rolls in volume spikes.** Both legs of a roll are disclosed trades
+  and are counted; whether a roll is one decision is the same kind of choice.

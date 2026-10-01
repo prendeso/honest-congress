@@ -245,7 +245,7 @@ jobs:
             if [ "${{ inputs.dry_run }}" = "true" ]; then
               echo "Nothing was written. Re-dispatch with dry run OFF to apply."
             elif [ "${{ inputs.command }}" = "reparse-annuals" ]; then
-              echo "Annual filings were re-read and their assets and liabilities replaced. Published net worth will have RISEN -- the old reader captured about half of Schedule A, and the half it lost was the large half."
+              echo "Annual filings were re-read and their assets, liabilities and (for Senate reports) transactions replaced. Published net worth will have RISEN -- the old reader captured about half of Schedule A, and the half it lost was the large half."
               echo ""
               echo "Runs are resumable: each pass takes the least-recently-touched filings first, so dispatch again to continue. Findings are not re-derived here; the next scheduled nightly does that."
             elif [ "${{ inputs.command }}" = "reparse-ptrs" ]; then

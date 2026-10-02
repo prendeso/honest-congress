@@ -225,7 +225,13 @@ def persist_anomalies(db: Session, anomalies: List[Dict[str, Any]]) -> int:
 # stored row is restated from the current derivation instead. Its identity,
 # its review flag and its grade are left alone -- severity is the percentile
 # pass's to set.
-RESTATED_IN_PLACE = frozenset({"donor_conflict", "lobbying_overlap", "contract_front_run"})
+#
+# `late_filing` too: one finding stands for a whole filing, so a re-read that
+# changes how many of its trades were late changes the finding's sentence
+# without changing which trade it is keyed to.
+RESTATED_IN_PLACE = frozenset(
+    {"donor_conflict", "lobbying_overlap", "contract_front_run", "late_filing"}
+)
 _RESTATED_FIELDS = ("title", "description", "computed_value", "threshold_value")
 
 

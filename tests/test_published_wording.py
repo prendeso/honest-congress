@@ -408,8 +408,8 @@ class TestTheAlreadyPublishedFindingsAreRemoved:
             (
                 "late_filing",
                 "Late PTR filing: significantly late (1-3 months)",
-                "Transaction on 2024-04-08 was filed significantly late (1-3 months) "
-                "on 2024-09-01. The STOCK Act requires filing within 45 days. Trade "
+                "A trade made on 2024-04-08 was reported 146 days later, on the report "
+                "filed 2024-09-01. The STOCK Act requires filing within 45 days. Trade "
                 "reported: purchase of Cleveland-Cliffs Inc. Common Stock, which the "
                 "filing reports for their spouse.",
             ),

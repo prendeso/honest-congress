@@ -10,10 +10,13 @@ from sqlalchemy.orm import Session
 from src.analysis.anomaly_key import identity_of, stored_by_identity
 from src.analysis.asset_class import all_fixed_income, is_option, redeemed_at_maturity
 from src.analysis.attribution import (
+    OWNERS_THE_MEMBER_HOLDS,
     excluded_clause,
     held_by_member,
+    owner_breakdown,
     owner_of,
     trades_the_member_holds,
+    whose_they_are,
 )
 from src.analysis.restatements import drop_restated_pairs, member_transactions
 from src.analysis.sectors import SectorIndex
@@ -518,6 +521,7 @@ class TradeAnalyzer:
         # lateness. `catalog.py` warns of this in prose; this is the guard.
         rows = drop_restated_pairs(rows)
 
+        late_by_filing: Dict[Any, tuple] = {}
         for txn, disclosure in rows:
             if not (txn.transaction_date and disclosure.filing_date):
                 continue
@@ -551,6 +555,24 @@ class TradeAnalyzer:
             if txn_amount is None or txn_amount < min_amount:
                 continue
 
+            late_by_filing.setdefault(disclosure.id, (disclosure, []))[1].append(
+                (txn, days_to_file)
+            )
+
+        # One finding per FILING, not per row. A report that discloses a
+        # hundred trades late is one late report: Alan Armstrong's single
+        # 703-row PTR, filed 113 days after a direct-indexing account's March
+        # 2026 trades, was published as 114 separate late filings and ranked
+        # him as the worst offender in the corpus by count alone. Every row
+        # still counts toward the finding, and the sentence says how many.
+        for disclosure, late in late_by_filing.values():
+            # The most delayed trade carries the finding: its delay is the
+            # filing's worst, and its id is the finding's identity, which is
+            # unique to this filing because a trade belongs to one filing.
+            late.sort(key=lambda pair: (-pair[1], pair[0].transaction_date, pair[0].id or 0))
+            worst, days_to_file = late[0]
+            fewest = min(days for _, days in late)
+
             days_late = days_to_file - self.ptr_deadline_days
             if days_late <= 30:
                 severity = "low"
@@ -562,23 +584,52 @@ class TradeAnalyzer:
                 severity = "high"
                 late_range = "severely late (over 3 months)"
 
+            filed = disclosure.filing_date.strftime("%Y-%m-%d")
+            if len(late) == 1:
+                what = (
+                    f"A trade made on {worst.transaction_date.strftime('%Y-%m-%d')} was "
+                    f"reported {days_to_file} days later, on the report filed {filed}. "
+                    f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
+                    f"Trade reported: {worst.transaction_type.value} of "
+                    f"{_asset_name(worst)}{_whose_trade(worst)}."
+                )
+            else:
+                # Named, never filtered: the deadline is the member's for the
+                # whole household (D25), so these rows are scored too.
+                others = {
+                    owner: n
+                    for owner, n in owner_breakdown([txn for txn, _ in late]).items()
+                    if owner not in OWNERS_THE_MEMBER_HOLDS
+                }
+                whose = (
+                    f" {sum(others.values())} of the {len(late)} are reported for "
+                    f"{whose_they_are(others)}; the deadline is the member's for every "
+                    f"transaction their household must report."
+                    if others
+                    else ""
+                )
+                what = (
+                    f"The report filed {filed} disclosed {len(late)} trades between "
+                    f"{fewest} and {days_to_file} days after they were made. The STOCK "
+                    f"Act requires filing within {self.ptr_deadline_days} days. The "
+                    f"longest delay: {worst.transaction_type.value} of {_asset_name(worst)} "
+                    f"on {worst.transaction_date.strftime('%Y-%m-%d')}.{whose}"
+                )
+
             anomalies.append(
                 {
                     "member_id": member_id,
                     "disclosure_id": disclosure.id,
-                    "transaction_id": txn.id,
+                    "transaction_id": worst.id,
                     "anomaly_type": "late_filing",
                     "severity": severity,
-                    "title": f"Late PTR filing: {late_range}",
-                    "description": (
-                        f"Transaction on {txn.transaction_date.strftime('%Y-%m-%d')} "
-                        f"was filed {late_range} on "
-                        f"{disclosure.filing_date.strftime('%Y-%m-%d')}. "
-                        f"The STOCK Act requires filing within {self.ptr_deadline_days} days. "
-                        f"Trade reported: {txn.transaction_type.value} of "
-                        f"{_asset_name(txn)}{_whose_trade(txn)}."
-                        f"{_when_they_were_told(txn, disclosure)}"
+                    "title": (
+                        f"Late PTR filing: {late_range}"
+                        if len(late) == 1
+                        else f"Late PTR filing: {len(late)} trades, {late_range}"
                     ),
+                    "description": f"{what}{_when_they_were_told(worst, disclosure)}",
+                    "late_trades": len(late),
                     "computed_value": Decimal(str(days_to_file)),
                     "threshold_value": Decimal(str(self.ptr_deadline_days)),
                 }

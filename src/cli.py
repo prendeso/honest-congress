@@ -1087,6 +1087,11 @@ _SUPERSEDED_WORDING = (
     # the Congress the roster describes and says so ("since 2025-01-03"); the
     # title is unchanged, so without this the old count is served for ever.
     ("committee_jurisdiction_conflict", "description", "trades attributed to this member ("),
+    # `late_filing` was one finding per late ROW; it is now one per late
+    # FILING. Every per-row finding opened "Transaction on <date> was filed",
+    # a sentence the grouped detector cannot write, so this takes them all
+    # down and the same night's `analyze` publishes one per filing.
+    ("late_filing", "description", "Transaction on "),
 )
 
 

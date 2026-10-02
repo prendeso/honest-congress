@@ -1421,9 +1421,9 @@ dry run first:
 
 ### Left open, deliberately
 
-* **One late-filing finding per row.** A single 703-row PTR filed 113 days
-  late is 114 findings. Each row is its own violation in law, but the count
-  reads as 114 events. Grouping by filing is a choice about what the site
-  counts, not a defect.
+* **One late-filing finding per row** -- since decided: one per late
+  report. A single 703-row PTR filed 113 days late was 114 findings; on the
+  live corpus the 364 late-filing findings become 60, one per report, each
+  saying how many trades it disclosed late.
 * **Option rolls in volume spikes.** Both legs of a roll are disclosed trades
   and are counted; whether a roll is one decision is the same kind of choice.
